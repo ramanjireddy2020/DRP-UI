@@ -8,9 +8,7 @@ const API_CONFIG = {
   API_BASE_URL:
     process.env.REACT_APP_API_URL ||
     process.env.REACT_APP_API_BASE_URL ||
-    (process.env.NODE_ENV === 'development'
-      ? '/api'
-      : 'https://uk1ip13n80.execute-api.us-east-1.amazonaws.com'),
+    'https://uk1ip13n80.execute-api.us-east-1.amazonaws.com',
 };
 
 export default API_CONFIG;

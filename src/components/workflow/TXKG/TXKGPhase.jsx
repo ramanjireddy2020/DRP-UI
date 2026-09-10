@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import './TXKGPhase.css';
 import {
   Box, Typography, Button, Tabs, Tab, Checkbox,
   TextField, Accordion, AccordionSummary, AccordionDetails, Chip, IconButton
 } from '@mui/material';
+import apiClient from '../../../services/apiClient';
 import { ExpandMoreOutlined, AddOutlined } from '@mui/icons-material';
 import {
   FONT, TEAL, USER_MSG_BG, GRAY_BG, BORDER, BORDER_LIGHT,
@@ -56,6 +57,74 @@ const TXKGPhase = ({
   setShowBranchDialog,
 }) => {
   const mockTargets = MOCK_TARGETS;
+  const [customTargets, setCustomTargets] = useState([]);
+  const [customTargetInput, setCustomTargetInput] = useState('');
+  const [isAddingCustomTarget, setIsAddingCustomTarget] = useState(false);
+
+  const normalizeTargetList = (responseData) => {
+    if (!Array.isArray(responseData)) return [];
+
+    return responseData
+      .map((item) => {
+        if (typeof item === 'string') return item.trim();
+        if (item && typeof item === 'object') {
+          return (
+            item.name ||
+            item.target ||
+            item.value ||
+            item.label ||
+            item.id ||
+            item.uniprot ||
+            ''
+          );
+        }
+        return '';
+      })
+      .map((value) => value?.trim())
+      .filter(Boolean);
+  };
+
+  const fetchCustomTargets = async () => {
+    try {
+      const response = await apiClient.get('/agents/litminex/targets/custom');
+      const payload = response?.data?.data ?? response?.data ?? [];
+      setCustomTargets(normalizeTargetList(Array.isArray(payload) ? payload : [payload]));
+    } catch (error) {
+      console.error('Failed to fetch custom targets:', error);
+      setCustomTargets([]);
+    }
+  };
+
+  const handleAddCustomTarget = async () => {
+    const trimmedTarget = customTargetInput.trim();
+    if (!trimmedTarget) return;
+
+    setIsAddingCustomTarget(true);
+
+    try {
+      await apiClient.post('/agents/litminex/targets/custom', {
+        targetName: trimmedTarget,
+      });
+
+      // Re-fetch the canonical list of custom targets so UI stays in sync
+      await fetchCustomTargets();
+
+      setSelectedTargets((prev) => (
+        prev.includes(trimmedTarget) ? prev : [...prev, trimmedTarget]
+      ));
+      setCustomTargetInput('');
+    } catch (error) {
+      console.error('Failed to add custom target:', error);
+    } finally {
+      setIsAddingCustomTarget(false);
+    }
+  };
+
+  useEffect(() => {
+    if (workflowPhase === 'target-selection') {
+      fetchCustomTargets();
+    }
+  }, [workflowPhase]);
 
   // ─── Loading ────────────────────────────────────────────────────────────
   if (workflowPhase === 'txkg-loading') {
@@ -590,14 +659,58 @@ const TXKGPhase = ({
               <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: selectedTargets.includes(target.id) ? TEAL : TEXT_MUTED, fontWeight: selectedTargets.includes(target.id) ? 600 : 400 }}>{target.score}</Typography>
             </Box>
           ))}
+
+          {customTargets.length > 0 && (
+            <Box sx={{ mt: "8px", borderTop: `1px solid ${BORDER}`, pt: "8px" }}>
+              <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 600, color: TEXT_MUTED, mb: "8px" }}>Custom targets</Typography>
+              {customTargets.map((targetName) => {
+                const isSelected = selectedTargets.includes(targetName);
+
+                return (
+                  <Box key={targetName} sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", py: "10px", borderBottom: `1px solid ${BORDER}` }}>
+                    <Box sx={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <Checkbox
+                        checked={isSelected}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedTargets((prev) => (prev.includes(targetName) ? prev : [...prev, targetName]));
+                          } else {
+                            setSelectedTargets((prev) => prev.filter((id) => id !== targetName));
+                          }
+                        }}
+                        sx={{ p: "4px", color: BORDER, "&.Mui-checked": { color: TEAL } }}
+                      />
+                      <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: isSelected ? 600 : 400, color: TEXT_DARK }}>{targetName}</Typography>
+                    </Box>
+                    <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: isSelected ? TEAL : TEXT_MUTED, fontWeight: isSelected ? 600 : 400 }}>Custom</Typography>
+                  </Box>
+                );
+              })}
+            </Box>
+          )}
+
           <Box sx={{ mt: "12px", mb: "16px" }}>
             <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: TEXT_MUTED, mb: "8px" }}>Add custom target</Typography>
             <TextField
+              value={customTargetInput}
+              onChange={(event) => setCustomTargetInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  handleAddCustomTarget();
+                }
+              }}
               placeholder="Add custom target (e.g. EGFR, VEGFR2...)"
               fullWidth size="small"
               sx={{ "& .MuiOutlinedInput-root": { fontFamily: FONT, fontSize: "13px", borderRadius: "8px" } }}
               InputProps={{ endAdornment: (
-                <IconButton size="small" sx={{ bgcolor: TEAL, borderRadius: "6px", p: "6px", "&:hover": { bgcolor: "#089B98" } }}>
+                <IconButton
+                  aria-label="Add custom target"
+                  onClick={handleAddCustomTarget}
+                  disabled={isAddingCustomTarget || !customTargetInput.trim()}
+                  size="small"
+                  sx={{ bgcolor: TEAL, borderRadius: "6px", p: "6px", "&:hover": { bgcolor: "#089B98" }, opacity: isAddingCustomTarget || !customTargetInput.trim() ? 0.7 : 1 }}
+                >
                   <AddOutlined sx={{ fontSize: 16, color: "#FFFFFF" }} />
                 </IconButton>
               )}}

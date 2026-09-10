@@ -1,9 +1,9 @@
 import axios from "axios";
 import { fetchAuthSession } from "@aws-amplify/auth";
 import API_CONFIG from "../apiconfig";
-
+console.log("4::",API_CONFIG)
 const apiClient = axios.create({
-  baseURL: API_CONFIG.API_BASE_URL,
+  baseURL: API_CONFIG.BASE_URL,
   headers: {
     "Content-Type": "application/json",
   },
@@ -14,7 +14,9 @@ apiClient.interceptors.request.use(async (config) => {
 
   try {
     const { tokens } = await fetchAuthSession();
+    console.log("14::",tokens);
     token = tokens?.accessToken?.toString();
+    console.log("18::",token)
   } catch (error) {
     token = null;
   }

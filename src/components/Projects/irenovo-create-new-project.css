@@ -1,0 +1,133 @@
+/* irenovo-create new project */
+
+/* Auto layout */
+.irenovo-create-root {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  padding: 0px;
+  isolation: isolate;
+}
+
+/* Page background */
+.irenovo-page {
+  position: relative;
+  width: 100%;
+  min-height: 1024px;
+  background: #F8FAFC;
+}
+
+/* Dialog / modal specific styles */
+.irenovo-modal .MuiDialog-paper {
+  width: 720px;
+  max-width: 92%;
+  border-radius: 12px;
+  padding: 24px 20px;
+  background: #FFFFFF;
+  box-shadow: 0px 12px 32px rgba(2,6,23,0.12);
+}
+
+.irenovo-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 8px 0 8px;
+}
+
+.irenovo-modal-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: #00C6BD;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0px 6px 18px rgba(0,198,189,0.12);
+}
+
+.irenovo-modal-close {
+  background: transparent;
+  border: none;
+  color: #94A3B8;
+  cursor: pointer;
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 18px;
+}
+
+.irenovo-modal .MuiDialogTitle-root {
+  font-family: 'Inter', sans-serif;
+  font-weight: 700;
+  font-size: 20px;
+  padding-bottom: 8px;
+}
+
+.irenovo-modal .MuiDialogContent-root {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.irenovo-modal .MuiTypography-root.description {
+  color: #94A3B8;
+  margin-bottom: 12px;
+}
+
+.irenovo-modal .MuiTextField-root .MuiOutlinedInput-root {
+  background: #FFFFFF;
+  border-radius: 8px;
+}
+
+.irenovo-modal .MuiSelect-root {
+  background: #FFFFFF;
+  border-radius: 8px;
+}
+
+.irenovo-modal .MuiDialogActions-root {
+  padding: 16px 24px;
+  justify-content: flex-end;
+  border-top: 1px solid #F1F5F9;
+  background: #F8FAFC;
+}
+
+.irenovo-create-cancel {
+  background: #FFFFFF;
+  color: #475569;
+  border: 1px solid #E2E8F0;
+  border-radius: 8px;
+  padding: 8px 14px;
+  text-transform: none;
+}
+
+.irenovo-create-save {
+  background: #00C6BD;
+  color: #FFFFFF;
+  border-radius: 999px;
+  padding: 10px 20px;
+  text-transform: none;
+  box-shadow: 0px 8px 20px rgba(0,198,189,0.18);
+}
+
+.irenovo-modal .MuiOutlinedInput-notchedOutline {
+  border-color: #E2E8F0;
+}
+
+.irenovo-modal .MuiOutlinedInput-root.Mui-focused .MuiOutlinedInput-notchedOutline {
+  border-color: #00BCD4;
+}
+
+/* form layout */
+.irenovo-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+@media (max-width: 520px) {
+  .irenovo-modal .MuiDialog-paper {
+    width: 92%;
+    padding: 16px;
+  }
+}

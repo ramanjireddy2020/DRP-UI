@@ -1,4 +1,4 @@
-﻿import React, { useState } from "react";
+﻿import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Box,
@@ -8,6 +8,10 @@ import {
   MenuItem,
   Popover,
   Divider,
+  Dialog,
+  DialogContent,
+  DialogActions,
+  Button,
 } from "@mui/material";
 
 import {
@@ -16,8 +20,11 @@ import {
   ChevronLeftOutlined,
   ChevronRightOutlined,
   MoreVertOutlined,
+  CloseOutlined,
   KeyboardArrowDownOutlined,
 } from "@mui/icons-material";
+import apiClient from "../../services/apiClient";
+import "./irenovo-create-new-project.css";
 
 /* ─────────────────────────────────────────────────────────────
    DESIGN TOKENS
@@ -785,8 +792,6 @@ const ActionsDropdown = ({
 ───────────────────────────────────────────────────────────── */
 
 const ROWS_PER_PAGE = 10;
-const TOTAL_ITEMS = 47;
-const TOTAL_PAGES = 12;
 
 function PageButton({
   children,
@@ -885,27 +890,127 @@ const ProjectsPage = () => {
   const [actionProjectId, setActionProjectId] =
     useState(null);
 
-  /* ─────────────────────────────────────────────
-     FILTERED PROJECTS
-  ───────────────────────────────────────────── */
+  /* API-driven projects state */
+  const [projects, setProjects] = useState([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
-  const filtered = ALL_PROJECTS.filter((project) => {
-    const query = search.toLowerCase();
+  const normalizeStatus = (s) => {
+    if (!s) return "";
+    const v = s.toString().trim().toUpperCase();
+    if (v === "ACTIVE") return "ACTIVE";
+    if (v === "ON HOLD" || v === "ONHOLD" || v === "ON_HOLD") return "ON HOLD";
+    if (v.includes("REVIEW")) return "REVIEW";
+    if (v === "COMPLETED") return "COMPLETED";
+    if (v === "ARCHIVED") return "ARCHIVED";
+    return v;
+  };
 
-    return (
-      (!query ||
-        project.name
-          .toLowerCase()
-          .includes(query) ||
-        project.disease
-          .toLowerCase()
-          .includes(query)) &&
-      (!moduleFilter ||
-        project.module === moduleFilter) &&
-      (!statusFilter ||
-        project.status === statusFilter)
-    );
-  });
+  const toTitleCase = (s) =>
+    s
+      .toString()
+      .toLowerCase()
+      .split(" ")
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(" ");
+
+  useEffect(() => {
+    let mounted = true;
+
+    const fetchProjects = async () => {
+      setLoading(true);
+      setError(null);
+
+      try {
+        const params = {
+          search: search || "",
+          module: moduleFilter || "",
+          status: statusFilter ? toTitleCase(statusFilter) : "",
+          sortBy: sortBy || "Latest Activity",
+          page,
+        };
+
+        const res = await apiClient.get("/projects", { params });
+        const data = res.data || {};
+
+        if (!mounted) return;
+
+        setProjects(data.items || []);
+        setTotalCount(data.totalCount || 0);
+        setTotalPages(data.totalPages || 1);
+      } catch (err) {
+        if (!mounted) return;
+        setError(err.userMessage || err.message || "Failed to fetch projects");
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    };
+
+    fetchProjects();
+
+    return () => {
+      mounted = false;
+    };
+  }, [search, moduleFilter, statusFilter, sortBy, page]);
+
+  const displayed = projects;
+
+  /* New project modal state */
+  const [newProjectOpen, setNewProjectOpen] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [newProjectDisease, setNewProjectDisease] = useState("");
+  const [newProjectDescription, setNewProjectDescription] = useState("");
+  const [createLoading, setCreateLoading] = useState(false);
+
+  const diseaseOptions = Array.from(
+    new Set(ALL_PROJECTS.map((p) => p.disease).filter(Boolean))
+  );
+
+  useEffect(() => {
+    if (newProjectDisease) {
+      setNewProjectName(`${newProjectDisease} Target Analysis`);
+    }
+  }, [newProjectDisease]);
+
+  const openNewProject = () => {
+    setNewProjectDisease("");
+    setNewProjectName("");
+    setNewProjectDescription("");
+    setNewProjectOpen(true);
+  };
+
+  const closeNewProject = () => setNewProjectOpen(false);
+
+  const handleCreateProject = async () => {
+    const disease = newProjectDisease || "";
+    const name = newProjectName || `${disease} Target Analysis`;
+
+    const body = {
+      name,
+      disease,
+      module: "TxKG",
+      status: "Active",
+      description: newProjectDescription || undefined,
+    };
+
+    try {
+      setCreateLoading(true);
+      const res = await apiClient.post("/v1/projects", body);
+
+      // Refresh list after successful create
+      setPage(1);
+      // trigger fetch by toggling page or using a refreshKey - page is sufficient
+
+      closeNewProject();
+    } catch (err) {
+      console.error("Create project failed", err);
+      setError(err.userMessage || err.message || "Failed to create project");
+    } finally {
+      setCreateLoading(false);
+    }
+  };
 
   /* ─────────────────────────────────────────────
      PAGINATION
@@ -913,10 +1018,9 @@ const ProjectsPage = () => {
 
   const rangeStart =
     (page - 1) * ROWS_PER_PAGE + 1;
-
   const rangeEnd = Math.min(
     page * ROWS_PER_PAGE,
-    TOTAL_ITEMS
+    totalCount || 0
   );
 
   /* ─────────────────────────────────────────────
@@ -952,6 +1056,16 @@ const ProjectsPage = () => {
       For now the dropdown behavior is implemented
       and the selected project/status are available.
     */
+  };
+
+  // Update local state when status changes (optimistic update)
+  const handleStatusChangeLocal = (status) => {
+    setProjects((prev) =>
+      prev.map((p) =>
+        p.id === selectedProjectId ? { ...p, status } : p
+      )
+    );
+    console.log("Updated local status for", selectedProjectId, status);
   };
 
   /* ─────────────────────────────────────────────
@@ -1153,7 +1267,7 @@ const ProjectsPage = () => {
           {/* New Project */}
           <Box
             component="button"
-            onClick={() => {}}
+            onClick={openNewProject}
             sx={{
               display: "flex",
               alignItems: "center",
@@ -1518,7 +1632,7 @@ const ProjectsPage = () => {
               overflowX: "auto",
             }}
           >
-            {filtered.map((project, index) => (
+            {displayed.map((project, index) => (
               <Box
                 key={project.id}
                 onClick={() =>
@@ -1545,8 +1659,7 @@ const ProjectsPage = () => {
                   minHeight: "74px",
 
                   borderBottom:
-                    index ===
-                    filtered.length - 1
+                    index === displayed.length - 1
                       ? "none"
                       : "1px solid #F0F2F5",
 
@@ -1635,7 +1748,7 @@ const ProjectsPage = () => {
                   }}
                 >
                   <StatusChip
-                    status={project.status}
+                    status={normalizeStatus(project.status)}
                     onClick={(event) =>
                       handleStatusClick(
                         event,
@@ -1699,7 +1812,28 @@ const ProjectsPage = () => {
             ))}
 
             {/* Empty state */}
-            {filtered.length === 0 && (
+            {loading ? (
+              <Box
+                sx={{
+                  minHeight: "180px",
+
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Typography
+                  sx={{
+                    fontFamily: FONT,
+                    fontSize: "14px",
+                    color: MUTED,
+                  }}
+                >
+                  Loading projects...
+                </Typography>
+              </Box>
+            ) : (
+              displayed.length === 0 && (
               <Box
                 sx={{
                   minHeight: "180px",
@@ -1720,6 +1854,7 @@ const ProjectsPage = () => {
                   No projects found
                 </Typography>
               </Box>
+              )
             )}
           </Box>
         </Box>
@@ -1787,27 +1922,18 @@ const ProjectsPage = () => {
           </Box>
 
           <PageButton
-            active={
-              page === TOTAL_PAGES
-            }
-            onClick={() =>
-              setPage(TOTAL_PAGES)
-            }
+            active={page === totalPages}
+            onClick={() => setPage(totalPages)}
           >
-            {TOTAL_PAGES}
+            {totalPages}
           </PageButton>
 
           <PageButton
             aria-label="Next page"
-            disabled={
-              page === TOTAL_PAGES
-            }
+            disabled={page === totalPages}
             onClick={() =>
               setPage((currentPage) =>
-                Math.min(
-                  TOTAL_PAGES,
-                  currentPage + 1
-                )
+                Math.min(totalPages, currentPage + 1)
               )
             }
           >
@@ -1829,9 +1955,7 @@ const ProjectsPage = () => {
               ml: "8px",
             }}
           >
-            Showing {rangeStart}-
-            {rangeEnd} of {TOTAL_ITEMS}{" "}
-            articles
+            Showing {rangeStart}-{rangeEnd} of {totalCount} projects
           </Typography>
         </Box>
       </Box>
@@ -1845,15 +1969,12 @@ const ProjectsPage = () => {
         open={Boolean(statusAnchorEl)}
         onClose={handleStatusClose}
         currentStatus={
-          ALL_PROJECTS.find(
-            (project) =>
-              project.id ===
-              selectedProjectId
-          )?.status
+          normalizeStatus(
+            projects.find((p) => p.id === selectedProjectId)
+              ?.status
+          )
         }
-        onStatusChange={
-          handleStatusChange
-        }
+        onStatusChange={handleStatusChangeLocal}
       />
 
       {/* ─────────────────────────────────────────
@@ -1868,6 +1989,70 @@ const ProjectsPage = () => {
           handleProjectAction
         }
       />
+
+      {/* New Project Dialog */}
+      <Dialog className="irenovo-modal" open={newProjectOpen} onClose={closeNewProject} fullWidth maxWidth="sm">
+        <Box className="irenovo-modal-header">
+          <Box className="irenovo-modal-icon">
+            <AddOutlined sx={{ color: '#FFFFFF' }} />
+          </Box>
+
+          <Box sx={{ display: 'flex', flexDirection: 'column', ml: 1 }}>
+            <Typography sx={{ fontFamily: FONT, fontWeight: 700, fontSize: 20 }}>New project</Typography>
+            <Typography sx={{ color: MUTED, fontSize: 13 }}>Create a new project</Typography>
+          </Box>
+
+          <Box sx={{ flex: 1 }} />
+
+          <Box component="button" onClick={closeNewProject} className="irenovo-modal-close">
+            <CloseOutlined />
+          </Box>
+        </Box>
+
+        <DialogContent>
+          <Typography className="description">&nbsp;</Typography>
+
+          <Box className="irenovo-form">
+            <TextField
+              label="Project Name"
+              value={newProjectName}
+              onChange={(e) => setNewProjectName(e.target.value)}
+              fullWidth
+              variant="outlined"
+            />
+
+            <Select
+              value={newProjectDisease}
+              onChange={(e) => setNewProjectDisease(e.target.value)}
+              displayEmpty
+              fullWidth
+              size="small"
+            >
+              <MenuItem value="">Select disease</MenuItem>
+              {diseaseOptions.map((d) => (
+                <MenuItem key={d} value={d}>{d}</MenuItem>
+              ))}
+            </Select>
+
+            <TextField
+              label="Description"
+              value={newProjectDescription}
+              onChange={(e) => setNewProjectDescription(e.target.value)}
+              multiline
+              rows={4}
+              fullWidth
+              variant="outlined"
+            />
+          </Box>
+        </DialogContent>
+
+        <DialogActions>
+          <Button className="irenovo-create-cancel" onClick={closeNewProject}>Cancel</Button>
+          <Button className="irenovo-create-save" onClick={handleCreateProject} disabled={createLoading}>
+            Create & Save
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };
