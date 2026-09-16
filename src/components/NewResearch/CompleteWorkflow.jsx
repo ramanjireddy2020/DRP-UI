@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import ArtifactsPage from "./ArtifactsPage";
 import LineagePage from "./LineagePage";
 import ShareModal from "../ShareModal/ShareModal";
@@ -21,6 +21,9 @@ import LiteminexPhase from "../workflow/Liteminex/LiteminexPhase";
 import CuratexPhase from "../workflow/Curatex/CuratexPhase";
 import ScreeningSuitePhase from "../workflow/ScreeningSuite/ScreeningSuitePhase";
 import NoveltySearchPhase from "../workflow/NoveltySearch/NoveltySearchPhase";
+import useWorkflowSession from "../../hooks/useWorkflowSession";
+import useJob from "../../hooks/useJob";
+import { moduleForPhase } from "../../workflow/moduleMap";
 import './WorkflowStyles.css';
 
 // Design tokens matching Figma
@@ -49,8 +52,53 @@ const CompleteWorkflow = () => {
   const navigate = useNavigate();
   const query = location.state?.query || "Find protein targets associated with Type 2 Diabetes for drug repurposing";
   
-  const [workflowPhase, setWorkflowPhase] = useState("txkg-loading");
-  const [activeStep, setActiveStep] = useState(0);
+  // ---------------------------------------------------------------------------
+  // Session state.
+  //
+  // The supervisor decides which module runs first, so there is no hard-coded
+  // starting phase here any more. Every module keeps its own phase, job and
+  // data in the session store, which is what lets the user click back to an
+  // earlier step without losing anything.
+  //
+  // `workflowPhase` / `activeStep` / `chatMessages` keep their original names
+  // and meanings so the render code below — and all five phase components —
+  // continue to work unchanged.
+  // ---------------------------------------------------------------------------
+  const session = useWorkflowSession();
+
+  const workflowPhase = session.activePhase ?? "txkg-loading";
+  const activeStep = session.activeIndex;
+
+  /**
+   * Setting a phase can also mean switching module: the phase string already
+   * says which module owns it, so a child calling
+   * setWorkflowPhase("litminex-loading") activates LitMineX. That is why the
+   * phase components did not need changing.
+   */
+  const { setPhase, activateModule, goToIndex, activeKey } = session;
+
+  const setWorkflowPhase = useCallback(
+    (phase) => {
+      const owner = moduleForPhase(phase);
+      if (!owner) return;
+
+      if (owner.key === activeKey) {
+        setPhase(phase);
+      } else {
+        activateModule(owner.key, { phase });
+      }
+    },
+    [activeKey, setPhase, activateModule]
+  );
+
+  /**
+   * Navigation only — it cannot reach a module that has never been activated.
+   * Children call setActiveStep(n) immediately before setWorkflowPhase(...);
+   * in that pairing this is a no-op and the phase call does the activation,
+   * which is the correct order of events.
+   */
+  const setActiveStep = useCallback((index) => goToIndex(index), [goToIndex]);
+
   const [insightTab, setInsightTab] = useState(0);
   const [expandedAccordion, setExpandedAccordion] = useState("txkg");
   const [selectedTargets, setSelectedTargets] = useState(["P37231", "P27487", "P08172"]);
@@ -92,11 +140,81 @@ const CompleteWorkflow = () => {
   const [showCompoundDetail, setShowCompoundDetail] = useState(false);
   const [selectedCompound, setSelectedCompound] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
-  const [chatMessages, setChatMessages] = useState([]);
+  /**
+   * The conversation is owned by the session store and is append-only, so
+   * moving between steps never drops a message. What is rendered is the slice
+   * up to and including the step being viewed.
+   */
+  const chatMessages = session.visibleConversation;
+  const appendMessages = session.appendMessages;
+
   const [chatInputValue, setChatInputValue] = useState("");
   
-  // Auto-progress for loading states
+  // ---------------------------------------------------------------------------
+  // Supervisor
+  //
+  // Requirement: whatever module the supervisor returns is the module that gets
+  // activated. The old code started at "txkg-loading" unconditionally; now the
+  // starting module comes from the API response. See useWorkflowSession.
+  // ---------------------------------------------------------------------------
+  const startedRef = useRef(false);
+
   useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+
+    session.startSession({ query }).then((started) => {
+      if (!started) return;
+      // Nothing to do on success — startSession has already activated the
+      // module the supervisor named.
+    });
+    // Intentionally mount-only: a session is created once per workflow entry.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ---------------------------------------------------------------------------
+  // Job polling — replaces the setTimeout chain that used to fake progress.
+  // ---------------------------------------------------------------------------
+  const activeJobId = session.activeJobId;
+  const job = useJob(activeJobId, { enabled: Boolean(activeJobId) });
+
+  /**
+   * When the active module's job finishes, move that module from its
+   * "-loading" phase to its "-results" phase and keep the payload.
+   */
+  useEffect(() => {
+    if (!job.isDone) return;
+
+    const owner = moduleForPhase(workflowPhase);
+    if (!owner) return;
+    if (!workflowPhase.endsWith("-loading")) return;
+
+    if (job.result) {
+      session.setStepData({ jobResult: job.result }, owner.key);
+    }
+
+    // CurateX is the exception: its loading state resolves to the editable
+    // profile screen, not straight to results.
+    setWorkflowPhase(
+      owner.key === "curatex" ? "curatex-profile" : owner.resultsPhase
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job.isDone, job.result]);
+
+  // ---------------------------------------------------------------------------
+  // Fallback progression.
+  //
+  // Not every phase has a real job behind it yet — the per-agent result
+  // endpoints are a later integration phase, and a supervisor response without
+  // a job_id leaves nothing to poll. Where there is no job, the original timing
+  // is preserved so the workflow still walks end to end. Each of these blocks
+  // disappears as its agent phase is integrated.
+  // ---------------------------------------------------------------------------
+  const hasLiveJob = Boolean(activeJobId);
+
+  useEffect(() => {
+    if (hasLiveJob) return undefined;
+
     if (workflowPhase === "txkg-loading") {
       const timer = setTimeout(() => setWorkflowPhase("txkg-results"), 2500);
       return () => clearTimeout(timer);
@@ -146,7 +264,9 @@ const CompleteWorkflow = () => {
       }, 2000);
       return () => clearTimeout(timer);
     }
-  }, [workflowPhase]);
+    return undefined;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workflowPhase, hasLiveJob]);
 
   // Mock targets data from Figma
   const mockTargets = [
@@ -183,13 +303,51 @@ const CompleteWorkflow = () => {
       overflow: "hidden"
     }}>
       {WORKFLOW_STEPS.map((step, index) => {
-        const isActive = index === activeStep;
-        const isCompleted = index < activeStep;
+        // Visited-ness comes from the session, not from index arithmetic: the
+        // supervisor can activate modules out of pipeline order, so "earlier
+        // than the active step" no longer means "already done".
+        const railStep = session.rail.find((r) => r.key === step.key);
+        const isActive = Boolean(railStep?.isActive);
+        const isCompleted = Boolean(railStep?.visited) && !isActive;
+        const canNavigate = Boolean(railStep?.isNavigable);
+
+        // Requirement: the user can move between steps from this panel. Only
+        // steps that have actually run are reachable — clicking one restores
+        // that step's own view, and nothing it holds is discarded.
+        const goToStep = canNavigate
+          ? () => session.goToModule(step.key)
+          : undefined;
+
         return (
           <React.Fragment key={step.id}>
             {isCompleted ? (
-              /* Completed: dark dash + circle with checkmark */
-              <Box sx={{ display: "flex", alignItems: "center", height: "42px", width: "180px" }}>
+              /* Completed: dark dash + circle with checkmark — clickable */
+              <Box
+                onClick={goToStep}
+                role={canNavigate ? "button" : undefined}
+                tabIndex={canNavigate ? 0 : undefined}
+                aria-label={canNavigate ? `Go back to ${step.label}` : undefined}
+                onKeyDown={
+                  canNavigate
+                    ? (e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          goToStep();
+                        }
+                      }
+                    : undefined
+                }
+                sx={{
+                  display: "flex", alignItems: "center", height: "42px", width: "180px",
+                  cursor: canNavigate ? "pointer" : "default",
+                  borderRadius: "0 6px 6px 0",
+                  transition: "background-color .12s ease",
+                  "&:hover": canNavigate ? { bgcolor: "rgba(26,46,68,0.06)" } : undefined,
+                  "&:focus-visible": canNavigate
+                    ? { outline: "2px solid #00BCD4", outlineOffset: "-2px" }
+                    : undefined,
+                }}
+              >
                 <Box sx={{ width: "20px", height: 0, borderTop: "1.5px solid #1A2E44", flexShrink: 0 }} />
                 <Box sx={{ width: 24, height: 24, borderRadius: "50%", bgcolor: "#1A2E44", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                   <Typography sx={{ fontFamily: "'Geist',sans-serif", fontSize: "13px", fontWeight: 700, color: "#FFFFFF", lineHeight: 1 }}>✓</Typography>
@@ -2793,21 +2951,29 @@ const CompleteWorkflow = () => {
 
     // ScreenSuite hands the conversation to NovSearch when the next request
     // asks for patent or novelty analysis.
+    // The module the message was typed into — recorded before any hand-off, so
+    // the message stays attached to the step the user was actually on.
+    const originKey = session.activeKey;
+
     if (
       workflowPhase.startsWith("screensuite") &&
       (lc.includes("patent") || lc.includes("novelty"))
     ) {
-      setActiveStep(4);
-      setWorkflowPhase("novelty-results");
+      // This branch used to return without recording userMsg, so the message
+      // that triggered the hand-off disappeared from the thread.
+      appendMessages([userMsg], originKey);
       setChatInputValue("");
+      session.activateModule("novsearch", { phase: "novelty-results" });
       return;
     }
 
     // Navigate to CurateX when user signals they're done with LitMineX chat
     if (lc.includes("target candidate profile") || lc.includes("done with the chat") || (lc.includes("generate") && lc.includes("jak2"))) {
-      setChatMessages(prev => [...prev, userMsg]);
+      appendMessages([userMsg], originKey);
       setChatInputValue("");
-      setTimeout(() => { setActiveStep(2); setWorkflowPhase("curatex-loading"); }, 400);
+      setTimeout(() => {
+        session.activateModule("curatex", { phase: "curatex-loading" });
+      }, 400);
       return;
     }
     let agentMsg;
@@ -2818,7 +2984,7 @@ const CompleteWorkflow = () => {
     } else {
       agentMsg = { role: "agent", text: "Based on the literature analysis, the JAK2 pathway shows strong therapeutic potential for Type 2 Diabetes. Multiple studies confirm AMPK-mediated modulation of JAK-STAT signaling." };
     }
-    setChatMessages(prev => [...prev, userMsg, agentMsg]);
+    appendMessages([userMsg, agentMsg], originKey);
     setChatInputValue("");
   };
 

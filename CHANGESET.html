@@ -1,0 +1,1003 @@
+<meta charset="utf-8">
+<title>Supervisor Integration Changeset</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+  /* ---------------------------------------------------------------------
+     Palette is the project's own: TEAL #00BCD4, TEXT_DARK #0F172A,
+     BORDER #E2E8F0 from src/components/workflow/workflowConstants.js.
+     #00BCD4 is too light to carry text on white, so --accent-ink is a
+     deepened form of it; the bright value stays for rules and marks.
+     Neutrals are biased toward cyan rather than left pure grey.
+     --------------------------------------------------------------------- */
+  :root{
+    color-scheme: light;
+
+    --ground:      #FFFFFF;
+    --surface:     #F5F9FA;
+    --surface-2:   #EDF4F6;
+    --ink:         #0F172A;
+    --ink-2:       #33424C;
+    --muted:       #5B6B72;
+    --faint:       #8B9AA1;
+    --rule:        #DCE6EA;
+    --rule-soft:   #EAF1F3;
+
+    --accent:      #00BCD4;
+    --accent-ink:  #0E7C8A;
+    --accent-wash: #E4F6F8;
+
+    /* diff semantics — deliberately not the accent hue */
+    --add:         #1B6E4A;
+    --add-bg:      #EBF7F0;
+    --add-edge:    #A9D8BF;
+    --del:         #9B2C3B;
+    --del-bg:      #FCEDEF;
+    --del-edge:    #E5B2BA;
+
+    /* change-kind chips */
+    --bug:         #9B2C3B;
+    --bug-bg:      #FCEDEF;
+    --hard:        #7A5A00;
+    --hard-bg:     #FBF3DC;
+    --new:         #0E7C8A;
+    --new-bg:      #E4F6F8;
+
+    --prose: "Source Serif 4", ui-serif, Georgia, serif;
+    --sans: "Instrument Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      color-scheme: dark;
+
+      --ground:      #0C1417;
+      --surface:     #121D21;
+      --surface-2:   #18262B;
+      --ink:         #E8F1F3;
+      --ink-2:       #C3D3D8;
+      --muted:       #93A6AD;
+      --faint:       #6E8189;
+      --rule:        #24363C;
+      --rule-soft:   #1B2B30;
+
+      --accent:      #35D6EA;
+      --accent-ink:  #5EE0F0;
+      --accent-wash: #122C33;
+
+      --add:         #6FD69F;
+      --add-bg:      #10261B;
+      --add-edge:    #2C5B41;
+      --del:         #F0909E;
+      --del-bg:      #2A1216;
+      --del-edge:    #5E2A32;
+
+      --bug:         #F0909E;
+      --bug-bg:      #2A1216;
+      --hard:        #E4C16B;
+      --hard-bg:     #2A2211;
+      --new:         #5EE0F0;
+      --new-bg:      #122C33;
+    }
+  }
+
+  :root[data-theme="dark"]{
+    color-scheme: dark;
+
+    --ground:      #0C1417;
+    --surface:     #121D21;
+    --surface-2:   #18262B;
+    --ink:         #E8F1F3;
+    --ink-2:       #C3D3D8;
+    --muted:       #93A6AD;
+    --faint:       #6E8189;
+    --rule:        #24363C;
+    --rule-soft:   #1B2B30;
+
+    --accent:      #35D6EA;
+    --accent-ink:  #5EE0F0;
+    --accent-wash: #122C33;
+
+    --add:         #6FD69F;
+    --add-bg:      #10261B;
+    --add-edge:    #2C5B41;
+    --del:         #F0909E;
+    --del-bg:      #2A1216;
+    --del-edge:    #5E2A32;
+
+    --bug:         #F0909E;
+    --bug-bg:      #2A1216;
+    --hard:        #E4C16B;
+    --hard-bg:     #2A2211;
+    --new:         #5EE0F0;
+    --new-bg:      #122C33;
+  }
+
+  *{ box-sizing: border-box; }
+
+  body{
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink-2);
+    font-family: var(--prose);
+    font-size: 16px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap{
+    max-width: 920px;
+    margin: 0 auto;
+    padding-inline: 20px;
+    padding-block: 0 96px;
+  }
+
+  /* ---------- masthead ---------- */
+  .masthead{
+    padding-block: 48px 28px;
+    border-bottom: 2px solid var(--ink);
+  }
+  .eyebrow{
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--accent-ink);
+    margin: 0 0 14px;
+  }
+  h1{
+    font-family: var(--sans);
+    font-weight: 700;
+    font-size: clamp(30px, 5.2vw, 44px);
+    line-height: 1.06;
+    letter-spacing: -.024em;
+    color: var(--ink);
+    margin: 0;
+    text-wrap: balance;
+  }
+  .standfirst{
+    margin: 16px 0 0;
+    font-size: 18px;
+    color: var(--muted);
+    max-width: 62ch;
+  }
+
+  /* ---------- summary strip ---------- */
+  .tally{
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    margin-block: 28px 0;
+  }
+  .tally div{
+    background: var(--ground);
+    padding: 14px 16px;
+  }
+  .tally dt{
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin: 0 0 6px;
+  }
+  .tally dd{
+    font-family: var(--sans);
+    font-size: 21px;
+    font-weight: 600;
+    color: var(--ink);
+    margin: 0;
+    font-variant-numeric: tabular-nums;
+  }
+  .tally dd small{
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--muted);
+  }
+
+  /* ---------- sections ---------- */
+  section{ margin-block: 56px 0; }
+
+  .sec-head{
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    flex-wrap: wrap;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 8px;
+  }
+  h2{
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: 25px;
+    letter-spacing: -.016em;
+    color: var(--ink);
+    margin: 0;
+    text-wrap: balance;
+  }
+  .sec-count{
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin-left: auto;
+  }
+  .sec-intro{
+    margin: 0 0 30px;
+    color: var(--muted);
+    max-width: 66ch;
+  }
+
+  /* ---------- change record ---------- */
+  .change{
+    margin-block: 0 40px;
+    padding-top: 22px;
+    border-top: 1px solid var(--rule-soft);
+  }
+  .change:first-of-type{ border-top: none; padding-top: 4px; }
+
+  .change-top{
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+  }
+  .chip{
+    font-family: var(--mono);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    padding: 3px 7px;
+    border: 1px solid;
+    border-radius: 2px;
+    white-space: nowrap;
+  }
+  .chip.bug  { color: var(--bug);  background: var(--bug-bg);  border-color: var(--del-edge); }
+  .chip.hard { color: var(--hard); background: var(--hard-bg); border-color: color-mix(in srgb, var(--hard) 36%, transparent); }
+  .chip.new  { color: var(--new);  background: var(--new-bg);  border-color: var(--accent); }
+
+  h3{
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: 18px;
+    letter-spacing: -.008em;
+    color: var(--ink);
+    margin: 0;
+    flex: 1 1 auto;
+    min-width: 240px;
+    text-wrap: balance;
+  }
+  .where{
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    margin: 0 0 16px;
+    word-break: break-word;
+  }
+  .where b{ color: var(--accent-ink); font-weight: 500; }
+
+  /* ---------- diff ---------- */
+  .diff{
+    border: 1px solid var(--rule);
+    background: var(--surface);
+    margin-block: 0 18px;
+    overflow-x: auto;
+  }
+  .diff pre{
+    margin: 0;
+    padding: 12px 0;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.66;
+    color: var(--ink-2);
+    min-width: max-content;
+  }
+  .diff i{
+    display: block;
+    padding-inline: 14px;
+    font-style: normal;
+    white-space: pre;
+  }
+  .diff i.a{ background: var(--add-bg); color: var(--add); box-shadow: inset 2px 0 0 var(--add-edge); }
+  .diff i.d{ background: var(--del-bg); color: var(--del); box-shadow: inset 2px 0 0 var(--del-edge); }
+  .diff i.h{ color: var(--faint); }
+  .diff i.c{ color: var(--muted); }
+
+  /* ---------- why block ---------- */
+  .why{
+    border-left: 2px solid var(--accent);
+    padding: 2px 0 2px 18px;
+    margin-block: 0 16px;
+  }
+  .why > .lbl{
+    display: block;
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--accent-ink);
+    margin-bottom: 7px;
+  }
+  .why p{ margin: 0 0 10px; max-width: 68ch; }
+  .why p:last-child{ margin-bottom: 0; }
+
+  .impact{
+    font-family: var(--sans);
+    font-size: 14px;
+    color: var(--ink);
+    background: var(--surface-2);
+    border: 1px solid var(--rule);
+    padding: 10px 14px;
+    margin-block: 0 16px;
+  }
+  .impact b{
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    display: block;
+    margin-bottom: 4px;
+  }
+
+  code{
+    font-family: var(--mono);
+    font-size: .86em;
+    background: var(--surface-2);
+    border: 1px solid var(--rule-soft);
+    border-radius: 2px;
+    padding: .1em .32em;
+    color: var(--ink);
+    word-break: break-word;
+  }
+  .why code, .impact code, li code, td code{ background: var(--surface-2); }
+
+  p{ margin: 0 0 14px; max-width: 68ch; }
+  a{ color: var(--accent-ink); text-decoration: underline; text-underline-offset: 2px; }
+
+  ul{ margin: 0 0 16px; padding-left: 20px; max-width: 68ch; }
+  li{ margin-bottom: 7px; }
+
+  /* ---------- tables ---------- */
+  .tbl-wrap{ overflow-x: auto; margin-block: 0 22px; border: 1px solid var(--rule); }
+  table{ width: 100%; border-collapse: collapse; font-family: var(--sans); font-size: 14px; min-width: 460px; }
+  th{
+    text-align: left;
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: var(--surface-2);
+    padding: 9px 13px;
+    border-bottom: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+  td{
+    padding: 10px 13px;
+    border-bottom: 1px solid var(--rule-soft);
+    color: var(--ink-2);
+    vertical-align: top;
+  }
+  tr:last-child td{ border-bottom: none; }
+  td.n{ font-family: var(--mono); font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  /* ---------- files list ---------- */
+  .files{
+    display: grid;
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    margin-block: 0 24px;
+  }
+  .frow{
+    background: var(--ground);
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 10px 14px;
+    flex-wrap: wrap;
+  }
+  .frow .path{ font-family: var(--mono); font-size: 12.5px; color: var(--ink); flex: 1 1 auto; word-break: break-all; }
+  .frow .tagx{
+    font-family: var(--mono);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--faint);
+    white-space: nowrap;
+  }
+  .frow .tagx.plus{ color: var(--add); }
+  .frow .lines{ font-family: var(--mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  footer{
+    margin-top: 64px;
+    padding-top: 20px;
+    border-top: 1px solid var(--rule);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--faint);
+    line-height: 1.8;
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    *{ animation: none !important; transition: none !important; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <p class="eyebrow">DRP-UI &middot; Changeset rationale</p>
+    <h1>Supervisor Integration Changeset</h1>
+    <p class="standfirst">
+      Every change made to wire DRP-UI to the InnoDD API gateway, grouped by why
+      it was made rather than by file. Four of these fixed things that were
+      already broken; the rest are the foundation the remaining 49 endpoints sit on.
+    </p>
+
+    <dl class="tally">
+      <div><dt>Files changed</dt><dd>5</dd></div>
+      <div><dt>Files added</dt><dd>7</dd></div>
+      <div><dt>Net lines</dt><dd>+267 <small>&minus;47</small></dd></div>
+      <div><dt>Bugs fixed</dt><dd>4</dd></div>
+      <div><dt>Build</dt><dd>Passing</dd></div>
+    </dl>
+  </header>
+
+  <!-- ============================================================= -->
+  <section>
+    <div class="sec-head">
+      <h2>What was already broken</h2>
+      <span class="sec-count">4 fixes</span>
+    </div>
+    <p class="sec-intro">
+      These were found by reading the code against the Postman collection. Three
+      would have made the app unusable against a live backend; the fourth quietly
+      ate user input.
+    </p>
+
+    <!-- A1 -->
+    <article class="change">
+      <div class="change-top">
+        <span class="chip bug">Bug fix</span>
+        <h3>Project creation posted to a path the gateway 404s</h3>
+      </div>
+      <p class="where"><b>src/components/Projects/ProjectsPage.jsx</b> &nbsp;line 1000</p>
+
+      <div class="diff"><pre><i class="h">@@ -997,7 +997,7 @@</i><i>       setCreateLoading(true);</i><i class="d">-      const res = await apiClient.post("/v1/projects", body);</i><i class="a">+      const res = await apiClient.post("/projects", body);</i><i> </i><i class="c">       // Refresh list after successful create</i></pre></div>
+
+      <div class="why">
+        <span class="lbl">Why</span>
+        <p>
+          The gateway routes carry no <code>/v1</code> prefix. The
+          <code>drp-poc-lambda</code> appends <code>/v1</code> itself when it calls
+          the upstream app, which is why the backend's own collections all show it
+          &mdash; but the frontend must not send it.
+        </p>
+        <p>
+          This was already documented in the repo. <code>src/setupProxy.js</code>
+          records the Postman result directly:
+          <code>/users/me/onboarding-status</code> returned 200 while
+          <code>/v1/users/me/onboarding-status</code> returned 404. The same file's
+          <code>GET</code> on line 935 correctly used <code>/projects</code> &mdash;
+          only the <code>POST</code> disagreed, in the same component.
+        </p>
+      </div>
+
+      <div class="impact">
+        <b>Impact</b>
+        Creating a project always failed. The error surfaced as a generic
+        &ldquo;Failed to create project&rdquo; toast, so the cause was invisible
+        from the UI.
+      </div>
+    </article>
+
+    <!-- A2 -->
+    <article class="change">
+      <div class="change-top">
+        <span class="chip bug">Bug fix</span>
+        <h3>The wrong token type was sent on every request</h3>
+      </div>
+      <p class="where"><b>src/services/apiClient.js</b> &nbsp;line 18</p>
+
+      <div class="diff"><pre><i class="h">@@ -14,9 +14,9 @@ apiClient.interceptors.request.use(async (config) =&gt; {</i><i>   try {</i><i>     const { tokens } = await fetchAuthSession();</i><i class="d">-    console.log("14::",tokens);</i><i class="d">-    token = tokens?.accessToken?.toString();</i><i class="d">-    console.log("18::",token)</i><i class="a">+    // Must be the ID token, not the access token: the API Gateway JWT authorizer</i><i class="a">+    // validates `aud` against the Cognito app client, and only ID tokens carry</i><i class="a">+    // `aud`. An access token is rejected with a 401.</i><i class="a">+    token = tokens?.idToken?.toString() ?? null;</i><i>   } catch (error) {</i><i>     token = null;</i><i>   }</i></pre></div>
+
+      <div class="why">
+        <span class="lbl">Why</span>
+        <p>
+          The collection's own documentation states it outright: <em>&ldquo;Use the
+          idToken. The JWT authorizer validates <code>aud</code> against the
+          Cognito app client, and only ID tokens carry <code>aud</code>. An
+          accessToken will be rejected.&rdquo;</em>
+        </p>
+        <p>
+          The collection captures <code>AuthenticationResult.IdToken</code> into its
+          bearer variable, and the string <code>AccessToken</code> appears zero
+          times across all 63 requests. The app was sending the one token the
+          authorizer refuses.
+        </p>
+      </div>
+
+      <div class="impact">
+        <b>Impact</b>
+        Every authenticated call would return 401 &mdash; while the same endpoints
+        passed in Postman. That asymmetry is the kind that costs days, because it
+        looks like a backend problem.
+      </div>
+    </article>
+
+    <!-- A3 -->
+    <article class="change">
+      <div class="change-top">
+        <span class="chip bug">Bug fix</span>
+        <h3>Credentials were logged to the browser console</h3>
+      </div>
+      <p class="where"><b>src/services/apiClient.js</b> &nbsp;lines 4, 17, 19 &mdash; removed</p>
+
+      <div class="diff"><pre><i class="h">@@ -1,4 +1,4 @@</i><i> import API_CONFIG from "../apiconfig";</i><i class="d">-console.log("4::",API_CONFIG)</i><i class="a">+</i><i class="h">@@ -14,9 +14,9 @@</i><i class="d">-    console.log("14::",tokens);   // full Cognito token set</i><i class="d">-    console.log("18::",token)     // the bearer token itself</i></pre></div>
+
+      <div class="why">
+        <span class="lbl">Why</span>
+        <p>
+          These printed the complete token set and the bearer string on
+          <em>every</em> request. Anyone with devtools open &mdash; or anyone handed
+          a screen recording &mdash; had a working credential. They sat on the exact
+          lines being changed for the token fix, so removing them was free.
+        </p>
+      </div>
+    </article>
+
+    <!-- A4 -->
+    <article class="change">
+      <div class="change-top">
+        <span class="chip bug">Bug fix</span>
+        <h3>One chat hand-off silently discarded the user's message</h3>
+      </div>
+      <p class="where"><b>src/components/NewResearch/CompleteWorkflow.jsx</b> &nbsp;<code>handleChatSubmit</code></p>
+
+      <div class="diff"><pre><i class="h">@@ -2794,11 +2952,17 @@</i><i>     if (</i><i>       workflowPhase.startsWith("screensuite") &amp;&amp;</i><i>       (lc.includes("patent") || lc.includes("novelty"))</i><i>     ) {</i><i class="d">-      setActiveStep(4);</i><i class="d">-      setWorkflowPhase("novelty-results");</i><i class="a">+      // This branch used to return without recording userMsg, so the message</i><i class="a">+      // that triggered the hand-off disappeared from the thread.</i><i class="a">+      appendMessages([userMsg], originKey);</i><i>       setChatInputValue("");</i><i class="a">+      session.activateModule("novsearch", { phase: "novelty-results" });</i><i>       return;</i><i>     }</i></pre></div>
+
+      <div class="why">
+        <span class="lbl">Why</span>
+        <p>
+          <code>userMsg</code> was constructed at the top of the handler but this
+          branch returned before appending it. Asking ScreenSuite about patents
+          moved you to NovSearch and threw away what you typed. The sibling branch
+          immediately below it recorded the message correctly, which is what made
+          the omission easy to miss.
+        </p>
+        <p>
+          Directly relevant to the requirement that the conversation is never lost,
+          so it is fixed here rather than tracked separately.
+        </p>
+      </div>
+    </article>
+  </section>
+
+  <!-- ============================================================= -->
+  <section>
+    <div class="sec-head">
+      <h2>Foundations</h2>
+      <span class="sec-count">5 changes</span>
+    </div>
+    <p class="sec-intro">
+      Nothing user-visible. All of it is load-bearing for the 49 endpoints still to
+      be wired &mdash; doing it after the screens would mean reworking them.
+    </p>
+
+    <!-- B1 -->
+    <article class="change">
+      <div class="change-top">
+        <span class="chip hard">Hardening</span>
+        <h3>The base URL now comes from one place, and fails loudly</h3>
+      </div>
+      <p class="where"><b>src/apiconfig.js</b> &nbsp;rewritten</p>
+
+      <div class="diff"><pre><i class="h">@@ -1,14 +1,24 @@</i><i class="a">+const API_BASE_URL = process.env.REACT_APP_API_URL;</i><i class="a">+</i><i class="a">+if (!API_BASE_URL) {</i><i class="a">+  throw new Error(</i><i class="a">+    "REACT_APP_API_URL is not set. Add it to .env (see .env.example) and restart "</i><i class="a">+      + "the dev server — CRA only reads env vars at startup."</i><i class="a">+  );</i><i class="a">+}</i><i class="a">+</i><i> const API_CONFIG = {</i><i class="d">-  BASE_URL: process.env.REACT_APP_API_BASE_URL || 'https://uk1ip13n80...',</i><i class="d">-  PORT1: '8080',</i><i class="d">-  PORT2: '8081',</i><i class="d">-  PORT3: '5030',</i><i class="d">-  PORT4: '5040',</i><i class="d">-  PORT5: '5000',</i><i class="d">-  API_BASE_URL:</i><i class="d">-    process.env.REACT_APP_API_URL ||</i><i class="d">-    process.env.REACT_APP_API_BASE_URL ||</i><i class="d">-    'https://uk1ip13n80...',</i><i class="a">+  API_BASE_URL,</i><i> };</i></pre></div>
+
+      <div class="why">
+        <span class="lbl">Why</span>
+        <p>
+          <code>apiClient</code> used <code>API_CONFIG.BASE_URL</code>, which read
+          <code>REACT_APP_API_BASE_URL</code> &mdash; a variable <code>.env</code>
+          never defined. <code>.env</code> sets <code>REACT_APP_API_URL</code>,
+          which fed <code>API_CONFIG.API_BASE_URL</code>, which nothing read.
+        </p>
+        <p>
+          It worked only because the hard-coded fallback happened to equal the
+          <code>.env</code> value. Editing <code>.env</code> to point at staging
+          would have changed nothing, silently. The hard-coded fallback is gone for
+          that reason: a silent default is what hid the problem. <code>PORT1</code>&ndash;<code>PORT5</code>
+          were never read by anything.
+        </p>
+      </div>
+    </article>
+
+    <!-- B2 -->
+    <article class="change">
+      <div class="change-top">
+        <span class="chip hard">Hardening</span>
+        <h3>Removed a token fallback that could never produce a token</h3>
+      </div>
+      <p class="where"><b>src/services/apiClient.js</b> &nbsp;lines 24&ndash;26 &mdash; removed</p>
+
+      <div class="diff"><pre><i class="d">-  if (!token &amp;&amp; typeof window !== "undefined") {</i><i class="d">-    token = window.localStorage.getItem("drp.apiToken") || API_CONFIG.ACCESS_TOKEN;</i><i class="d">-  }</i></pre></div>
+
+      <div class="why">
+        <span class="lbl">Why</span>
+        <p>
+          <code>drp.apiToken</code> was read here and written <em>nowhere</em> &mdash;
+          there is no <code>setItem</code> call for it anywhere in <code>src/</code>.
+          <code>API_CONFIG.ACCESS_TOKEN</code> was never defined either. The branch
+          always evaluated to <code>null</code>.
+        </p>
+        <p>
+          Dead code that looks like a second credential source is worse than no
+          fallback: it invites the assumption that auth still works when Amplify
+          fails. Amplify's <code>fetchAuthSession()</code> is the only source, and
+          it caches and refreshes on its own.
+        </p>
+      </div>
+    </article>
+
+    <!-- B3 -->
+    <article class="change">
+      <div class="change-top">
+        <span class="chip hard">Hardening</span>
+        <h3>A 401 now ends the session instead of becoming 50 error toasts</h3>
+      </div>
+      <p class="where"><b>src/services/apiClient.js</b> &nbsp;response interceptor</p>
+
+      <div class="diff"><pre><i class="h">@@ -33,18 +30,54 @@</i><i> apiClient.interceptors.response.use(</i><i>   (response) =&gt; response,</i><i class="d">-  (error) =&gt; {</i><i class="d">-    const responseMessage = error.response?.data?.message;</i><i class="a">+  async (error) =&gt; {</i><i class="a">+    const status = error.response?.status;</i><i class="a">+</i><i class="a">+    if (status === 401 &amp;&amp; !redirecting) {</i><i class="a">+      redirecting = true;</i><i class="a">+      try {</i><i class="a">+        await signOut();</i><i class="a">+      } catch (signOutError) {</i><i class="a">+        // Already signed out, or Amplify has no session to clear.</i><i class="a">+      }</i><i class="a">+      onUnauthorized();</i><i class="a">+    }</i><i class="a">+</i><i class="a">+    const responseData = error.response?.data;</i><i class="a">+    const responseMessage =</i><i class="a">+      responseData?.message || responseData?.error || responseData?.detail;</i><i> </i><i>     const message = responseMessage || ( ... );</i><i class="d">-    return Promise.reject(Object.assign(error, { userMessage: message }));</i><i class="a">+    return Promise.reject(Object.assign(error, { userMessage: message, status }));</i><i>   }</i><i> );</i></pre></div>
+
+      <div class="why">
+        <span class="lbl">Why</span>
+        <p>
+          There was no 401 branch at all. An expired session produced a failed
+          request per widget and no redirect. That is tolerable with four endpoints
+          wired and unusable with fifty-three &mdash; hence doing it now.
+        </p>
+        <p>
+          The <code>redirecting</code> flag matters because a dashboard fires many
+          requests at once; without it, one expired session triggers a sign-out per
+          in-flight call. The handler is a module-level assignment rather than a
+          router import so this file stays free of React dependencies.
+        </p>
+        <p>
+          The message now also reads <code>error</code> and <code>detail</code>, not
+          just <code>message</code>. Which key the API uses is unconfirmed, and the
+          old code degraded every unrecognised shape to a generic string.
+        </p>
+      </div>
+    </article>
+
+    <!-- B4 -->
+    <article class="change">
+      <div class="change-top">
+        <span class="chip hard">Hardening</span>
+        <h3>Authenticated routes are now actually gated</h3>
+      </div>
+      <p class="where"><b>src/components/Auth/RequireAuth.jsx</b> <span class="tagx plus">new</span> &nbsp;&middot;&nbsp; <b>src/App.js</b></p>
+
+      <div class="diff"><pre><i class="h">@@ -78,7 +85,11 @@ src/App.js</i><i>   {</i><i>     path: "/dashboard",</i><i class="d">-    element: &lt;MainLayout /&gt;,</i><i class="a">+    element: (</i><i class="a">+      &lt;RequireAuth&gt;</i><i class="a">+        &lt;MainLayout /&gt;</i><i class="a">+      &lt;/RequireAuth&gt;</i><i class="a">+    ),</i><i> </i><i>     children: [</i></pre></div>
+
+      <div class="why">
+        <span class="lbl">Why</span>
+        <p>
+          <code>/dashboard/*</code> rendered whether or not a session existed, so an
+          unauthenticated visit loaded the full dashboard and let every screen fire
+          its requests. Applied to all three route groups: the dashboard shell, the
+          new-research page, and the workflow.
+        </p>
+        <p>
+          The guard checks for an <em>ID token</em> specifically, not merely a
+          session object &mdash; that is what the gateway authorizer accepts, so
+          it is the only thing that counts as signed in. It records the attempted
+          path in <code>state.from</code> so login can return the user there.
+        </p>
+      </div>
+    </article>
+
+    <!-- B5 -->
+    <article class="change">
+      <div class="change-top">
+        <span class="chip hard">Hardening</span>
+        <h3>A real data-access layer, so 53 path strings don't scatter</h3>
+      </div>
+      <p class="where">
+        <b>src/services/api/sessions.js</b> <span class="tagx plus">new</span> &nbsp;&middot;&nbsp;
+        <b>src/services/api/jobs.js</b> <span class="tagx plus">new</span> &nbsp;&middot;&nbsp;
+        <b>src/services/unwrap.js</b> <span class="tagx plus">new</span>
+      </p>
+
+      <div class="why">
+        <span class="lbl">Why</span>
+        <p>
+          <code>researchApi.js</code> defined eight endpoint wrappers that
+          <em>nothing imported</em> &mdash; <code>src/api/</code> was an empty
+          directory, and the <code>getCurrentUser</code> in <code>Login.js</code> is
+          Amplify's, not the API one. Meanwhile the two components that did call the
+          API used <code>apiClient</code> directly with inline paths.
+        </p>
+        <p>
+          Continuing in that second style would have put 53 path literals through the
+          component tree &mdash; which is precisely how the <code>/v1</code> mismatch
+          in the first section survived: two spellings of the same route, in one file,
+          with nothing to compare them against. One module per collection folder, and
+          no path string outside <code>src/services/api/</code>.
+        </p>
+        <p>
+          <code>unwrap.js</code> isolates the <code>data?.data ?? data</code>
+          envelope guess in one function, so if the contract is ever pinned down
+          there is one place to tighten.
+        </p>
+      </div>
+    </article>
+  </section>
+
+  <!-- ============================================================= -->
+  <section>
+    <div class="sec-head">
+      <h2>The two requirements</h2>
+      <span class="sec-count">4 changes</span>
+    </div>
+    <p class="sec-intro">
+      Supervisor-driven module activation, and never losing conversation or step
+      state when the workflow moves on.
+    </p>
+
+    <!-- C1 -->
+    <article class="change">
+      <div class="change-top">
+        <span class="chip new">New</span>
+        <h3>The supervisor decides which module runs</h3>
+      </div>
+      <p class="where">
+        <b>src/workflow/moduleMap.js</b> <span class="tagx plus">new</span> &nbsp;&middot;&nbsp;
+        <b>src/hooks/useWorkflowSession.js</b> <span class="tagx plus">new</span> &nbsp;&middot;&nbsp;
+        <b>CompleteWorkflow.jsx</b>
+      </p>
+
+      <div class="diff"><pre><i class="h">@@ -50,6 +53,51 @@ CompleteWorkflow.jsx</i><i class="d">-  const [workflowPhase, setWorkflowPhase] = useState("txkg-loading");</i><i class="d">-  const [activeStep, setActiveStep] = useState(0);</i><i class="a">+  const session = useWorkflowSession();</i><i class="a">+</i><i class="a">+  const workflowPhase = session.activePhase ?? "txkg-loading";</i><i class="a">+  const activeStep = session.activeIndex;</i><i class="h">@@ -93,9 +141,79 @@</i><i class="a">+  useEffect(() =&gt; {</i><i class="a">+    if (startedRef.current) return;</i><i class="a">+    startedRef.current = true;</i><i class="a">+    session.startSession({ query });</i><i class="a">+  }, []);</i></pre></div>
+
+      <div class="why">
+        <span class="lbl">Why</span>
+        <p>
+          The starting module was hard-coded to <code>"txkg-loading"</code>. Now
+          <code>POST /sessions</code> is called on entry and whatever module the
+          response names is the one activated.
+        </p>
+        <p>
+          The supervisor's module vocabulary is not documented, and the backend's own
+          collection uses a <em>different</em> set of names for the same agents
+          (<code>literature-mining</code>, <code>drug-curation</code>,
+          <code>screening</code>, <code>novelty-search-agent</code>). So
+          <code>resolveModuleKey</code> carries an alias table covering both
+          vocabularies plus separator and casing variants, and
+          <code>parseSupervisorModule</code> probes fourteen candidate response
+          fields rather than committing to one shape.
+        </p>
+        <p>
+          <strong>On an unresolvable module it raises a visible error naming the
+          response keys, rather than falling back to TxKG.</strong> A silently wrong
+          module is the exact failure this requirement guards against, and the fix
+          is then a one-line alias addition.
+        </p>
+      </div>
+    </article>
+
+    <!-- C2 -->
+    <article class="change">
+      <div class="change-top">
+        <span class="chip new">New</span>
+        <h3>The conversation is append-only and tagged per module</h3>
+      </div>
+      <p class="where"><b>src/hooks/useWorkflowSession.js</b> &nbsp;&middot;&nbsp; <b>CompleteWorkflow.jsx</b></p>
+
+      <div class="diff"><pre><i class="h">@@ -93,9 +141,79 @@</i><i class="d">-  const [chatMessages, setChatMessages] = useState([]);</i><i class="a">+  const chatMessages = session.visibleConversation;</i><i class="a">+  const appendMessages = session.appendMessages;</i><i class="h">@@ -2819,5 +2985,5 @@</i><i class="d">-    setChatMessages(prev =&gt; [...prev, userMsg, agentMsg]);</i><i class="a">+    appendMessages([userMsg, agentMsg], originKey);</i></pre></div>
+
+      <div class="why">
+        <span class="lbl">Why</span>
+        <p>
+          The thread is now a single append-only array in the session store, each
+          entry stamped with the module it was typed into. There is no operation that
+          replaces or truncates it &mdash; the reducer only appends.
+        </p>
+        <p>
+          Navigating changes which <em>slice</em> is rendered, never what is stored:
+          <code>visibleConversation</code> returns everything up to and including the
+          step being viewed, so going back shows the history as it stood at that
+          point while the full thread stays intact.
+        </p>
+        <p>
+          <code>originKey</code> is captured before any hand-off so a message that
+          triggers a module switch stays attached to the step the user was actually
+          on, rather than landing under the module they were moved to.
+        </p>
+      </div>
+    </article>
+
+    <!-- C3 -->
+    <article class="change">
+      <div class="change-top">
+        <span class="chip new">New</span>
+        <h3>The left rail is clickable, and completion no longer means &ldquo;lower index&rdquo;</h3>
+      </div>
+      <p class="where"><b>CompleteWorkflow.jsx</b> &nbsp;step rail, lines 304&ndash;352</p>
+
+      <div class="diff"><pre><i class="h">@@ -184,11 +304,49 @@</i><i>       {WORKFLOW_STEPS.map((step, index) =&gt; {</i><i class="d">-        const isActive = index === activeStep;</i><i class="d">-        const isCompleted = index &lt; activeStep;</i><i class="a">+        const railStep = session.rail.find((r) =&gt; r.key === step.key);</i><i class="a">+        const isActive = Boolean(railStep?.isActive);</i><i class="a">+        const isCompleted = Boolean(railStep?.visited) &amp;&amp; !isActive;</i><i class="a">+        const canNavigate = Boolean(railStep?.isNavigable);</i><i class="a">+</i><i class="a">+        const goToStep = canNavigate</i><i class="a">+          ? () =&gt; session.goToModule(step.key)</i><i class="a">+          : undefined;</i></pre></div>
+
+      <div class="why">
+        <span class="lbl">Why</span>
+        <p>
+          The rail was built deliberately inert &mdash; the source said
+          <em>&ldquo;NON-CLICKABLE as per requirements&rdquo;</em>. That requirement
+          is now reversed: any step that has actually run is reachable, and clicking
+          one restores that step's own phase and data.
+        </p>
+        <p>
+          The subtler change is <code>isCompleted</code>. It was
+          <code>index &lt; activeStep</code>, which assumes the pipeline runs in
+          order. Because the supervisor can activate modules out of order &mdash;
+          it might open on CurateX &mdash; &ldquo;earlier than the active step&rdquo;
+          no longer means &ldquo;already done&rdquo;. Completion is now
+          <code>visited</code>, tracked per module.
+        </p>
+        <p>
+          Navigation is also gated on <code>visited</code>: a step that never ran
+          cannot be jumped to, because there would be nothing to show. Clickable
+          steps get <code>role="button"</code>, Enter/Space handling, a pointer
+          cursor, hover feedback and a visible focus ring.
+        </p>
+      </div>
+    </article>
+
+    <!-- C4 -->
+    <article class="change">
+      <div class="change-top">
+        <span class="chip new">New</span>
+        <h3>Job polling replaces the fake timers &mdash; where a job exists</h3>
+      </div>
+      <p class="where"><b>src/hooks/useJob.js</b> <span class="tagx plus">new</span> &nbsp;&middot;&nbsp; <b>CompleteWorkflow.jsx</b></p>
+
+      <div class="diff"><pre><i class="h">@@ -93,9 +141,79 @@</i><i class="a">+  const activeJobId = session.activeJobId;</i><i class="a">+  const job = useJob(activeJobId, { enabled: Boolean(activeJobId) });</i><i class="a">+</i><i class="a">+  useEffect(() =&gt; {</i><i class="a">+    if (!job.isDone) return;</i><i class="a">+    const owner = moduleForPhase(workflowPhase);</i><i class="a">+    if (!owner || !workflowPhase.endsWith("-loading")) return;</i><i class="a">+    setWorkflowPhase(</i><i class="a">+      owner.key === "curatex" ? "curatex-profile" : owner.resultsPhase</i><i class="a">+    );</i><i class="a">+  }, [job.isDone, job.result]);</i><i class="h">@@ -147,5 +265,7 @@</i><i class="a">+  const hasLiveJob = Boolean(activeJobId);</i><i class="a">+  // fallback timers below run only when hasLiveJob is false</i></pre></div>
+
+      <div class="why">
+        <span class="lbl">Why</span>
+        <p>
+          Progress was five <code>setTimeout</code> calls &mdash; 2500ms, 2500ms,
+          2000ms, 8000ms, 2000ms. Where the supervisor returns a
+          <code>job_id</code>, <code>useJob</code> now polls
+          <code>/agents/jobs/{id}/status</code> until terminal and then reads the
+          result. It uses a recursive <code>setTimeout</code> rather than
+          <code>setInterval</code> so a slow response cannot overlap the next poll,
+          backs off 1.5&times; to a 5s ceiling, and cleans up on unmount.
+        </p>
+        <p>
+          <strong>The timers are still there as a fallback, on purpose.</strong> The
+          per-agent result endpoints are a later phase, and a supervisor response
+          without a <code>job_id</code> leaves nothing to poll. Where there is no
+          job, the original timing runs so the workflow still walks end to end.
+          Removing them now would have traded a demo that works for one that hangs.
+          Each block deletes itself as its agent phase is integrated.
+        </p>
+      </div>
+
+      <div class="impact">
+        <b>Known assumption</b>
+        The terminal status vocabulary in <code>jobs.js</code>
+        (<code>succeeded</code>, <code>completed</code>, <code>done</code>&hellip;)
+        is a guess &mdash; the collection does not document what
+        <code>/status</code> returns. It is matched case-insensitively and
+        deliberately generous so an unexpected-but-terminal value cannot poll
+        forever. One real call would let this be narrowed; it is the riskiest
+        assumption in the changeset.
+      </div>
+    </article>
+  </section>
+
+  <!-- ============================================================= -->
+  <section>
+    <div class="sec-head">
+      <h2>Why no phase component changed</h2>
+    </div>
+
+    <p>
+      TxKG, LitMineX, CurateX, ScreenSuite and NovSearch total roughly 5,100 lines
+      and all five advance the workflow by calling
+      <code>setActiveStep(n)</code> then <code>setWorkflowPhase("x-loading")</code>.
+      None of them needed editing, because the phase string already says which module
+      owns it:
+    </p>
+
+    <div class="diff"><pre><i class="c">// CompleteWorkflow.jsx — setWorkflowPhase resolves the owning module</i><i>const owner = moduleForPhase(phase);</i><i>if (owner.key === activeKey) {</i><i>  setPhase(phase);            <span style="color:var(--faint)">// same module — just advance it</span></i><i>} else {</i><i>  activateModule(owner.key, { phase });  <span style="color:var(--faint)">// different module — activate it</span></i><i>}</i></pre></div>
+
+    <p>
+      So a child calling <code>setWorkflowPhase("litminex-loading")</code> activates
+      LitMineX on its own. <code>setActiveStep</code> became navigation-only, and in
+      the pair above it is a harmless no-op &mdash; the module is not yet visited, so
+      the phase call does the real work. Correct order of events, no call-site changes.
+    </p>
+
+    <p>
+      One phase breaks the naming rule and needed an explicit override:
+    </p>
+
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>Module</th><th>Phase prefix</th><th>Note</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="n">txkg</td><td class="n">txkg-</td><td>also owns <code>target-selection</code>, which carries no prefix &mdash; handled in <code>PHASE_OVERRIDES</code></td></tr>
+          <tr><td class="n">litminex</td><td class="n">litminex-</td><td>&mdash;</td></tr>
+          <tr><td class="n">curatex</td><td class="n">curatex-</td><td>7 phases, all prefixed; resolves to <code>curatex-profile</code>, not results</td></tr>
+          <tr><td class="n">screensuite</td><td class="n">screensuite-</td><td>&mdash;</td></tr>
+          <tr><td class="n">novsearch</td><td class="n">novelty-</td><td>prefix does not match the module key</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      <code>CompleteWorkflow.jsx</code> is 2,784 lines and six later phases will touch
+      it. Keeping the 14-value phase vocabulary frozen is what confines each phase's
+      diff to its own effect block. Decomposing that component is worth doing &mdash;
+      but as its own change, not folded into the integration.
+    </p>
+  </section>
+
+  <!-- ============================================================= -->
+  <section>
+    <div class="sec-head">
+      <h2>Files</h2>
+      <span class="sec-count">12 total</span>
+    </div>
+
+    <div class="files">
+      <div class="frow"><span class="path">src/components/NewResearch/CompleteWorkflow.jsx</span><span class="tagx">modified</span><span class="lines">+196 &minus;38</span></div>
+      <div class="frow"><span class="path">src/services/apiClient.js</span><span class="tagx">modified</span><span class="lines">+63 &minus;26</span></div>
+      <div class="frow"><span class="path">src/apiconfig.js</span><span class="tagx">modified</span><span class="lines">+32 &minus;14</span></div>
+      <div class="frow"><span class="path">src/App.js</span><span class="tagx">modified</span><span class="lines">+21 &minus;7</span></div>
+      <div class="frow"><span class="path">src/components/Projects/ProjectsPage.jsx</span><span class="tagx">modified</span><span class="lines">+1 &minus;1</span></div>
+      <div class="frow"><span class="path">src/hooks/useWorkflowSession.js</span><span class="tagx plus">added</span><span class="lines">session state model</span></div>
+      <div class="frow"><span class="path">src/hooks/useJob.js</span><span class="tagx plus">added</span><span class="lines">job polling</span></div>
+      <div class="frow"><span class="path">src/workflow/moduleMap.js</span><span class="tagx plus">added</span><span class="lines">module resolution</span></div>
+      <div class="frow"><span class="path">src/services/api/sessions.js</span><span class="tagx plus">added</span><span class="lines">supervisor + lifecycle</span></div>
+      <div class="frow"><span class="path">src/services/api/jobs.js</span><span class="tagx plus">added</span><span class="lines">status + result</span></div>
+      <div class="frow"><span class="path">src/services/unwrap.js</span><span class="tagx plus">added</span><span class="lines">envelope helper</span></div>
+      <div class="frow"><span class="path">src/components/Auth/RequireAuth.jsx</span><span class="tagx plus">added</span><span class="lines">route guard</span></div>
+    </div>
+
+    <p>
+      <code>react-scripts build</code> passes. The only two warnings in touched files
+      &mdash; a BOM in <code>App.js</code> and unused <code>navigate</code> /
+      <code>currentPage</code> in <code>CompleteWorkflow.jsx</code> &mdash; both
+      predate this changeset. No warnings originate in the seven new files.
+    </p>
+
+    <p>
+      <code>researchApi.js</code> and the empty <code>src/api/</code> are left in
+      place for now; they are removed in the cleanup phase, once their eight
+      endpoints have real call sites.
+    </p>
+  </section>
+
+  <footer>
+    DRP-UI &middot; drugrepurposingplatform v0.2.0<br>
+    Contract: InnoDD API &middot; Frontend (API Gateway) &mdash; 63 requests, 4 wired before this changeset<br>
+    16 September 2026
+  </footer>
+
+</div>

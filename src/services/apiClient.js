@@ -1,28 +1,25 @@
 import axios from "axios";
-import { fetchAuthSession } from "@aws-amplify/auth";
+import { fetchAuthSession, signOut } from "@aws-amplify/auth";
 import API_CONFIG from "../apiconfig";
-console.log("4::",API_CONFIG)
+
 const apiClient = axios.create({
-  baseURL: API_CONFIG.BASE_URL,
+  baseURL: API_CONFIG.API_BASE_URL,
   headers: {
     "Content-Type": "application/json",
   },
 });
 
 apiClient.interceptors.request.use(async (config) => {
-  let token;
+  let token = null;
 
   try {
     const { tokens } = await fetchAuthSession();
-    console.log("14::",tokens);
-    token = tokens?.accessToken?.toString();
-    console.log("18::",token)
+    // Must be the ID token, not the access token: the API Gateway JWT authorizer
+    // validates `aud` against the Cognito app client, and only ID tokens carry
+    // `aud`. An access token is rejected with a 401.
+    token = tokens?.idToken?.toString() ?? null;
   } catch (error) {
     token = null;
-  }
-
-  if (!token && typeof window !== "undefined") {
-    token = window.localStorage.getItem("drp.apiToken") || API_CONFIG.ACCESS_TOKEN;
   }
 
   if (token) {
@@ -33,17 +30,53 @@ apiClient.interceptors.request.use(async (config) => {
   return config;
 });
 
+/**
+ * Where to send the user when their session is gone. Kept as a module-level
+ * assignment rather than a router import so this file stays free of React
+ * dependencies and can be unit-tested.
+ */
+let onUnauthorized = () => {
+  if (typeof window !== "undefined") {
+    window.location.assign("/login");
+  }
+};
+
+export const setUnauthorizedHandler = (handler) => {
+  onUnauthorized = handler;
+};
+
+let redirecting = false;
+
 apiClient.interceptors.response.use(
   (response) => response,
-  (error) => {
-    const responseMessage = error.response?.data?.message;
+  async (error) => {
+    const status = error.response?.status;
+
+    // A 401 means the ID token is missing, expired or rejected. Amplify refreshes
+    // on its own, so reaching here means the session is genuinely unusable —
+    // clear it and get out, rather than letting every screen render its own
+    // "request failed" message.
+    if (status === 401 && !redirecting) {
+      redirecting = true;
+      try {
+        await signOut();
+      } catch (signOutError) {
+        // Already signed out, or Amplify has no session to clear.
+      }
+      onUnauthorized();
+    }
+
+    const responseData = error.response?.data;
+    const responseMessage =
+      responseData?.message || responseData?.error || responseData?.detail;
+
     const message =
       responseMessage ||
       (error.response
         ? `Backend request failed (${error.response.status}).`
         : "Unable to reach the backend.");
 
-    return Promise.reject(Object.assign(error, { userMessage: message }));
+    return Promise.reject(Object.assign(error, { userMessage: message, status }));
   }
 );
 

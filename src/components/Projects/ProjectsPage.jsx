@@ -997,7 +997,7 @@ const ProjectsPage = () => {
 
     try {
       setCreateLoading(true);
-      const res = await apiClient.post("/v1/projects", body);
+      const res = await apiClient.post("/projects", body);
 
       // Refresh list after successful create
       setPage(1);

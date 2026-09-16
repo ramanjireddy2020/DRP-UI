@@ -16,6 +16,7 @@ import CompleteWorkflow from "./components/NewResearch/CompleteWorkflow";
 
 import ResearchLayout from "./components/ResearchLayout/ResearchLayout";
 import MainLayout from "./components/Layout/MainLayout";
+import RequireAuth from "./components/Auth/RequireAuth";
 
 import {
   createBrowserRouter,
@@ -61,15 +62,21 @@ const router = createBrowserRouter([
   {
     path: "/dashboard/new-research",
     element: (
-      <ResearchLayout showHeader={false}>
-        <NewResearchPage />
-      </ResearchLayout>
+      <RequireAuth>
+        <ResearchLayout showHeader={false}>
+          <NewResearchPage />
+        </ResearchLayout>
+      </RequireAuth>
     ),
   },
 
   {
     path: "/dashboard/new-research/workflow",
-    element: <CompleteWorkflow />,
+    element: (
+      <RequireAuth>
+        <CompleteWorkflow />
+      </RequireAuth>
+    ),
   },
 
 
@@ -78,7 +85,11 @@ const router = createBrowserRouter([
   // =====================================================
   {
     path: "/dashboard",
-    element: <MainLayout />,
+    element: (
+      <RequireAuth>
+        <MainLayout />
+      </RequireAuth>
+    ),
 
     children: [
 
