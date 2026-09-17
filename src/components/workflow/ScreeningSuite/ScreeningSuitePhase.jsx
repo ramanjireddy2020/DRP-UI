@@ -6,53 +6,6 @@ import { FONT, TEAL, GRAY_BG } from "../workflowConstants";
    DATA
 ============================================================================ */
 
-const dockingResults = [
-  {
-    id: 1,
-    protein: "JAK2",
-    mode: "1",
-    affinity: "-8.046",
-    proteinLigand: "log_JAK2_Imatinib",
-    proteinValue: "hydro_JAK2",
-    ligand: "minimized_Imatinib",
-  },
-  {
-    id: 2,
-    protein: "JAK2",
-    mode: "1",
-    affinity: "-8.046",
-    proteinLigand: "log_JAK2_Gefitinib",
-    proteinValue: "hydro_JAK2",
-    ligand: "minimized_Gefitinib",
-  },
-  {
-    id: 3,
-    protein: "VEGFR2",
-    mode: "1",
-    affinity: "-7.445",
-    proteinLigand: "log_VEGFR2_Sorafenib",
-    proteinValue: "hydro_VEGFR2",
-    ligand: "minimized_Sorafenib",
-  },
-  {
-    id: 4,
-    protein: "PI3K",
-    mode: "1",
-    affinity: "-6.918",
-    proteinLigand: "log_PI3K_Idelalisib",
-    proteinValue: "hydro_PI3K",
-    ligand: "minimized_Idelalisib",
-  },
-  {
-    id: 5,
-    protein: "mTOR",
-    mode: "1",
-    affinity: "-6.502",
-    proteinLigand: "log_mTOR_Everolimus",
-    proteinValue: "hydro_mTOR",
-    ligand: "minimized_Everolimus",
-  },
-];
 
 const residueInteractions = [
   {
@@ -286,7 +239,7 @@ const ScreenSuiteIcon = () => (
    USER MESSAGE
 ============================================================================ */
 
-const UserMessage = () => (
+const UserMessage = ({ subject }) => (
   <Box
     sx={{
       display: "flex",
@@ -327,8 +280,10 @@ const UserMessage = () => (
           color: "#334155",
         }}
       >
-        View ScreenSuite docking status for Metformin and Pioglitazone against
-        JAK2
+        {/* Was a fixed "for Metformin and Pioglitazone against JAK2". */}
+        {subject
+          ? `View ScreenSuite docking status for ${subject}`
+          : "View ScreenSuite docking status"}
       </Typography>
     </Box>
   </Box>
@@ -382,7 +337,13 @@ const AgentHeader = () => (
    DOCKING TABLE
 ============================================================================ */
 
-const PLPTable = ({ onOpenReport }) => {
+/**
+ * @param {object[]} hits - normalised rows from GET /agents/screensuite/{jobId}/hits
+ *   (protein, mode, affinity, ligand, outputFile). The module-level
+ *   `dockingResults` fixture is only the fallback for a caller that passes
+ *   none, and is never reached from the workflow.
+ */
+const PLPTable = ({ onOpenReport, hits }) => {
   return (
     <Box
       sx={{
@@ -418,7 +379,7 @@ const PLPTable = ({ onOpenReport }) => {
         </Box>
 
         {/* ROWS */}
-        {dockingResults.map((row) => (
+        {(Array.isArray(hits) && hits.length ? hits : []).map((row) => (
           <Box
             key={row.id}
             sx={{
@@ -868,6 +829,12 @@ const ProteinVisualization = () => {
    EXPANDED PLP REPORT
 ============================================================================ */
 
+/* Retained but NOT rendered: these read the residueInteractions /
+   hydrogenBonds / recommendations fixtures, and the API exposes no endpoint
+   for any of them (the collection lists the PLP report, 3D view and download
+   bundles as unavailable on this deployment). Kept so the markup is ready if
+   those endpoints appear, rather than deleted and rebuilt from scratch. */
+// eslint-disable-next-line no-unused-vars
 const ExpandedPLPReport = () => {
   return (
     <Box
@@ -1035,6 +1002,12 @@ const ExpandedPLPReport = () => {
    ACTION BUTTONS
 ============================================================================ */
 
+/* Retained but NOT rendered: these read the residueInteractions /
+   hydrogenBonds / recommendations fixtures, and the API exposes no endpoint
+   for any of them (the collection lists the PLP report, 3D view and download
+   bundles as unavailable on this deployment). Kept so the markup is ready if
+   those endpoints appear, rather than deleted and rebuilt from scratch. */
+// eslint-disable-next-line no-unused-vars
 const ActionButtons = ({ expanded }) => {
   const normalButton = {
     minHeight: "32px",
@@ -1100,6 +1073,12 @@ const ActionButtons = ({ expanded }) => {
    OVERALL RECOMMENDATION
 ============================================================================ */
 
+/* Retained but NOT rendered: these read the residueInteractions /
+   hydrogenBonds / recommendations fixtures, and the API exposes no endpoint
+   for any of them (the collection lists the PLP report, 3D view and download
+   bundles as unavailable on this deployment). Kept so the markup is ready if
+   those endpoints appear, rather than deleted and rebuilt from scratch. */
+// eslint-disable-next-line no-unused-vars
 const OverallRecommendation = () => {
   return (
     <Box
@@ -1228,8 +1207,43 @@ const OverallRecommendation = () => {
    MAIN COMPONENT
 ============================================================================ */
 
-const ScreeningSuitePhase = ({ workflowPhase }) => {
+/**
+ * ScreenSuite — molecular docking.
+ *
+ * ⚠️ Docking cannot complete on this deployment: PyMOL and Vina are not
+ * installable on Databricks Apps, so /agents/screensuite/screen fails. The
+ * PLP report, the residue/hydrogen-bond breakdowns, the 3D viewer and the
+ * download bundles have no endpoint in the API at all.
+ *
+ * So everything below the affinity table is fixture-backed with nothing to
+ * replace it. Rather than present that as real output, the results view shows
+ * the affinity table when the API returns hits, and an explicit
+ * not-available notice when it does not.
+ */
+const ScreeningSuitePhase = ({
+  workflowPhase,
+  progressMessage,
+  hits = [],
+  loading = false,
+  error = null,
+  onRetry,
+  unavailable = false,
+  unavailableMessage,
+}) => {
   const [selectedReport, setSelectedReport] = useState(null);
+
+  const hasHits = Array.isArray(hits) && hits.length > 0;
+
+  /**
+   * What is being docked, read off the hits rather than named in the copy.
+   * The header used to say "Metformin and Pioglitazone against JAK2" on every
+   * run.
+   */
+  const subject = hasHits
+    ? `${[...new Set(hits.map((h) => h.ligand).filter((l) => l && l !== "—"))].join(", ")} against ${
+        [...new Set(hits.map((h) => h.protein).filter((p) => p && p !== "—"))].join(", ")
+      }`
+    : null;
 
   if (workflowPhase === "screensuite-loading") {
     return (
@@ -1260,7 +1274,7 @@ const ScreeningSuitePhase = ({ workflowPhase }) => {
             },
           }}
         >
-          <UserMessage />
+          <UserMessage subject={subject} />
 
           <Box
             sx={{
@@ -1284,8 +1298,26 @@ const ScreeningSuitePhase = ({ workflowPhase }) => {
                 marginBottom: "12px",
               }}
             >
-              Received 2 candidates from CurateX. Initializing molecular docking pipeline...
+              {progressMessage ||
+                "Received candidates from CurateX. Initializing molecular docking pipeline..."}
             </Typography>
+
+            {/* Said up front, because the run is expected to fail here and a
+                silent eight-minute wait followed by an error is worse. */}
+            {unavailable && (
+              <Typography
+                sx={{
+                  ...baseText,
+                  fontSize: "12px",
+                  lineHeight: "18px",
+                  color: "#B45309",
+                  marginBottom: "12px",
+                }}
+              >
+                {unavailableMessage ||
+                  "Docking is not expected to succeed on this deployment."}
+              </Typography>
+            )}
 
             <Box
               sx={{
@@ -1330,9 +1362,9 @@ const ScreeningSuitePhase = ({ workflowPhase }) => {
                 </Box>
               ))}
 
-              <Typography sx={{ ...baseText, fontSize: "11px", lineHeight: "14px", color: "#94A3B8", marginTop: "10px" }}>
-                Estimated time remaining: ~8 min
-              </Typography>
+              {/* The "~8 min" here matched the old 8-second mock timer, not
+                  anything the backend reports. There is no estimate in the
+                  status payload, so none is shown. */}
             </Box>
           </Box>
         </Box>
@@ -1372,7 +1404,7 @@ const ScreeningSuitePhase = ({ workflowPhase }) => {
             USER REQUEST
         ================================================================= */}
 
-        <UserMessage />
+        <UserMessage subject={subject} />
 
         {/* ================================================================
             MAIN AGENT CARD
@@ -1400,37 +1432,95 @@ const ScreeningSuitePhase = ({ workflowPhase }) => {
               marginBottom: "12px",
             }}
           >
-            Docking complete! Processed 142 compounds against 5 protein
-            targets. Select a protein to view its detailed PLP Report:
+            {/* Was "Processed 142 compounds against 5 protein targets" on every
+                run, including runs that returned nothing. */}
+            {error
+              ? error
+              : loading
+              ? "Loading docking hits…"
+              : hasHits
+              ? `Docking complete. ${hits.length} hit${hits.length === 1 ? "" : "s"} returned. Select a protein to view its detailed PLP Report:`
+              : "Docking returned no hits."}
           </Typography>
+
+          {error && onRetry && (
+            <Button
+              onClick={onRetry}
+              sx={{ ...baseText, textTransform: "none", fontSize: "13px", color: TEAL, marginBottom: "12px" }}
+            >
+              Try again
+            </Button>
+          )}
 
           {/* ==============================================================
               DOCKING RESULTS
           ============================================================== */}
 
-          <PLPTable
-            onOpenReport={(row) => {
-              setSelectedReport(row);
-            }}
-          />
+          {hasHits && (
+            <PLPTable
+              hits={hits}
+              onOpenReport={(row) => {
+                setSelectedReport(row);
+              }}
+            />
+          )}
 
-          {/* ==============================================================
-              EXPANDED REPORT
-          ============================================================== */}
+          {/* The expanded PLP report, residue interactions, hydrogen bonds,
+              the 3D viewer, the download bundles and the overall
+              recommendation are NOT rendered.
 
-          {selectedReport && <ExpandedPLPReport />}
+              /hits is the only ScreenSuite results endpoint in the API — the
+              rest have none at all, and their components read fixed residue,
+              hydrogen-bond and affinity tables (A:ALA:68, -8.046 kcal/mol,
+              "High (92%)"). Rendering those next to a real affinity table
+              would present invented structural data as measurement, which is
+              worse than showing nothing. They stay in this file, unrendered,
+              for whenever the endpoints exist. */}
+          {hasHits && selectedReport && (
+            <Box
+              sx={{
+                background: "#F8FAFC",
+                border: "1px solid #E2E8F0",
+                borderRadius: "8px",
+                padding: "16px",
+                marginTop: "12px",
+              }}
+            >
+              <Typography
+                sx={{ ...baseText, fontSize: "13px", fontWeight: 600, marginBottom: "6px" }}
+              >
+                No PLP report for {selectedReport.protein}
+              </Typography>
+              <Typography sx={{ ...baseText, fontSize: "12px", lineHeight: "18px", color: "#64748B" }}>
+                The affinity above is the full extent of what this deployment
+                returns. Residue interactions, hydrogen bonds, the 3D pose view
+                and the downloadable bundle have no endpoint in the API.
+              </Typography>
+            </Box>
+          )}
 
-          {/* ==============================================================
-              ACTION BUTTONS
-          ============================================================== */}
-
-          <ActionButtons expanded={Boolean(selectedReport)} />
-
-          {/* ==============================================================
-              RECOMMENDATIONS
-          ============================================================== */}
-
-          <OverallRecommendation />
+          {!hasHits && !loading && (
+            <Box
+              role="alert"
+              sx={{
+                background: "#F8FAFC",
+                border: "1px solid #E2E8F0",
+                borderRadius: "8px",
+                padding: "16px",
+              }}
+            >
+              <Typography
+                sx={{ ...baseText, fontSize: "13px", fontWeight: 600, color: "#0F172A", marginBottom: "6px" }}
+              >
+                Docking output is not available
+              </Typography>
+              <Typography sx={{ ...baseText, fontSize: "12px", lineHeight: "18px", color: "#64748B" }}>
+                {unavailable && unavailableMessage
+                  ? unavailableMessage
+                  : "No binding affinities were returned for this run, so there is no PLP report, 3D view or download bundle to show."}
+              </Typography>
+            </Box>
+          )}
         </Box>
 
       </Box>

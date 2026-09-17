@@ -5,6 +5,9 @@ import {
   isTerminalSuccess,
   isTerminalFailure,
   readStatus,
+  readProgressMessage,
+  readJobError,
+  readJobModule,
 } from "../services/api/jobs";
 
 /**
@@ -45,6 +48,16 @@ const useJob = (jobId, options = {}) => {
   const [isDone, setIsDone] = useState(false);
   const [isFailed, setIsFailed] = useState(false);
 
+  /**
+   * The runner's live progress line, written by ctx.progress(). The collection
+   * calls for this on the loading screen as the subtitle, which is the only
+   * feedback a multi-minute agent run gives the user.
+   */
+  const [progressMessage, setProgressMessage] = useState(null);
+
+  /** The module /status reports this job belongs to. */
+  const [jobModule, setJobModule] = useState(null);
+
   // Bumped to force a re-poll of the same job id.
   const [attempt, setAttempt] = useState(0);
 
@@ -71,6 +84,8 @@ const useJob = (jobId, options = {}) => {
     setIsPolling(false);
     setIsDone(false);
     setIsFailed(false);
+    setProgressMessage(null);
+    setJobModule(null);
   }, []);
 
   useEffect(() => {
@@ -89,6 +104,8 @@ const useJob = (jobId, options = {}) => {
     setError(null);
     setIsDone(false);
     setIsFailed(false);
+    setProgressMessage(null);
+    setJobModule(null);
     setIsPolling(true);
 
     const startedAt = Date.now();
@@ -125,12 +142,14 @@ const useJob = (jobId, options = {}) => {
 
       setStatusPayload(payload);
       setStatus(readStatus(payload));
+      setProgressMessage(readProgressMessage(payload));
+      setJobModule(readJobModule(payload));
 
       if (isTerminalFailure(payload)) {
-        finishWithError(
-          null,
-          payload?.message || payload?.error || "The job failed."
-        );
+        // The reason lives in `error`, not `message` — on a job payload
+        // `message` is API Gateway's authorizer envelope, which would report
+        // "Unauthorized" for what is really an agent crash.
+        finishWithError(null, readJobError(payload) || "The job failed.");
         return;
       }
 
@@ -176,6 +195,8 @@ const useJob = (jobId, options = {}) => {
     isPolling,
     isDone,
     isFailed,
+    progressMessage,
+    jobModule,
     retry,
     reset,
   };

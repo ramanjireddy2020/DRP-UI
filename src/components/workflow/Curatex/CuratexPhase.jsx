@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Box,
   Typography,
@@ -36,17 +36,94 @@ const DEFAULT_WEIGHTS = {
   plasmaProteinBinding: "10",
 };
 
-// Match-detail breakdown shown when the first CurateX results row is
-// expanded — mirrors the Figma "row-1-expanded" spec exactly (property,
-// target criterion, arrow, matched source value, status icon).
-const MATCH_DETAILS = [
-  { label: "Molecular Weight", target: "< 500 Da", value: "129.16 Da", status: "match" },
-  { label: "Bioavailability", target: "> 60%", value: "50-60%", status: "partial" },
-  { label: "Route", target: "Oral", value: "Oral", status: "match" },
-  { label: "Half-life", target: "8-12 hours", value: "6.2 hours", status: "match" },
-  { label: "LogP", target: "1.5-3.5", value: "-1.43", status: "match" },
-  { label: "Solubility", target: "> 10 mg/mL", value: "> 300 mg/mL", status: "match" },
-];
+/** The pageSize CompleteWorkflow requests, used only for the row caption. */
+const CURATEX_PAGE_SIZE = 10;
+
+/**
+ * Page numbers with ellipses for the compound table — always the first and
+ * last page plus a window around the current one, so the strip keeps a fixed
+ * width however many pages the API reports.
+ */
+const buildPageStrip = (page, totalPages) => {
+  if (!Number.isFinite(totalPages) || totalPages < 1) return [];
+
+  const pages = new Set([1, totalPages, page]);
+  if (page - 1 > 1) pages.add(page - 1);
+  if (page + 1 < totalPages) pages.add(page + 1);
+
+  const sorted = [...pages].filter((p) => p >= 1 && p <= totalPages).sort((a, b) => a - b);
+
+  const strip = ["‹"];
+  sorted.forEach((p, i) => {
+    if (i > 0 && p - sorted[i - 1] > 1) strip.push("…");
+    strip.push(p);
+  });
+  strip.push("›");
+
+  return strip;
+};
+
+const squash = (value) => String(value ?? "").toLowerCase().replace(/[\s_-]+/g, "");
+
+const humanize = (key) =>
+  String(key ?? "")
+    .replace(/([A-Z])/g, " $1")
+    .replace(/^./, (s) => s.toUpperCase())
+    .trim();
+
+/**
+ * The property-by-property breakdown shown when a results row is expanded.
+ *
+ * This replaced a MATCH_DETAILS fixture that listed Metformin's real numbers
+ * (129.16 Da, LogP -1.43, …) against a Type 2 Diabetes profile, and rendered
+ * them for whichever compound happened to be expanded — so every candidate
+ * appeared to have identical properties.
+ *
+ * It is built from two real sources instead: the target criteria from
+ * GET /agents/curatex/{jobId}/profile, and the compound's own matched /
+ * mismatched property lists. Where the API gives no measured value for a
+ * property, the cell says so rather than borrowing one.
+ */
+const buildMatchDetails = (compound, profile) => {
+  const criteria = Array.isArray(profile?.criteria) ? profile.criteria : [];
+  if (!criteria.length) return [];
+
+  const listOf = (value) =>
+    (Array.isArray(value) ? value : String(value ?? "").split(","))
+      .map((v) => squash(v))
+      .filter(Boolean);
+
+  const matched = listOf(compound?.matchedProps);
+  const mismatched = listOf(compound?.mismatchedProps);
+
+  // Per-property measured values, if the row carried any.
+  const measured = compound?.properties && typeof compound.properties === "object"
+    ? compound.properties
+    : {};
+
+  return criteria.map((criterion) => {
+    const key = squash(criterion?.name);
+
+    // Matched lists arrive abbreviated ("MW", "Bioavail"), so a prefix match
+    // either way is more reliable than equality.
+    const hit = (list) =>
+      list.some((entry) => entry === key || key.startsWith(entry) || entry.startsWith(key));
+
+    const status = hit(matched) ? "match" : hit(mismatched) ? "mismatch" : "unknown";
+
+    const value =
+      measured[criterion?.name] ??
+      measured[key] ??
+      (status === "unknown" ? "Not returned" : status === "match" ? "Within criterion" : "Outside criterion");
+
+    return {
+      label: humanize(criterion?.name),
+      target: criterion?.value ?? "—",
+      value,
+      status,
+    };
+  });
+};
 
 const CuratexPhase = ({
   workflowPhase,
@@ -62,13 +139,57 @@ const CuratexPhase = ({
   setSelectedCompound,
   setShowCompoundDetail,
   setActiveStep,
+  /** The runner's live progress line for whichever CurateX job is in flight. */
+  progressMessage,
+  /**
+   * GET /agents/curatex/{jobId}/profile — { target, criteria, weights,
+   * ligandCount, warnings }. The target and criteria on screen come from here
+   * rather than from a hardcoded JAK2 / Type 2 Diabetes profile.
+   */
+  profile = null,
+  profileLoading = false,
+  profileError = null,
+  onRetryProfile,
+  /** GET /agents/curatex/{jobId}/results. */
+  resultsLoading = false,
+  resultsError = null,
+  onRetryResults,
+  /**
+   * "Submit Profile" → POST /agents/curatex/compounds with the edited weights.
+   * It used to set six hardcoded compound rows and jump straight to results.
+   */
+  onSubmitProfile,
+  /** "View in ScreenSuite" → POST /sessions/{id}/steps. */
+  onContinue,
+  continuePending = false,
+  /** Server-side pagination for the compound table. */
+  page = 1,
+  totalPages = 1,
+  total = 0,
+  onPageChange,
 }) => {
   const activeCompound = selectedCompound || curateXResults?.[0];
 
   // Local state — weights per property, and the "Adding new parameter"
   // sub-state inside edit mode (Figma: field-row-new with Parameter
   // name.../Enter value or range... inputs + Save Changes/Cancel).
+  /**
+   * Criterion weights.
+   *
+   * DEFAULT_WEIGHTS is only the pre-load placeholder now — the real weights
+   * come from GET /agents/curatex/{jobId}/profile and are what
+   * POST /agents/curatex/compounds is scored against, so seeding them from a
+   * fixture meant the researcher was editing numbers the backend never saw.
+   */
   const [weights, setWeights] = useState(DEFAULT_WEIGHTS);
+
+  const weightsSeededRef = useRef(false);
+  useEffect(() => {
+    if (weightsSeededRef.current) return;
+    if (!profile?.weights || !Object.keys(profile.weights).length) return;
+    weightsSeededRef.current = true;
+    setWeights(profile.weights);
+  }, [profile]);
   const [isAddingParameter, setIsAddingParameter] = useState(false);
   const [newParamName, setNewParamName] = useState("");
   const [newParamValue, setNewParamValue] = useState("");
@@ -107,10 +228,25 @@ const CuratexPhase = ({
     setWorkflowPhase("curatex-candidate-selection");
   };
 
+  /**
+   * Hands the session to ScreenSuite.
+   *
+   * This used to be setActiveStep(3) + setWorkflowPhase("screensuite-loading"),
+   * which showed the docking screen without ever starting a docking job or
+   * telling the backend which compounds were chosen. onContinue posts the step;
+   * the local fallback remains only for the case where no handler was passed.
+   */
   const handleViewInScreenSuite = () => {
+    if (onContinue) {
+      onContinue();
+      return;
+    }
     setActiveStep?.(3);
     setWorkflowPhase("screensuite-loading");
   };
+
+  /** The target under study, from the profile endpoint. */
+  const targetLabel = profile?.target || "the selected target";
 
   const handleAddParameterClick = () => {
     setIsAddingParameter(true);
@@ -167,7 +303,13 @@ const CuratexPhase = ({
   // CurateX Loading
   // ---------------------------------------------------------------------------
   if (workflowPhase === "curatex-loading") {
-    const curatexQuery = "Generate a target candidate profile for JAK2";
+    // Was a fixed "…for JAK2" string. The user's own last message is what
+    // actually started this step.
+    const lastUserMessage = [...(chatMessages || [])]
+      .reverse()
+      .find((m) => m.role === "user")?.text;
+    const curatexQuery =
+      lastUserMessage || `Generate a target candidate profile for ${targetLabel}`;
 
     return (
       <Box className="curatex-page">
@@ -187,8 +329,8 @@ const CuratexPhase = ({
           <AgentHeader label="INOVAPATH CURATEX AGENT" />
 
           <Typography className="curatex-body-text curatex-loading-description">
-            Searching for candidate compounds matching your JAK2 Target
-            Profile...
+            {progressMessage ||
+              `Searching for candidate compounds matching your ${targetLabel} target profile...`}
           </Typography>
 
           <div className="curatex-progress-track">
@@ -246,9 +388,11 @@ const CuratexPhase = ({
             </Typography>
 
             <Typography className="curatex-user-text">
+              {/* The target comes from the profile endpoint; these strings were
+                  hardcoded to JAK2. */}
               {profileEditMode || isAddingParameter
-                ? "Please generate a Target Candidate Profile for JAK2."
-                : "Generate a target candidate profile for JAK2."}
+                ? `Please generate a Target Candidate Profile for ${targetLabel}.`
+                : `Generate a target candidate profile for ${targetLabel}.`}
             </Typography>
           </div>
         </div>
@@ -257,18 +401,44 @@ const CuratexPhase = ({
           <AgentHeader label="INOVAPATH CURATEX AGENT" />
 
           <Typography className="curatex-body-text curatex-profile-intro">
-            I've generated a Target Product Profile for JAK2. Review and
-            adjust the parameters below, then submit to find matching
-            candidates.
+            {profileError
+              ? profileError
+              : profileLoading
+              ? "Building the target product profile…"
+              : `I've generated a Target Product Profile for ${targetLabel}. Review and adjust the parameters below, then submit to find matching candidates.`}
           </Typography>
+
+          {profileError && onRetryProfile && (
+            <Button onClick={onRetryProfile} className="curatex-secondary-button">
+              Try again
+            </Button>
+          )}
+
+          {/* The backend's own caveats about the profile it built — previously
+              there was nowhere for these to appear. */}
+          {profile?.warnings?.length > 0 && (
+            <Box sx={{ mb: "12px" }}>
+              {profile.warnings.map((warning, i) => (
+                <Typography
+                  key={i}
+                  className="curatex-body-text"
+                  sx={{ fontSize: "12px", color: "#B45309" }}
+                >
+                  {warning}
+                </Typography>
+              ))}
+            </Box>
+          )}
 
           <div className="curatex-profile-card">
             <Typography className="curatex-profile-title">
-              Target Product Profile - JAK2
+              Target Product Profile - {targetLabel}
             </Typography>
 
             <Typography className="curatex-profile-subtitle">
-              {subtitle}
+              {profile?.ligandCount != null
+                ? `${subtitle} ${profile.ligandCount} known ligand${profile.ligandCount === 1 ? "" : "s"} available.`
+                : subtitle}
             </Typography>
 
             <div className="curatex-profile-grid curatex-profile-grid-header">
@@ -398,18 +568,24 @@ const CuratexPhase = ({
               </>
             ) : (
               <>
+                {/* Starts the real compound-scoring job with the edited
+                    weights. This button used to inject six fixed compounds
+                    (Metformin, Pioglitazone, …) and jump to the results
+                    screen, so the scores shown had nothing to do with the
+                    criteria above them. */}
                 <Button
                   variant="contained"
+                  disabled={!profile?.hasData}
                   onClick={() => {
-                    setCurateXResults?.([
-                      { rank: 1, name: "Metformin", matchedProps: "MW, Bioavail, Route, Half-life, LogP", mismatchedProps: "Solubility", score: "93.5" },
-                      { rank: 2, name: "Pioglitazone", matchedProps: "MW, Route, Half-life, LogP, Solubility", mismatchedProps: "Bioavail", score: "89.2" },
-                      { rank: 3, name: "Canagliflozin", matchedProps: "MW, Route, Bioavail, LogP", mismatchedProps: "Half-life, Solubility", score: "85.7" },
-                      { rank: 4, name: "Empagliflozin", matchedProps: "MW, Route, Bioavail, Half-life", mismatchedProps: "LogP, Solubility", score: "82.4" },
-                      { rank: 5, name: "Liragluide", matchedProps: "MW, Bioavail, Half-life", mismatchedProps: "Route, LogP, Solubility", score: "78.1" },
-                      { rank: 6, name: "Sitagliptin", matchedProps: "MW, Route, LogP, Solubility", mismatchedProps: "Bioavail, Half-life, Solubility", score: "74.6" },
-                    ]);
-                    setWorkflowPhase("curatex-results");
+                    if (onSubmitProfile) {
+                      // The LOCAL weights, not the profile's — a deleted or
+                      // added parameter only exists here, and passing the
+                      // API's original copy would score against criteria the
+                      // researcher had already changed.
+                      onSubmitProfile(weights);
+                      return;
+                    }
+                    setWorkflowPhase("curatex-submitted");
                   }}
                   className="curatex-primary-button"
                 >
@@ -440,13 +616,14 @@ const CuratexPhase = ({
         <div className="curatex-agent-card curatex-submitted-card">
           <AgentHeader label="INOVAPATH CURATEX AGENT" />
           <Typography className="curatex-body-text curatex-results-intro">
-            Profile submitted. Scoring compounds against your JAK2 target product profile...
+            Profile submitted. Scoring compounds against your {targetLabel} target product
+            profile...
           </Typography>
           <div className="curatex-progress-track">
             <div className="curatex-progress-fill" />
           </div>
           <Typography className="curatex-loading-step-text is-active">
-            Matching candidates against target criteria...
+            {progressMessage || "Matching candidates against target criteria..."}
           </Typography>
         </div>
       </Box>
@@ -475,9 +652,22 @@ const CuratexPhase = ({
           <AgentHeader label="INOVAPATH CURATEX AGENT" />
 
           <Typography className="curatex-body-text curatex-results-intro">
-            Profile submitted. Scoring 124 compounds against your JAK2 target
-            product profile. Here are the top candidates:
+            {/* Was "Scoring 124 compounds against your JAK2 target product
+                profile" on every run, whatever the target or the count. */}
+            {resultsError
+              ? resultsError
+              : resultsLoading
+              ? "Loading scored candidates…"
+              : curateXResults.length
+              ? `Scored ${curateXResults.length} candidate${curateXResults.length === 1 ? "" : "s"} against your ${targetLabel} target product profile. Here are the top candidates:`
+              : `No candidates were returned for your ${targetLabel} target product profile.`}
           </Typography>
+
+          {resultsError && onRetryResults && (
+            <Button onClick={onRetryResults} className="curatex-secondary-button">
+              Try again
+            </Button>
+          )}
 
           <div className="curatex-results-table">
             <div className="curatex-results-header">
@@ -559,7 +749,7 @@ const CuratexPhase = ({
                       </div>
 
                       <div className="curatex-match-detail-list">
-                        {MATCH_DETAILS.map((detail) => (
+                        {buildMatchDetails(compound, profile).map((detail) => (
                           <div className="curatex-match-detail-row" key={detail.label}>
                             <Typography className="curatex-match-detail-label">
                               {detail.label}
@@ -590,21 +780,49 @@ const CuratexPhase = ({
             })}
           </div>
 
+          {/* Real pagination. This was seven fixed buttons with page 1 always
+              styled active and a "Showing 1-6 of 124 compounds" caption, none
+              of which reflected the run or did anything when clicked. */}
           <div className="curatex-pagination">
-            <button type="button" className="curatex-page-button disabled">
-              ‹
-            </button>
-            <button type="button" className="curatex-page-button active">
-              1
-            </button>
-            <button type="button" className="curatex-page-button">2</button>
-            <button type="button" className="curatex-page-button">3</button>
-            <button type="button" className="curatex-page-button">…</button>
-            <button type="button" className="curatex-page-button">12</button>
-            <button type="button" className="curatex-page-button">›</button>
+            {buildPageStrip(page, totalPages).map((p, i) => {
+              const isCurrent = p === page;
+              const isGap = p === "…";
+              const isArrow = p === "‹" || p === "›";
+              const targetPage = p === "‹" ? page - 1 : p === "›" ? page + 1 : p;
+              const isDisabled =
+                isGap ||
+                (p === "‹" && page <= 1) ||
+                (p === "›" && page >= totalPages);
+
+              return (
+                <button
+                  key={`${p}-${i}`}
+                  type="button"
+                  disabled={isDisabled}
+                  aria-current={isCurrent ? "page" : undefined}
+                  aria-label={
+                    isArrow
+                      ? p === "‹"
+                        ? "Previous page"
+                        : "Next page"
+                      : isGap
+                      ? undefined
+                      : `Page ${p}`
+                  }
+                  onClick={isDisabled ? undefined : () => onPageChange?.(targetPage)}
+                  className={`curatex-page-button${isCurrent ? " active" : ""}${
+                    isDisabled ? " disabled" : ""
+                  }`}
+                >
+                  {p}
+                </button>
+              );
+            })}
 
             <Typography className="curatex-pagination-text">
-              Showing 1-6 of 124 compounds
+              {curateXResults.length
+                ? `Showing ${(page - 1) * CURATEX_PAGE_SIZE + 1}-${(page - 1) * CURATEX_PAGE_SIZE + curateXResults.length} of ${total} compound${total === 1 ? "" : "s"}`
+                : "No compounds on this page"}
             </Typography>
           </div>
 
@@ -977,9 +1195,10 @@ const CuratexPhase = ({
             <Button
               variant="contained"
               onClick={handleViewInScreenSuite}
+              disabled={continuePending}
               className="curatex-primary-button"
             >
-              View in ScreenSuite
+              {continuePending ? "Starting ScreenSuite…" : "View in ScreenSuite"}
             </Button>
 
             <Button

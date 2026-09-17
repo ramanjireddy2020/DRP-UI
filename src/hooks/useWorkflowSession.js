@@ -1,32 +1,49 @@
-import { useCallback, useMemo, useReducer } from "react";
-import { createSession as createSessionRequest } from "../services/api/sessions";
+import { useCallback, useMemo, useReducer, useRef } from "react";
+import {
+  createSession as createSessionRequest,
+  getSession as getSessionRequest,
+  createStep as createStepRequest,
+  rerunStep as rerunStepRequest,
+  postMessage as postMessageRequest,
+} from "../services/api/sessions";
 import {
   MODULES,
+  ALL_MODULES,
   MODULE_BY_KEY,
+  apiModuleKey,
   parseSupervisorModule,
   parseSessionId,
   parseJobId,
   parseStepId,
+  parseStepResponse,
+  parseMessageResponse,
   moduleForPhase,
 } from "../workflow/moduleMap";
 
 /**
  * Workflow session state.
  *
- * Two requirements drive this shape:
+ * Three requirements drive this shape:
  *
  *  1. The supervisor decides which module runs. Nothing here assumes TxKG —
- *     activation always comes from a module key resolved out of the API
+ *     activation always comes from a module key resolved out of an API
  *     response, and modules may activate out of pipeline order.
  *
  *  2. Nothing is ever lost when the workflow moves on. Each module keeps its
- *     own phase, job, and data; the conversation is a single append-only thread
- *     whose entries are tagged with the module they belong to. Navigating back
- *     to an earlier step changes which slice is *shown*, never what is stored.
+ *     own phase, job, step id, error and data; the conversation is a single
+ *     append-only thread whose entries are tagged with the module they belong
+ *     to. Navigating back to an earlier step changes which slice is *shown*,
+ *     never what is stored.
+ *
+ *  3. Routing is the backend's decision, not the UI's. Hand-offs go through
+ *     POST /sessions/{id}/steps and chat goes through
+ *     POST /sessions/{id}/messages; the module that becomes active afterwards
+ *     is read out of the response. The UI never infers a module from the text
+ *     the user typed.
  */
 
 const buildInitialSteps = () =>
-  MODULES.reduce((acc, m) => {
+  ALL_MODULES.reduce((acc, m) => {
     acc[m.key] = {
       key: m.key,
       index: m.index,
@@ -35,6 +52,7 @@ const buildInitialSteps = () =>
       phase: null,
       jobId: null,
       stepId: null,
+      error: null,
       data: {},
     };
     return acc;
@@ -58,6 +76,8 @@ const initialState = {
    */
   conversation: [],
   seq: 0,
+  /** A message or hand-off is in flight — disables the composer. */
+  pending: false,
 };
 
 const withStep = (state, key, patch) => ({
@@ -105,6 +125,8 @@ function reducer(state, action) {
         // step the user navigated back to does not wipe its job.
         jobId: jobId !== undefined ? jobId : existing.jobId,
         stepId: stepId !== undefined ? stepId : existing.stepId,
+        // A fresh job supersedes whatever went wrong last time.
+        error: jobId !== undefined && jobId !== existing.jobId ? null : existing.error,
       });
 
       return {
@@ -147,8 +169,29 @@ function reducer(state, action) {
       if (!key || !state.steps[key]) return state;
       return withStep(state, key, {
         jobId: action.jobId,
+        error: null,
         ...(action.stepId !== undefined ? { stepId: action.stepId } : {}),
       });
+    }
+
+    /**
+     * A step failed. Moves it to its own -error phase and records why, so the
+     * screen can show the backend's reason and a retry instead of spinning.
+     */
+    case "SET_STEP_ERROR": {
+      const key = action.key ?? state.activeKey;
+      if (!key || !state.steps[key]) return state;
+      const module = MODULE_BY_KEY[key];
+      return withStep(state, key, {
+        error: action.error,
+        phase: module?.errorPhase ?? state.steps[key].phase,
+      });
+    }
+
+    case "CLEAR_STEP_ERROR": {
+      const key = action.key ?? state.activeKey;
+      if (!key || !state.steps[key]) return state;
+      return withStep(state, key, { error: null });
     }
 
     /** Append to the thread. Never replaces, never truncates. */
@@ -170,6 +213,22 @@ function reducer(state, action) {
       };
     }
 
+    /**
+     * Replace the whole thread — used when reopening a session, where the
+     * server's message list is the truth and the local one is empty.
+     */
+    case "REPLACE_CONVERSATION": {
+      const stamped = action.messages.map((message, offset) => ({
+        id: `m${offset + 1}`,
+        at: Date.now(),
+        ...message,
+      }));
+      return { ...state, conversation: stamped, seq: stamped.length };
+    }
+
+    case "SET_PENDING":
+      return { ...state, pending: action.pending };
+
     case "RESET":
       return { ...initialState, steps: buildInitialSteps() };
 
@@ -180,6 +239,15 @@ function reducer(state, action) {
 
 const useWorkflowSession = () => {
   const [state, dispatch] = useReducer(reducer, initialState);
+
+  /**
+   * The session id, readable synchronously.
+   *
+   * `state.sessionId` is a render away from being set, so a hand-off fired from
+   * the same tick as session creation would read null. The ref is written at
+   * the same moment as the dispatch.
+   */
+  const sessionIdRef = useRef(null);
 
   const activeStepState = state.activeKey ? state.steps[state.activeKey] : null;
   const activeModule = state.activeKey ? MODULE_BY_KEY[state.activeKey] : null;
@@ -208,7 +276,25 @@ const useWorkflowSession = () => {
     const sessionId = parseSessionId(raw);
     const moduleKey = parseSupervisorModule(raw);
 
+    sessionIdRef.current = sessionId;
     dispatch({ type: "SESSION_READY", sessionId, raw });
+
+    // The supervisor echoes the user's query back as the first message; keeping
+    // the server's copy rather than adding our own means the thread matches
+    // what a later GET /sessions/{id} would return.
+    if (Array.isArray(raw?.messages) && raw.messages.length) {
+      dispatch({
+        type: "REPLACE_CONVERSATION",
+        messages: raw.messages.map((m) => ({
+          role: m.role,
+          text: m.content,
+          agentName: m.agentName || null,
+          stepId: m.stepId || null,
+          moduleKey: moduleKey ?? null,
+          stepIndex: moduleKey ? MODULE_BY_KEY[moduleKey]?.index ?? null : null,
+        })),
+      });
+    }
 
     if (!moduleKey) {
       dispatch({
@@ -232,7 +318,91 @@ const useWorkflowSession = () => {
     return { sessionId, moduleKey, raw };
   }, []);
 
-  /** Activate a module directly — used when a step hands off to the next one. */
+  /**
+   * Reopen an existing session. Rebuilds per-step state from the server's
+   * `steps` array so a resumed session lands on the right screen.
+   *
+   * Sessions live in SQLite on /tmp on this deployment and are lost when the
+   * app restarts, so a 404 here is expected rather than exceptional.
+   */
+  const resumeSession = useCallback(async (sessionId) => {
+    dispatch({ type: "SESSION_CREATING" });
+
+    let raw;
+    try {
+      raw = await getSessionRequest(sessionId);
+    } catch (err) {
+      dispatch({
+        type: "SESSION_FAILED",
+        error:
+          err?.status === 404
+            ? "That session is no longer on the server. Sessions are held in " +
+              "temporary storage and are cleared when the backend restarts."
+            : err?.userMessage || err?.message || "Could not reopen the session.",
+      });
+      return null;
+    }
+
+    sessionIdRef.current = parseSessionId(raw) ?? sessionId;
+    dispatch({ type: "SESSION_READY", sessionId: sessionIdRef.current, raw });
+
+    const steps = Array.isArray(raw?.steps) ? raw.steps : [];
+
+    // Replay the steps in order so activationOrder and each step's own job,
+    // phase and status are restored rather than guessed.
+    steps.forEach((step) => {
+      const parsed = parseStepResponse(step);
+      if (!parsed.moduleKey) return;
+
+      const module = MODULE_BY_KEY[parsed.moduleKey];
+      const status = String(step?.status ?? "").toLowerCase();
+
+      const phase =
+        status === "completed"
+          ? module.resultsPhase
+          : status === "failed"
+          ? module.errorPhase
+          : module.loadingPhase;
+
+      dispatch({
+        type: "ACTIVATE_MODULE",
+        key: parsed.moduleKey,
+        phase,
+        jobId: parsed.jobId,
+        stepId: parsed.stepId,
+      });
+
+      if (step?.summary) {
+        dispatch({
+          type: "SET_STEP_DATA",
+          key: parsed.moduleKey,
+          data: { summary: step.summary, selections: step.selections ?? {} },
+        });
+      }
+    });
+
+    if (Array.isArray(raw?.messages)) {
+      dispatch({
+        type: "REPLACE_CONVERSATION",
+        messages: raw.messages.map((m) => {
+          const owner = steps.find((s) => s.id === m.stepId);
+          const key = owner ? parseStepResponse(owner).moduleKey : null;
+          return {
+            role: m.role,
+            text: m.content,
+            agentName: m.agentName || null,
+            stepId: m.stepId || null,
+            moduleKey: key,
+            stepIndex: key ? MODULE_BY_KEY[key]?.index ?? null : null,
+          };
+        }),
+      });
+    }
+
+    return { sessionId: sessionIdRef.current, raw };
+  }, []);
+
+  /** Activate a module directly. */
   const activateModule = useCallback((key, opts = {}) => {
     dispatch({ type: "ACTIVATE_MODULE", key, ...opts });
   }, []);
@@ -259,21 +429,265 @@ const useWorkflowSession = () => {
     dispatch({ type: "SET_STEP_JOB", jobId, stepId, key });
   }, []);
 
+  const setStepError = useCallback((error, key) => {
+    dispatch({ type: "SET_STEP_ERROR", error, key });
+  }, []);
+
   const appendMessages = useCallback((messages, key) => {
     const list = Array.isArray(messages) ? messages : [messages];
     if (!list.length) return;
     dispatch({ type: "APPEND_MESSAGES", messages: list, key });
   }, []);
 
-  const reset = useCallback(() => dispatch({ type: "RESET" }), []);
+  const reset = useCallback(() => {
+    sessionIdRef.current = null;
+    dispatch({ type: "RESET" });
+  }, []);
+
+  /**
+   * Requirement 3, part one: hand the session to the next module.
+   *
+   * POST /sessions/{id}/steps carries the researcher's picks; build_params() on
+   * the backend turns them into the next agent's parameters. The module that
+   * becomes active is read back out of the response, so if the backend routes
+   * somewhere other than where the button pointed, the UI follows the backend.
+   *
+   * @param {string} moduleKey  - internal key; translated to the API spelling
+   * @param {object} selections - shaped by buildSelections() in selections.js
+   * @param {string|null} fromStepId - set to an earlier step to branch
+   */
+  const handOff = useCallback(
+    async (moduleKey, selections = {}, fromStepId = null) => {
+      const sessionId = sessionIdRef.current;
+      if (!sessionId) {
+        dispatch({
+          type: "SET_STEP_ERROR",
+          key: moduleKey,
+          error: "There is no session to add a step to. Start a new research query.",
+        });
+        return null;
+      }
+
+      const module = apiModuleKey(moduleKey);
+      if (!module) {
+        dispatch({
+          type: "SET_STEP_ERROR",
+          key: moduleKey,
+          error: `"${moduleKey}" is not a module this UI can hand off to.`,
+        });
+        return null;
+      }
+
+      // Show the target module's loading screen straight away — the POST plus
+      // the first poll is long enough that an unchanged screen reads as a dead
+      // button.
+      dispatch({
+        type: "ACTIVATE_MODULE",
+        key: moduleKey,
+        phase: MODULE_BY_KEY[moduleKey].loadingPhase,
+      });
+      dispatch({ type: "SET_PENDING", pending: true });
+
+      let raw;
+      try {
+        raw = await createStepRequest(sessionId, { module, selections, fromStepId });
+      } catch (err) {
+        dispatch({
+          type: "SET_STEP_ERROR",
+          key: moduleKey,
+          error: err?.userMessage || err?.message || `Could not start ${module}.`,
+        });
+        dispatch({ type: "SET_PENDING", pending: false });
+        return null;
+      }
+
+      const parsed = parseStepResponse(raw);
+      dispatch({ type: "SET_PENDING", pending: false });
+
+      // Trust the response's module over the requested one.
+      const landedKey = parsed.moduleKey ?? moduleKey;
+
+      dispatch({
+        type: "ACTIVATE_MODULE",
+        key: landedKey,
+        phase: MODULE_BY_KEY[landedKey].loadingPhase,
+        jobId: parsed.jobId,
+        stepId: parsed.stepId,
+      });
+
+      dispatch({
+        type: "SET_STEP_DATA",
+        key: landedKey,
+        data: { selections: raw?.selections ?? selections },
+      });
+
+      return { ...parsed, moduleKey: landedKey };
+    },
+    []
+  );
+
+  /**
+   * Requirement 3, part two: the chat bar.
+   *
+   * Every message goes to the backend. Normally the LLM answers from the step's
+   * stored result and `jobId` comes back null. Only an explicit @Module starts
+   * a fresh agent run — and then the response carries a jobId, which becomes
+   * the active job for whichever module the response names.
+   *
+   * There is deliberately no keyword matching here. The UI guessing that
+   * "show me the patents" means NovSearch is how a researcher ends up on a
+   * screen the backend knows nothing about.
+   */
+  const sendMessage = useCallback(
+    async (text) => {
+      const message = String(text ?? "").trim();
+      if (!message) return null;
+
+      const sessionId = sessionIdRef.current;
+      const originKey = state.activeKey;
+      const stepId = originKey ? state.steps[originKey]?.stepId ?? null : null;
+
+      // Show the user's own message immediately, attached to the step they
+      // typed it into, so it stays put if the hand-off moves the view.
+      dispatch({
+        type: "APPEND_MESSAGES",
+        key: originKey,
+        messages: [{ role: "user", text: message }],
+      });
+
+      if (!sessionId) {
+        dispatch({
+          type: "APPEND_MESSAGES",
+          key: originKey,
+          messages: [
+            {
+              role: "agent",
+              isError: true,
+              text: "There is no active session, so this question could not be sent. Start a new research query.",
+            },
+          ],
+        });
+        return null;
+      }
+
+      dispatch({ type: "SET_PENDING", pending: true });
+
+      let raw;
+      try {
+        raw = await postMessageRequest(sessionId, { message, stepId });
+      } catch (err) {
+        dispatch({
+          type: "APPEND_MESSAGES",
+          key: originKey,
+          messages: [
+            {
+              role: "agent",
+              isError: true,
+              text: err?.userMessage || err?.message || "The question could not be answered.",
+            },
+          ],
+        });
+        dispatch({ type: "SET_PENDING", pending: false });
+        return null;
+      }
+
+      const parsed = parseMessageResponse(raw);
+      dispatch({ type: "SET_PENDING", pending: false });
+
+      if (parsed.content) {
+        dispatch({
+          type: "APPEND_MESSAGES",
+          key: originKey,
+          messages: [
+            {
+              role: parsed.role,
+              text: parsed.content,
+              agentName: parsed.agentName,
+              stepId: parsed.stepId,
+            },
+          ],
+        });
+      }
+
+      // A jobId means an @Module started a real agent run.
+      if (parsed.jobId) {
+        const landedKey = parsed.moduleKey ?? originKey;
+        if (landedKey && MODULE_BY_KEY[landedKey]) {
+          dispatch({
+            type: "ACTIVATE_MODULE",
+            key: landedKey,
+            phase: MODULE_BY_KEY[landedKey].loadingPhase,
+            jobId: parsed.jobId,
+            stepId: parsed.stepId ?? undefined,
+          });
+        }
+      }
+
+      return parsed;
+    },
+    [state.activeKey, state.steps]
+  );
+
+  /**
+   * Run the active step again with different parameters. The original is kept;
+   * the new step points back at it via rerunOfStepId.
+   */
+  const rerunActiveStep = useCallback(
+    async (params = {}) => {
+      const sessionId = sessionIdRef.current;
+      const key = state.activeKey;
+      const stepId = key ? state.steps[key]?.stepId : null;
+
+      if (!sessionId || !stepId) {
+        dispatch({
+          type: "SET_STEP_ERROR",
+          key,
+          error: "This step cannot be rerun — it has no step id on the server.",
+        });
+        return null;
+      }
+
+      dispatch({ type: "SET_PENDING", pending: true });
+
+      let raw;
+      try {
+        raw = await rerunStepRequest(sessionId, stepId, { params });
+      } catch (err) {
+        dispatch({
+          type: "SET_STEP_ERROR",
+          key,
+          error: err?.userMessage || err?.message || "The rerun could not be started.",
+        });
+        dispatch({ type: "SET_PENDING", pending: false });
+        return null;
+      }
+
+      const parsed = parseStepResponse(raw);
+      const landedKey = parsed.moduleKey ?? key;
+
+      dispatch({ type: "SET_PENDING", pending: false });
+      dispatch({
+        type: "ACTIVATE_MODULE",
+        key: landedKey,
+        phase: MODULE_BY_KEY[landedKey].loadingPhase,
+        jobId: parsed.jobId,
+        stepId: parsed.stepId,
+      });
+
+      return { ...parsed, moduleKey: landedKey };
+    },
+    [state.activeKey, state.steps]
+  );
 
   /**
    * The thread as the active step should see it: everything up to and including
    * this step. Navigating back shows the history that existed at that point,
    * while the full thread stays in `conversation`.
+   *
+   * A pipeline run spans every module, so it sees the whole thread.
    */
   const visibleConversation = useMemo(() => {
-    if (!activeModule) return state.conversation;
+    if (!activeModule || activeModule.isPipeline) return state.conversation;
     return state.conversation.filter(
       (m) => m.stepIndex == null || m.stepIndex <= activeModule.index
     );
@@ -297,6 +711,7 @@ const useWorkflowSession = () => {
           isNavigable: step.visited && state.activeKey !== m.key,
           phase: step.phase,
           jobId: step.jobId,
+          error: step.error,
         };
       }),
     [state.steps, state.activeKey]
@@ -311,6 +726,7 @@ const useWorkflowSession = () => {
     steps: state.steps,
     activationOrder: state.activationOrder,
     conversation: state.conversation,
+    pending: state.pending,
 
     // derived
     activeKey: state.activeKey,
@@ -319,19 +735,26 @@ const useWorkflowSession = () => {
     activeIndex: activeModule ? activeModule.index : 0,
     activePhase: activeStepState?.phase ?? null,
     activeJobId: activeStepState?.jobId ?? null,
+    activeStepId: activeStepState?.stepId ?? null,
+    activeError: activeStepState?.error ?? null,
     visibleConversation,
     rail,
 
     // actions
     startSession,
+    resumeSession,
     activateModule,
     goToModule,
     goToIndex,
     setPhase,
     setStepData,
     setStepJob,
+    setStepError,
     appendMessages,
     messagesForModule,
+    handOff,
+    sendMessage,
+    rerunActiveStep,
     reset,
 
     // helpers

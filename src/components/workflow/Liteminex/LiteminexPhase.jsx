@@ -141,6 +141,39 @@ const LitMineXAgentHeader = ({
    CONFIDENCE COLOR
    ========================================================================== */
 
+/**
+ * The API's page size for LitMineX results. Only used for the "Showing x-y of
+ * n" caption; the server decides how many rows actually come back, so the
+ * caption's upper bound is taken from the row count rather than from this.
+ */
+const PAGE_SIZE = 10;
+
+/**
+ * The page numbers to show, with ellipses, for a given current page and total.
+ *
+ * Returns e.g. ['‹', 1, '…', 6, 7, 8, '…', 12, '›'] — always the first and
+ * last page plus a window around the current one, so the strip stays a fixed
+ * width however many pages there are.
+ */
+const buildPageStrip = (page, totalPages) => {
+  if (!Number.isFinite(totalPages) || totalPages < 1) return [];
+
+  const pages = new Set([1, totalPages, page]);
+  if (page - 1 > 1) pages.add(page - 1);
+  if (page + 1 < totalPages) pages.add(page + 1);
+
+  const sorted = [...pages].filter((p) => p >= 1 && p <= totalPages).sort((a, b) => a - b);
+
+  const strip = ['‹'];
+  sorted.forEach((p, i) => {
+    if (i > 0 && p - sorted[i - 1] > 1) strip.push('…');
+    strip.push(p);
+  });
+  strip.push('›');
+
+  return strip;
+};
+
 const confidenceColor = (conf) => {
   const n = parseInt(conf, 10);
 
@@ -182,6 +215,19 @@ const LiteminexPhase = ({
   litMinexResults,
   setSelectedArticle,
   setShowArticleDetail,
+  /** The runner's live progress line while the job is in flight. */
+  progressMessage,
+  /** GET /agents/litminex/{jobId}/results is loading or failed. */
+  loading = false,
+  error = null,
+  onRetry,
+  /** GET /agents/litminex/{jobId}/insights — { tab, content, items }. */
+  insights = null,
+  /** Server-side pagination. All three used to be hardcoded (1-10 of 47). */
+  total = 0,
+  page = 1,
+  totalPages = 1,
+  onPageChange,
 }) => {
 
   /* ------------------------------------------------------------------------
@@ -336,7 +382,9 @@ const LiteminexPhase = ({
                     color: TEXT_DARK,
                   }}
                 >
-                  Scanning PubMed and clinical databases for target literature...
+                  {/* The agent's own progress line once it reports one; the
+                      fixed string is only the pre-first-poll state. */}
+                  {progressMessage || 'Scanning PubMed and clinical databases for target literature...'}
                 </Typography>
 
               </Box>
@@ -492,7 +540,10 @@ const LiteminexPhase = ({
                     color: TEXT_DARK,
                   }}
                 >
-                  Results - 124 articles found
+                  {/* Was hardcoded "124 articles found" regardless of the run. */}
+                  {loading
+                    ? 'Loading results…'
+                    : `Results - ${total} article${total === 1 ? '' : 's'} found`}
                 </Typography>
               </Box>
 
@@ -554,8 +605,46 @@ const LiteminexPhase = ({
                 </Box>
 
 
+                {/* The three states the table used to have no branch for,
+                    because the rows were always present synchronously. */}
+                {error && (
+                  <Box role="alert" sx={{ p: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <Typography sx={{ fontFamily: FONT, fontSize: '13px', color: '#DC2626' }}>
+                      {error}
+                    </Typography>
+                    {onRetry && (
+                      <Button
+                        onClick={onRetry}
+                        size="small"
+                        sx={{
+                          alignSelf: 'flex-start',
+                          textTransform: 'none',
+                          fontFamily: FONT,
+                          fontSize: '12px',
+                          color: TEAL,
+                        }}
+                      >
+                        Try again
+                      </Button>
+                    )}
+                  </Box>
+                )}
+
+                {!error && loading && (
+                  <Typography sx={{ fontFamily: FONT, fontSize: '13px', color: TEXT_MUTED, p: '16px' }}>
+                    Loading articles…
+                  </Typography>
+                )}
+
+                {!error && !loading && litMinexResults.length === 0 && (
+                  <Typography sx={{ fontFamily: FONT, fontSize: '13px', color: TEXT_MUTED, p: '16px' }}>
+                    No articles matched these targets. Gene symbols (JAK2) match PubMed text;
+                    UniProt accessions do not.
+                  </Typography>
+                )}
+
                 {/* Data rows */}
-                {litMinexResults.map((article, idx) => {
+                {!error && !loading && litMinexResults.map((article, idx) => {
 
                   const cc = confidenceColor(article.confidence);
 
@@ -710,41 +799,65 @@ const LiteminexPhase = ({
                 }}
               >
 
-                {['‹', '1', '2', '3', '...', '12', '›'].map((p, i) => (
-                  <Box
-                    key={i}
-                    sx={{
-                      width: 26,
-                      height: 26,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      borderRadius: '4px',
-                      bgcolor:
-                        p === '1'
-                          ? TEAL
-                          : '#F1F5F9',
-                      border:
-                        p === '1'
-                          ? 'none'
-                          : `1px solid ${BORDER}`,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <Typography
+                {/* Real pagination, driven by totalPages from the API. This
+                    was a fixed ['‹','1','2','3','...','12','›'] strip with a
+                    hardcoded "Showing 1-10 of 47" caption, so page 1 always
+                    looked current and no button did anything. */}
+                {buildPageStrip(page, totalPages).map((p, i) => {
+                  const isCurrent = p === page;
+                  const isGap = p === '…';
+                  const isArrow = p === '‹' || p === '›';
+
+                  const targetPage =
+                    p === '‹' ? page - 1 : p === '›' ? page + 1 : p;
+
+                  const isDisabled =
+                    isGap ||
+                    (p === '‹' && page <= 1) ||
+                    (p === '›' && page >= totalPages);
+
+                  return (
+                    <Box
+                      key={`${p}-${i}`}
+                      component={isGap ? 'div' : 'button'}
+                      type={isGap ? undefined : 'button'}
+                      disabled={isGap ? undefined : isDisabled}
+                      aria-label={
+                        isArrow
+                          ? p === '‹'
+                            ? 'Previous page'
+                            : 'Next page'
+                          : isGap
+                          ? undefined
+                          : `Page ${p}`
+                      }
+                      aria-current={isCurrent ? 'page' : undefined}
+                      onClick={
+                        isGap || isDisabled
+                          ? undefined
+                          : () => onPageChange?.(targetPage)
+                      }
                       sx={{
+                        width: 26,
+                        height: 26,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        borderRadius: '4px',
+                        p: 0,
+                        bgcolor: isCurrent ? TEAL : '#F1F5F9',
+                        border: isCurrent ? 'none' : `1px solid ${BORDER}`,
+                        cursor: isGap || isDisabled ? 'default' : 'pointer',
+                        opacity: isDisabled && !isGap ? 0.45 : 1,
                         fontFamily: FONT,
                         fontSize: '12px',
-                        color:
-                          p === '1'
-                            ? '#FFFFFF'
-                            : TEXT_MUTED,
+                        color: isCurrent ? '#FFFFFF' : TEXT_MUTED,
                       }}
                     >
                       {p}
-                    </Typography>
-                  </Box>
-                ))}
+                    </Box>
+                  );
+                })}
 
                 <Typography
                   sx={{
@@ -753,7 +866,9 @@ const LiteminexPhase = ({
                     color: TEXT_MUTED,
                   }}
                 >
-                  Showing 1-10 of 47 articles
+                  {litMinexResults.length
+                    ? `Showing ${(page - 1) * PAGE_SIZE + 1}-${(page - 1) * PAGE_SIZE + litMinexResults.length} of ${total} article${total === 1 ? '' : 's'}`
+                    : 'No articles on this page'}
                 </Typography>
 
               </Box>
@@ -858,7 +973,12 @@ const LiteminexPhase = ({
                       lineHeight: 1.5,
                     }}
                   >
-                    This article demonstrates strong evidence for Metformin-JAK2 interaction with direct insulin signaling pathway involvement and therapeutic potential.
+                    {/* The agent's own relevance commentary from
+                        GET /agents/litminex/{jobId}/insights. This used to be a
+                        fixed sentence about Metformin and JAK2, shown whatever
+                        the session was actually about. */}
+                    {insights?.content ||
+                      'No relevance commentary was returned for this run.'}
                   </Typography>
 
                 </Box>

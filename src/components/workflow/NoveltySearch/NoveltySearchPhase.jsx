@@ -8,80 +8,6 @@ const NOVSEARCH_FONT = "'Inter', sans-serif";
    DATA
 ============================================================================ */
 
-const patents = [
-  {
-    id: "US10234567",
-    title: "JAK2 Inhibitor Compositions",
-    relevance: "0.96",
-  },
-  {
-    id: "EP3456789",
-    title: "Imatinib Combination Therapies",
-    relevance: "0.93",
-  },
-  {
-    id: "US10294021",
-    title: "Dual BCR-ABL and JAK Inhibitions",
-    relevance: "0.91",
-  },
-  {
-    id: "EP2046210",
-    title: "TKI Therapeutic Regimens",
-    relevance: "0.89",
-  },
-  {
-    id: "US9821342",
-    title: "Treatment of Myelofibrosis",
-    relevance: "0.87",
-  },
-  {
-    id: "WO2022189",
-    title: "Kinase Combination Therapy",
-    relevance: "0.85",
-  },
-  {
-    id: "JP2023056",
-    title: "BCR-ABL Dual Inhibitor",
-    relevance: "0.81",
-  },
-  {
-    id: "CN115432",
-    title: "JAK/STAT Pathway Modulators",
-    relevance: "0.83",
-  },
-  {
-    id: "CN115433",
-    title: "Small Molecule Combinations",
-    relevance: "0.79",
-  },
-  {
-    id: "US11345678",
-    title: "Cancer Treatment Methods",
-    relevance: "0.76",
-  },
-];
-
-const comparisonPatents = [
-  {
-    id: "US10234567",
-    title: "JAK2 Inhibitor Compositions",
-    description:
-      "Selective JAK2 with IC50 < 10nM, oral delivery",
-  },
-  {
-    id: "EP3456789",
-    title: "Imatinib Combination Therapies",
-    description:
-      "Combination therapy approach (Imatinib + JAK inhibitor)",
-  },
-  {
-    id: "US10294021",
-    title: "Dual BCR-ABL and JAK Inhibitions",
-    description:
-      "Dual BCR-ABL/JAK targeting, broader kinase coverage",
-  },
-];
-
 /* ============================================================================
    SHARED STYLES
 ============================================================================ */
@@ -349,7 +275,11 @@ const UserMessage = ({ children }) => (
    RESULTS TABLE
 ============================================================================ */
 
-const PatentTable = () => (
+/**
+ * @param {object[]} rows - normalised patents from
+ *   GET /agents/novsearch/{jobId}/report — { id, title, relevance }.
+ */
+const PatentTable = ({ rows = [] }) => (
   <Box
     sx={{
       width: "100%",
@@ -376,8 +306,9 @@ const PatentTable = () => (
       <Typography sx={tableHeader}>RELEVANCE</Typography>
     </Box>
 
-    {/* Rows */}
-    {patents.map((patent) => (
+    {/* Rows. The module-level `patents` fixture is no longer read — these come
+        from the novelty report. */}
+    {rows.map((patent) => (
       <Box
         key={patent.id}
         sx={{
@@ -444,7 +375,30 @@ const tableCell = {
    INSIGHTS
 ============================================================================ */
 
-const InsightsCard = () => (
+/**
+ * The novelty verdict.
+ *
+ * `assessment` and `recommendations` are the report's own fields. The
+ * "HIGH VIABILITY" badge used to be hardcoded green, so every candidate — even
+ * one blocked by a direct patent hit — was presented as clear to file. It is
+ * derived from the top relevance score instead: the API returns no verdict
+ * enum, and relevance is the only signal in the payload that speaks to
+ * overlap.
+ */
+const viabilityFor = (report) => {
+  const top = report?.patents?.[0]?.rawRelevance;
+  if (!Number.isFinite(top)) {
+    return { label: "NOT ASSESSED", bg: "#F1F5F9", color: "#64748B" };
+  }
+  if (top >= 0.9) return { label: "LOW VIABILITY", bg: "#FEE2E2", color: "#DC2626" };
+  if (top >= 0.75) return { label: "MODERATE VIABILITY", bg: "#FEF3C7", color: "#B45309" };
+  return { label: "HIGH VIABILITY", bg: "#DCFCE7", color: "#16A34A" };
+};
+
+const InsightsCard = ({ report }) => {
+  const viability = viabilityFor(report);
+
+  return (
   <Box
     sx={{
       width: "100%",
@@ -513,7 +467,7 @@ const InsightsCard = () => (
             px: "8px",
             py: "2px",
             borderRadius: "10px",
-            background: "#DCFCE7",
+            background: viability.bg,
           }}
         >
           <Typography
@@ -522,10 +476,10 @@ const InsightsCard = () => (
               fontSize: "9px",
               lineHeight: "11px",
               fontWeight: 600,
-              color: "#16A34A",
+              color: viability.color,
             }}
           >
-            HIGH VIABILITY
+            {viability.label}
           </Typography>
         </Box>
       </Box>
@@ -536,15 +490,37 @@ const InsightsCard = () => (
           fontSize: "12px",
           lineHeight: "15px",
           color: "#7B8491",
+          whiteSpace: "pre-wrap",
         }}
       >
-        No patents assert direct novelty overlap with the specific
-        combination therapy specified. The target compound exhibits high
-        suitability for novel IP filings.
+        {report?.assessment ||
+          "No novelty assessment was returned for this run."}
       </Typography>
+
+      {/* The report's recommendations — previously there was nowhere for these
+          to appear at all. */}
+      {report?.recommendations?.length > 0 && (
+        <Box sx={{ mt: "10px" }}>
+          {report.recommendations.map((rec, i) => (
+            <Typography
+              key={i}
+              sx={{
+                ...text,
+                fontSize: "12px",
+                lineHeight: "16px",
+                color: "#7B8491",
+                mb: "4px",
+              }}
+            >
+              • {rec}
+            </Typography>
+          ))}
+        </Box>
+      )}
     </Box>
   </Box>
-);
+  );
+};
 
 /* ============================================================================
    RESULTS ACTIONS
@@ -587,57 +563,83 @@ const ResultsActions = ({ onCompare }) => (
    RESULTS SCREEN
 ============================================================================ */
 
-const ResultsScreen = ({ onCompare }) => (
-  <>
-    <UserMessage>
-      Search patents for Imatinib + JAK inhibitors combination therapy
-    </UserMessage>
+const ResultsScreen = ({ onCompare, report, loading, error, onRetry }) => {
+  const patentRows = report?.patents ?? [];
+  const subject = [report?.drug, report?.target, report?.disease]
+    .filter(Boolean)
+    .join(" + ");
 
-    <Box
-      sx={{
-        width: "100%",
-        boxSizing: "border-box",
-        border: "1px solid #E2E8F0",
-        borderRadius: "12px",
-        background: "#FFFFFF",
-        padding: "16px",
-      }}
-    >
-      <AgentHeader />
-
-      <Typography
-        sx={{
-          ...text,
-          fontSize: "15px",
-          lineHeight: "22px",
-          fontWeight: 400,
-          mb: "12px",
-        }}
-      >
-        Novelty search complete. Analysed 17 patents for Imatinib + JAK
-        inhibitors combination therapy. Results ranked by relevance:
-      </Typography>
+  return (
+    <>
+      <UserMessage>
+        {/* Was a fixed "Imatinib + JAK inhibitors" string. */}
+        {subject
+          ? `Search patents for ${subject}`
+          : "Search patents for this candidate"}
+      </UserMessage>
 
       <Box
         sx={{
-          display: "grid",
-          gridTemplateColumns: "minmax(0, 1.7fr) minmax(290px, 1fr)",
-          gap: "16px",
-
-          "@media (max-width: 850px)": {
-            gridTemplateColumns: "1fr",
-          },
+          width: "100%",
+          boxSizing: "border-box",
+          border: "1px solid #E2E8F0",
+          borderRadius: "12px",
+          background: "#FFFFFF",
+          padding: "16px",
         }}
       >
-        <PatentTable />
+        <AgentHeader />
 
-        <InsightsCard />
+        <Typography
+          sx={{
+            ...text,
+            fontSize: "15px",
+            lineHeight: "22px",
+            fontWeight: 400,
+            mb: "12px",
+          }}
+        >
+          {/* Was "Analysed 17 patents for Imatinib + JAK inhibitors" on every
+              run, whatever came back. */}
+          {error
+            ? error
+            : loading
+            ? "Loading the novelty report…"
+            : patentRows.length
+            ? `Novelty search complete. Analysed ${report.total} patent${report.total === 1 ? "" : "s"}${subject ? ` for ${subject}` : ""}. Results ranked by relevance:`
+            : "No patents were returned for this candidate."}
+        </Typography>
+
+        {error && onRetry && (
+          <Button
+            onClick={onRetry}
+            sx={{ ...text, textTransform: "none", fontSize: "13px", color: TEAL, mb: "12px" }}
+          >
+            Try again
+          </Button>
+        )}
+
+        <Box
+          sx={{
+            display: "grid",
+            gridTemplateColumns: "minmax(0, 1.7fr) minmax(290px, 1fr)",
+            gap: "16px",
+
+            "@media (max-width: 850px)": {
+              gridTemplateColumns: "1fr",
+            },
+          }}
+        >
+          <PatentTable rows={patentRows} />
+
+          <InsightsCard report={report} />
+        </Box>
+
+        <ResultsActions onCompare={onCompare} />
       </Box>
-
-      <ResultsActions onCompare={onCompare} />
-    </Box>
-  </>
-);
+    </>
+  );
+};
 
 /* ============================================================================
    COMPARISON SCREEN
@@ -826,7 +828,7 @@ const DecisionScreen = ({ onContinue, onEndTask }) => (
   </>
 );
 
-const CompilingScreen = () => (
+const CompilingScreen = ({ progressMessage }) => (
   <>
 
     <UserMessage>End Task</UserMessage>
@@ -883,7 +885,7 @@ const CompilingScreen = () => (
             lineHeight: "22px",
           }}
         >
-          Compiling your research report... This will be completed shortly.
+          {progressMessage || "Compiling your research report... This will be completed shortly."}
         </Typography>
       </Box>
 
@@ -1192,21 +1194,43 @@ const getInitialStage = (workflowPhase) => {
    MAIN COMPONENT
 ============================================================================ */
 
-const NoveltySearchPhase = ({ workflowPhase }) => {
+const NoveltySearchPhase = ({
+  workflowPhase,
+  /** The runner's live progress line. */
+  progressMessage,
+  /** GET /agents/novsearch/{jobId}/report, normalised. */
+  report = null,
+  loading = false,
+  error = null,
+  onRetry,
+}) => {
   const [stage, setStage] = useState(() =>
     getInitialStage(workflowPhase)
   );
 
   const [inputValue, setInputValue] = useState("");
 
+  /**
+   * "Compiling" is a local presentation step — the final report is assembled
+   * from data already fetched, not by another agent run — so it advances as
+   * soon as the report is in hand rather than after a fixed 2.5s.
+   *
+   * The timer that remains is only a ceiling: without it, a compile with no
+   * report to wait for would sit on this screen indefinitely.
+   */
   useEffect(() => {
     if (stage !== "compiling") {
       return undefined;
     }
 
+    if (report?.hasData || error) {
+      setStage("summary");
+      return undefined;
+    }
+
     const timer = setTimeout(() => setStage("summary"), 2500);
     return () => clearTimeout(timer);
-  }, [stage]);
+  }, [stage, report, error]);
 
   /*
    * Keep externally supplied workflowPhase useful if the parent changes it.
@@ -1288,6 +1312,10 @@ const NoveltySearchPhase = ({ workflowPhase }) => {
         {stage === "results" && (
           <ResultsScreen
             onCompare={() => setStage("comparison")}
+            report={report}
+            loading={loading}
+            error={error}
+            onRetry={onRetry}
           />
         )}
 
@@ -1310,7 +1338,7 @@ const NoveltySearchPhase = ({ workflowPhase }) => {
           />
         )}
 
-        {stage === "compiling" && <CompilingScreen />}
+        {stage === "compiling" && <CompilingScreen progressMessage={progressMessage} />}
 
         {/* ================================================================
             FINAL SUMMARY

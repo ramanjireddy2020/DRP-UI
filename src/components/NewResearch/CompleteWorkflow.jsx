@@ -1,20 +1,14 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import ArtifactsPage from "./ArtifactsPage";
 import LineagePage from "./LineagePage";
 import ShareModal from "../ShareModal/ShareModal";
 import { useLocation, useNavigate } from "react-router-dom";
-import { 
-  Box, Typography, Button, Tabs, Tab, Checkbox,
-  TextField, IconButton, Chip, Dialog, DialogTitle,
-  DialogContent, DialogActions, Accordion, AccordionSummary, AccordionDetails
-} from "@mui/material";
 import {
-  ExpandMoreOutlined,
-  VisibilityOutlined,
-  DeleteOutlineOutlined,
-  AddOutlined,
-  CloseOutlined
-} from "@mui/icons-material";
+  Box, Typography, Button,
+  TextField, IconButton, Dialog, DialogTitle,
+  DialogContent, DialogActions
+} from "@mui/material";
+import { ExpandMoreOutlined, CloseOutlined } from "@mui/icons-material";
 import SideBar from "../SideBar/SideBar";
 import TXKGPhase from "../workflow/TXKG/TXKGPhase";
 import LiteminexPhase from "../workflow/Liteminex/LiteminexPhase";
@@ -23,20 +17,28 @@ import ScreeningSuitePhase from "../workflow/ScreeningSuite/ScreeningSuitePhase"
 import NoveltySearchPhase from "../workflow/NoveltySearch/NoveltySearchPhase";
 import useWorkflowSession from "../../hooks/useWorkflowSession";
 import useJob from "../../hooks/useJob";
-import { moduleForPhase } from "../../workflow/moduleMap";
+import usePhaseResults from "../../hooks/usePhaseResults";
+import { moduleForPhase, isErrorPhase, MODULE_BY_KEY } from "../../workflow/moduleMap";
+import { normalizeTxkgResult } from "../../workflow/txkgResult";
+import { toGeneNames, buildSelections } from "../../workflow/selections";
+import { toApiWeights } from "../../workflow/phaseResults";
+import curatexApi from "../../services/api/curatex";
+import {
+  SCREENSUITE_UNAVAILABLE,
+  SCREENSUITE_UNAVAILABLE_MESSAGE,
+} from "../../services/api/screensuite";
+import PhaseError from "../workflow/PhaseError";
+import ChatInputBar from "../workflow/ChatInputBar";
+import PipelinePhase from "../workflow/PipelinePhase";
 import './WorkflowStyles.css';
 
 // Design tokens matching Figma
 const FONT = "'Geist', sans-serif";
 const TEAL = "#00BCD4";
-const USER_MSG_BG = "#F0FDFC";
 const GRAY_BG = "#F8FAFC";
 const BORDER = "#E2E8F0";
-const BORDER_LIGHT = "#E5EBF0";
 const TEXT_DARK = "#0F172A";
 const TEXT_MUTED = "#808794";
-const INSIGHTS_HEADER = "#1A1F26";
-const ACTIVE_TAB = "#00BCD4";
 
 // Workflow steps - NON-CLICKABLE as per requirements
 const WORKFLOW_STEPS = [
@@ -101,7 +103,11 @@ const CompleteWorkflow = () => {
 
   const [insightTab, setInsightTab] = useState(0);
   const [expandedAccordion, setExpandedAccordion] = useState("txkg");
-  const [selectedTargets, setSelectedTargets] = useState(["P37231", "P27487", "P08172"]);
+  // Empty until TxKG returns. The three accessions that used to seed this
+  // (P37231/P27487/P08172) came from the Figma mock and appear in no real
+  // result, so the "3 selected" badge was always wrong. An effect below
+  // pre-ticks the top three actual targets instead.
+  const [selectedTargets, setSelectedTargets] = useState([]);
   const [litMinexResults, setLitMinexResults] = useState([]);
   const [showArticleDetail, setShowArticleDetail] = useState(false);
   const [selectedArticle, setSelectedArticle] = useState(null);
@@ -124,32 +130,38 @@ const CompleteWorkflow = () => {
     { initials: "SC", name: "Sarah Chen", email: "sarah.c@inovapath.com", role: "Viewer", color: "#8C4DBF" },
   ]);
 
-  const [profileData, setProfileData] = useState({
-    indication: "Type 2 Diabetes",
-    moa: "JAK2 Inhibition",
-    route: "Oral",
-    molecularWeight: "< 500 Da",
-    bioavailability: "> 60%",
-    halfLife: "8-12 hours",
-    logP: "1.5-3.5",
-    solubility: "> 10 mg/mL",
-    plasmaProteinBinding: "< 90%"
-  });
+  /**
+   * The target product profile.
+   *
+   * Empty until GET /agents/curatex/{jobId}/profile returns. It used to be a
+   * hardcoded Type 2 Diabetes / JAK2 profile, which meant the criteria the
+   * researcher edited — and therefore the weights sent to the compound
+   * scorer — had nothing to do with the target actually under study.
+   */
+  const [profileData, setProfileData] = useState({});
   const [profileEditMode, setProfileEditMode] = useState(false);
   const [curateXResults, setCurateXResults] = useState([]);
   const [showCompoundDetail, setShowCompoundDetail] = useState(false);
   const [selectedCompound, setSelectedCompound] = useState(null);
-  const [currentPage, setCurrentPage] = useState(1);
+  /**
+   * Pagination, one page per table.
+   *
+   * These were a single `currentPage`, which meant paging the article list to
+   * page 3 also asked CurateX for page 3 of its compounds — a different table
+   * with a different length.
+   */
+  const [litminexPage, setLitminexPage] = useState(1);
+  const [curatexPage, setCuratexPage] = useState(1);
   /**
    * The conversation is owned by the session store and is append-only, so
    * moving between steps never drops a message. What is rendered is the slice
    * up to and including the step being viewed.
    */
   const chatMessages = session.visibleConversation;
-  const appendMessages = session.appendMessages;
 
-  const [chatInputValue, setChatInputValue] = useState("");
-  
+  // The composer's draft lives inside ChatInputBar now. Held here, every polled
+  // job status re-rendered this component and disturbed what was being typed.
+
   // ---------------------------------------------------------------------------
   // Supervisor
   //
@@ -159,28 +171,66 @@ const CompleteWorkflow = () => {
   // ---------------------------------------------------------------------------
   const startedRef = useRef(false);
 
+  /**
+   * module/projectId come from the composer when the researcher pinned one.
+   * Left null, dispatch.infer_module() decides: explicit module → @mention →
+   * keywords → TxKG. Sending null is meaningfully different from sending a
+   * guess, so neither is defaulted here.
+   *
+   * Shared with the retry on the session-error screen, so a retry sends exactly
+   * what the first attempt did.
+   */
+  const startSession = useCallback(
+    () =>
+      session.startSession({
+        query,
+        module: location.state?.module ?? null,
+        projectId: location.state?.projectId ?? null,
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [query, location.state, session.startSession]
+  );
+
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
 
-    session.startSession({ query }).then((started) => {
-      if (!started) return;
-      // Nothing to do on success — startSession has already activated the
-      // module the supervisor named.
-    });
+    startSession();
     // Intentionally mount-only: a session is created once per workflow entry.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ---------------------------------------------------------------------------
-  // Job polling — replaces the setTimeout chain that used to fake progress.
+  // Job polling.
+  //
+  // This replaced a chain of setTimeouts that faked every agent run, together
+  // with the hardcoded article, compound, target, docking and patent fixtures
+  // they set. Nothing on these screens is invented any more: a phase either
+  // shows what the backend returned or says why it could not.
   // ---------------------------------------------------------------------------
   const activeJobId = session.activeJobId;
   const job = useJob(activeJobId, { enabled: Boolean(activeJobId) });
 
   /**
+   * CurateX runs TWO jobs. The first builds the target profile; the second
+   * scores compounds against the criteria the researcher edited. Only the first
+   * belongs to the session step, so the second needs its own id and poll.
+   */
+  const compoundsJobId = session.steps.curatex?.data?.compoundsJobId ?? null;
+  const compoundsJob = useJob(compoundsJobId, {
+    enabled: Boolean(compoundsJobId),
+    // The compounds come from /agents/curatex/{jobId}/results, which is
+    // paginated; the generic job result would be a second copy of the same
+    // data with no page controls.
+    fetchResult: false,
+  });
+
+  /**
    * When the active module's job finishes, move that module from its
-   * "-loading" phase to its "-results" phase and keep the payload.
+   * "-loading" phase to its results phase and keep the payload.
+   *
+   * `resultsPhase` carries CurateX's exception — its first job resolves to the
+   * editable profile screen, not to results — so there is no special case here.
    */
   useEffect(() => {
     if (!job.isDone) return;
@@ -193,94 +243,131 @@ const CompleteWorkflow = () => {
       session.setStepData({ jobResult: job.result }, owner.key);
     }
 
-    // CurateX is the exception: its loading state resolves to the editable
-    // profile screen, not straight to results.
-    setWorkflowPhase(
-      owner.key === "curatex" ? "curatex-profile" : owner.resultsPhase
-    );
+    setWorkflowPhase(owner.resultsPhase);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [job.isDone, job.result]);
 
+  /**
+   * A failed job moves its module to its own "-error" phase, carrying the
+   * backend's reason. Previously there was no path out of "-loading" at all on
+   * failure, so a crashed agent left the spinner turning.
+   */
+  useEffect(() => {
+    if (!job.isFailed) return;
+    const owner = moduleForPhase(workflowPhase);
+    if (!owner) return;
+    session.setStepError(job.error, owner.key);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job.isFailed, job.error]);
+
+  /** The compounds job drives the second half of CurateX. */
+  useEffect(() => {
+    if (compoundsJob.isDone) {
+      setWorkflowPhase("curatex-results");
+      return;
+    }
+    if (compoundsJob.isFailed) {
+      session.setStepError(compoundsJob.error, "curatex");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compoundsJob.isDone, compoundsJob.isFailed, compoundsJob.error]);
+
+  /**
+   * TxKG results, normalised from whatever the job stored.
+   *
+   * Reads from the step store rather than from `job.result` directly, so the
+   * data survives navigating away to another step and back — which is the whole
+   * point of keeping per-step state.
+   */
+  const txkgResult = useMemo(
+    () => normalizeTxkgResult(session.steps.txkg?.data?.jobResult),
+    [session.steps.txkg]
+  );
+
   // ---------------------------------------------------------------------------
-  // Fallback progression.
+  // Per-module results.
   //
-  // Not every phase has a real job behind it yet — the per-agent result
-  // endpoints are a later integration phase, and a supervisor response without
-  // a job_id leaves nothing to poll. Where there is no job, the original timing
-  // is preserved so the workflow still walks end to end. Each of these blocks
-  // disappears as its agent phase is integrated.
+  // Each phase reads its own endpoint, which is the pattern the API documents:
+  // "on completed → call that module's results endpoint". The paginated article
+  // and compound tables and the tabbed insights have no equivalent in the
+  // generic job result.
+  //
+  // TxKG is the exception above — its normaliser reads the generic result and
+  // was written against a verified response.
+  //
+  // These hooks are called unconditionally and gated with `enabled`, so the
+  // hook order never changes between renders.
   // ---------------------------------------------------------------------------
-  const hasLiveJob = Boolean(activeJobId);
+  const litminexStep = session.steps.litminex;
+  const litminex = usePhaseResults("litminex", litminexStep?.jobId, {
+    enabled: litminexStep?.phase === "litminex-results",
+    page: litminexPage,
+  });
+
+  const curatexStep = session.steps.curatex;
+  const curatexProfile = usePhaseResults("curatex-profile", curatexStep?.jobId, {
+    enabled: curatexStep?.phase === "curatex-profile",
+  });
+
+  const curatexResults = usePhaseResults("curatex-results", compoundsJobId, {
+    enabled: Boolean(compoundsJobId) && compoundsJob.isDone,
+    page: curatexPage,
+    pageSize: 10,
+  });
+
+  const screensuiteStep = session.steps.screensuite;
+  const screensuite = usePhaseResults("screensuite", screensuiteStep?.jobId, {
+    enabled: screensuiteStep?.phase === "screensuite-results",
+  });
+
+  const novsearchStep = session.steps.novsearch;
+  const novsearch = usePhaseResults("novsearch", novsearchStep?.jobId, {
+    enabled: novsearchStep?.phase === "novelty-results",
+  });
+
+  const pipelineStep = session.steps.pipeline;
+  const pipeline = usePhaseResults("pipeline", pipelineStep?.jobId, {
+    enabled: pipelineStep?.phase === "pipeline-results",
+  });
+
+  /**
+   * The profile form is seeded from the API's criteria the first time they
+   * arrive, then left alone so the researcher's edits are not overwritten by a
+   * re-fetch.
+   */
+  const profileSeededRef = useRef(false);
+  useEffect(() => {
+    if (profileSeededRef.current) return;
+    if (!curatexProfile.data?.hasData) return;
+    profileSeededRef.current = true;
+    setProfileData(curatexProfile.data.profileData);
+  }, [curatexProfile.data]);
+
+  /**
+   * Default target selection.
+   *
+   * This used to be three hardcoded accessions (P37231, P27487, P08172) that
+   * belonged to the Figma mock and will not appear in any real result, so the
+   * "3 selected" badge was always a lie. The top three actual targets are
+   * pre-ticked instead, once there are any.
+   */
+  const seededTargetsRef = useRef(false);
+  useEffect(() => {
+    if (seededTargetsRef.current) return;
+    if (!txkgResult.hasData || !txkgResult.targets.length) return;
+    seededTargetsRef.current = true;
+    setSelectedTargets(txkgResult.targets.slice(0, 3).map((t) => t.id));
+  }, [txkgResult]);
+
+  // Keep the LitMineX / CurateX table props fed from the API responses. The
+  // setters stay so the phase components' signatures do not change.
+  useEffect(() => {
+    if (litminex.data?.articles) setLitMinexResults(litminex.data.articles);
+  }, [litminex.data]);
 
   useEffect(() => {
-    if (hasLiveJob) return undefined;
-
-    if (workflowPhase === "txkg-loading") {
-      const timer = setTimeout(() => setWorkflowPhase("txkg-results"), 2500);
-      return () => clearTimeout(timer);
-    }
-    if (workflowPhase === "litminex-loading") {
-      const timer = setTimeout(() => {
-        setWorkflowPhase("litminex-results");
-        // Mock literature results from Figma
-        setLitMinexResults([
-          { id: 1, title: "Metformin repurposing for JAK2-mediated insulin resistance: Implications for Type 2 Diabetes treatment", year: 2024, confidence: "100%", keywords: "metformin, JAK2, insulin", author: "Chen, S. et al." },
-          { id: 2, title: "SGLT2 inhibitor mechanisms in pancreatic beta-cell function", year: 2023, confidence: "97%", keywords: "SGLT2, beta-cell", author: "Williams, P. et al." },
-          { id: 3, title: "GLP-1 receptor agonist effects on hepatic glucose metabolism", year: 2024, confidence: "94%", keywords: "GLP-1, hepatic glucose", author: "Martinez, R. et al." },
-          { id: 4, title: "PI3K/Akt pathway modulation in Type 2 Diabetes pathophysiology", year: 2022, confidence: "91%", keywords: "PI3K, Akt, diabetes", author: "Thompson, K. et al." },
-          { id: 5, title: "AMPK activation and glucose transport regulation in skeletal muscle", year: 2023, confidence: "88%", keywords: "AMPK, glucose transport", author: "Davis, M. et al." },
-          { id: 6, title: "PPAR-gamma agonists for improving insulin sensitivity in T2D patients", year: 2024, confidence: "85%", keywords: "PPAR-gamma, insulin", author: "Anderson, L. et al." },
-          { id: 7, title: "Genome-wide association studies for novel T2D loci identification", year: 2022, confidence: "82%", keywords: "GWAS, T2D loci", author: "Johnson, T. et al." },
-          { id: 8, title: "DPP-4 inhibitor efficacy in glycemic control and cardiovascular outcomes", year: 2023, confidence: "79%", keywords: "DPP-4, glycemic control", author: "Lee, H. et al." },
-        ]);
-      }, 2500);
-      return () => clearTimeout(timer);
-    }
-    if (workflowPhase === "curatex-loading") {
-      const timer = setTimeout(() => setWorkflowPhase("curatex-profile"), 2000);
-      return () => clearTimeout(timer);
-    }
-    if (workflowPhase === "screensuite-loading") {
-      const timer = setTimeout(() => {
-        setWorkflowPhase("screensuite-results");
-      }, 8000);
-      return () => clearTimeout(timer);
-    }
-    if (workflowPhase === "screensuite-results") {
-      return undefined;
-    }
-    if (workflowPhase === "curatex-submitted") {
-      const timer = setTimeout(() => {
-        setWorkflowPhase("curatex-results");
-        // Mock compound results from Figma
-        setCurateXResults([
-          { rank: 1, name: "Metformin", matchedProps: "MW, Bioavail, Route, Half-life, LogP", mismatchedProps: "Solubility", score: "93.5" },
-          { rank: 2, name: "Pioglitazone", matchedProps: "MW, Route, Half-life, LogP, Solubility", mismatchedProps: "Bioavail", score: "89.2" },
-          { rank: 3, name: "Canagliflozin", matchedProps: "MW, Route, Bioavail, LogP", mismatchedProps: "Half-life, Solubility", score: "85.7" },
-          { rank: 4, name: "Empagliflozin", matchedProps: "MW, Route, Bioavail, Half-life", mismatchedProps: "LogP, Solubility", score: "82.4" },
-          { rank: 5, name: "Liragluide", matchedProps: "MW, Bioavail, Half-life", mismatchedProps: "Route, LogP, Solubility", score: "78.1" },
-          { rank: 6, name: "Sitagliptin", matchedProps: "MW, Route, LogP, Solubility", mismatchedProps: "Bioavail, Half-life, Solubility", score: "74.6" },
-        ]);
-      }, 2000);
-      return () => clearTimeout(timer);
-    }
-    return undefined;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workflowPhase, hasLiveJob]);
-
-  // Mock targets data from Figma
-  const mockTargets = [
-    { id: "P37231", name: "PPARG receptor", fullName: "Peroxisome proliferator-activated receptor gamma", score: "92.00" },
-    { id: "P27487", name: "DPP4", fullName: "Dipeptidyl peptidase-4", score: "87.00" },
-    { id: "P43220", name: "GLP1R", fullName: "Glucagon-like peptide-1 receptor", score: "79.00" },
-    { id: "P08172", name: "JAK2", fullName: "Janus kinase 2", score: "33.00" },
-    { id: "P31629", name: "SGLT2", fullName: "Sodium-glucose co-transporter 2", score: "71.00" },
-    { id: "P35558", name: "INSR", fullName: "Insulin receptor", score: "65.00" },
-    { id: "P42345", name: "Interleukin-5 receptor", score: "33.00" },
-    { id: "P20963", name: "Cytokine receptor common subunit beta", score: "23.00" },
-    { id: "Q13013", name: "Granulocyte colony-stimulating factor receptor", score: "22.00" },
-    { id: "P09619", name: "Cathrin-associated mediating protein 22", score: "21.00" },
-  ];
+    if (curatexResults.data?.compounds) setCurateXResults(curatexResults.data.compounds);
+  }, [curatexResults.data]);
 
   // Stepper connector — 54×18px with 3 grey dots (Figma connector-1/connector-2 spec)
   const StepConnector = () => (
@@ -1151,1190 +1238,6 @@ const CompleteWorkflow = () => {
     </Dialog>
   );
 
-  // Compound Detail Dialog (Figma Image 15)
-
-  // TXKG Phase - Results
-  const renderTxKGResults = () => (
-    <Box sx={{ p: "24px 40px 40px 40px", bgcolor: GRAY_BG }}>
-      {/* User message row */}
-      <div className="user-message-row">
-        <div className="user-message-bubble">
-          <div className="user-bubble-header">
-            <span className="user-name">DR. PRIYA (YOU)</span>
-          </div>
-          <div className="user-message-text">{query}</div>
-        </div>
-      </div>
-
-      {/* TXKG Accordion */}
-      <Box sx={{ p: "4px 0" }}>
-      <Accordion 
-        expanded={expandedAccordion === "txkg"}
-        onChange={() => setExpandedAccordion(expandedAccordion === "txkg" ? "" : "txkg")}
-        sx={{ border: `1px solid ${BORDER}`, borderRadius: "10px !important", "&:before": { display: "none" }, boxShadow: "none", bgcolor: "#FFFFFF" }}
-      >
-        <AccordionSummary
-          expandIcon={<ExpandMoreOutlined sx={{ color: "#94A3B8", width: 20, height: 20 }} />}
-          sx={{
-            minHeight: "48px",
-            p: "8px 16px",
-            "&.Mui-expanded": { minHeight: "48px" },
-            "& .MuiAccordionSummary-content": { margin: 0, alignItems: "center" }
-          }}
-        >
-          <Box sx={{ display: "flex", alignItems: "center", gap: "10px", width: "100%" }}>
-            <Box sx={{ width: 32, height: 32, borderRadius: "8px", bgcolor: "#F0FDF9", border: "1px solid #00BCD4", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 0L8.5 5.5L14 7L8.5 8.5L7 14L5.5 8.5L0 7L5.5 5.5L7 0Z" fill="#00BCD4"/></svg>
-            </Box>
-            <Typography sx={{ flex: 1, fontFamily: "'Geist', sans-serif", fontSize: "12px", fontWeight: 700, color: "#00BCD4", textTransform: "uppercase" }}>
-              TXKG
-            </Typography>
-          </Box>
-        </AccordionSummary>
-        <AccordionDetails sx={{ p: "16px", bgcolor: "#FFFFFF" }}>
-          <Typography sx={{ fontFamily: FONT, fontSize: "15px", fontWeight: 400, color: TEXT_DARK, lineHeight: "22px", mb: "12px" }}>
-            I found 10 protein targets strongly associated with Type 2 Diabetes pathways. Here are the top candidates ranked by therapeutic relevance:
-          </Typography>
-
-          <Box sx={{ display: "flex", gap: "12px" }}>
-            {/* Target Table */}
-            <Box sx={{ flex: "0 0 52%", minWidth: 0 }}>
-              <Box sx={{ border: `1px solid ${BORDER}`, borderRadius: "8px", overflow: "hidden" }}>
-                {/* Table Header */}
-                <Box sx={{ display: "flex", bgcolor: GRAY_BG, p: "10px 12px", borderBottom: `1px solid ${BORDER_LIGHT}`, gap: "8px" }}>
-                  <Typography sx={{ flex: "0 0 100px", fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase", letterSpacing: "0.5px" }}>
-                    UNIPROT ID
-                  </Typography>
-                  <Typography sx={{ flex: 1, fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase", letterSpacing: "0.5px" }}>
-                    TARGET
-                  </Typography>
-                  <Typography sx={{ flex: "0 0 80px", fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase", textAlign: "right", letterSpacing: "0.5px" }}>
-                    SCORE
-                  </Typography>
-                </Box>
-                {/* Table Body */}
-                {mockTargets.map((target, i) => (
-                  <Box 
-                    key={target.id} 
-                    sx={{ 
-                      display: "flex", 
-                      p: "12px 16px", 
-                      borderBottom: i < mockTargets.length - 1 ? `1px solid ${BORDER}` : "none",
-                      bgcolor: i === 0 ? "rgba(0,188,212,0.08)" : "transparent",
-                      "&:hover": { bgcolor: i === 0 ? "rgba(0,188,212,0.12)" : "#F8FAFC" }
-                    }}
-                  >
-                    <Typography sx={{ flex: "0 0 100px", fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: TEAL }}>
-                      {target.id}
-                    </Typography>
-                    <Typography sx={{ flex: 1, fontFamily: FONT, fontSize: "13px", color: TEXT_DARK }}>
-                      {target.name}
-                    </Typography>
-                    <Typography sx={{ flex: "0 0 80px", fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: TEXT_DARK, textAlign: "right" }}>
-                      {target.score}
-                    </Typography>
-                  </Box>
-                ))}
-              </Box>
-            </Box>
-
-            {/* Insights Panel */}
-            <Box sx={{ flex: 1, minWidth: 0, border: `1px solid ${BORDER}`, borderRadius: "8px", overflow: "hidden" }}>
-              <Box sx={{ bgcolor: GRAY_BG, p: "10px 12px", borderBottom: `1px solid ${BORDER_LIGHT}`, gap: "8px" }}>
-                <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 700, color: INSIGHTS_HEADER, lineHeight: "100%" }}>
-                  Insights
-                </Typography>
-                <Typography sx={{ fontFamily: FONT, fontSize: "10px", fontWeight: 400, color: TEXT_MUTED, lineHeight: "100%", mt: "4px" }}>
-                  AI-powered target recommendations and Q&A
-                </Typography>
-              </Box>
-
-              <Box sx={{ borderBottom: `1px solid ${BORDER}`, p: "4px" }}>
-                <Tabs 
-                  value={insightTab} 
-                  onChange={(e, val) => setInsightTab(val)}
-                  TabIndicatorProps={{ style: { display: "none" } }}
-                  sx={{ 
-                    minHeight: "32px",
-                    "& .MuiTab-root": { 
-                      minHeight: "23px",
-                      p: "4px 10px",
-                      textTransform: "none", 
-                      fontFamily: FONT, 
-                      fontSize: "10px",
-                      fontWeight: 600,
-                      lineHeight: "100%",
-                      color: TEXT_MUTED,
-                      "&.Mui-selected": { 
-                        color: ACTIVE_TAB,
-                      }
-                    }
-                  }}
-                >
-                  <Tab label="Interpretation" />
-                  <Tab label="Recommendations" />
-                  <Tab label="Sources" />
-                </Tabs>
-              </Box>
-
-              <Box sx={{ p: "16px", overflowY: "auto", maxHeight: "340px" }}>
-                {insightTab === 0 && (
-                  <Typography sx={{ 
-                    fontFamily: FONT, 
-                    fontSize: "12px", 
-                    fontWeight: 400, 
-                    color: "#404552", 
-                    lineHeight: 1.6
-                  }}>
-                    The predicted therapeutic targets for Type 2 Diabetes suggest a potential mechanism of action involving the modulation of insulin signaling pathways, particularly those regulated by JAK2 and DPP4.
-                    <br /><br />
-                    The involvement of JAK2, which is a key downstream effector of cytokine receptor signaling, implies that inhibiting this pathway may help mitigate elevated blood glucose and insulin resistance. The identification of GLP1R and SGLT2 as potential targets also hints at roles for incretin-related pathways in the pathogenesis of Type 2 Diabetes.
-                    <br /><br />
-                    These findings highlight the complexity of Type 2 Diabetes and the need for further investigation into the interplay between metabolic and immune signaling pathways.
-                  </Typography>
-                )}
-                {insightTab === 1 && (
-                  <Box sx={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                    <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 700, color: "#1A1F26", lineHeight: "100%" }}>Recommendations</Typography>
-                    {[
-                      { target: "JAK2", status: "High", desc: "Best entry point for insulin signaling inhibition; may reduce glucose regulation." },
-                      { target: "DPP4", status: "High", desc: "Well-validated target with existing gliptin class drugs; strong repurposing potential." },
-                      { target: "GLP1R", status: "Medium", desc: "Incretin pathway modulation for glucose-dependent insulin secretion enhancement." },
-                      { target: "SGLT2", status: "Medium", desc: "Renal glucose reabsorption target; proven clinical efficacy across multiple cytokine pathways." }
-                    ].map((rec, i) => (
-                      <Box key={i} sx={{ 
-                        display: "flex", 
-                        flexDirection: "column",
-                        gap: "4px",
-                        p: "10px 12px",
-                        bgcolor: "#FAFCFF",
-                        border: `1px solid ${BORDER}`,
-                        borderRadius: "8px",
-                        width: "100%"
-                      }}>
-                        <Box sx={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                          <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#1A1A26", lineHeight: "100%" }}>
-                            {rec.target}
-                          </Typography>
-                          <Chip 
-                            label={rec.status} 
-                            size="small"
-                            sx={{ 
-                              bgcolor: rec.status === "High" ? "rgba(20,158,133,0.12)" : "rgba(217,140,26,0.12)", 
-                              color: rec.status === "High" ? "#00BCD4" : "#D98C1A",
-                              fontFamily: FONT,
-                              fontSize: "10px",
-                              fontWeight: 600,
-                              height: "17px",
-                              borderRadius: "4px",
-                              "& .MuiChip-label": { px: "8px", py: "2px", lineHeight: "100%" }
-                            }} 
-                          />
-                        </Box>
-                        <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 400, color: "#4D5461", lineHeight: "100%" }}>
-                          {rec.desc}
-                        </Typography>
-                      </Box>
-                    ))}
-                  </Box>
-                )}
-                {insightTab === 2 && (
-                  <Box sx={{ display: "flex", flexDirection: "column", gap: "16px", pt: "12px" }}>
-                    <Typography sx={{ fontFamily: "'Geist',sans-serif", fontSize: "14px", fontWeight: 600, color: "#262E38", lineHeight: "100%" }}>References</Typography>
-                    {[
-                      { title: "JAK2 inhibition in Type 2 Diabetes: A systematic review", journal: "Nature Reviews Drug Discovery, 2023", doi: "DOI: 10.1038/nrd.2023.142" },
-                      { title: "DPP4 inhibitors and cardiovascular outcomes in diabetic patients", journal: "The Lancet Diabetes & Endocrinology, 2022", doi: "DOI: 10.1016/S2213-8587(22)00156-2" },
-                      { title: "GLP-1 receptor agonists: mechanisms and therapeutic potential", journal: "Cell Metabolism, 2023", doi: "DOI: 10.1016/j.cmet.2023.04.008" },
-                      { title: "SGLT2 inhibitors in the management of Type 2 Diabetes", journal: "New England Journal of Medicine, 2022", doi: "DOI: 10.1056/NEJMra2203096" },
-                      { title: "Insulin signaling pathways as drug targets for T2D", journal: "Pharmacological Reviews, 2023", doi: "DOI: 10.1124/pharmrev.122.000560" }
-                    ].map((source, i) => (
-                      <Box key={i} sx={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                        <Typography sx={{ fontFamily: "'Geist',sans-serif", fontSize: "12px", fontWeight: 600, color: "#262E38", lineHeight: "100%" }}>
-                          [{i + 1}] {source.title}
-                        </Typography>
-                        <Typography sx={{ fontFamily: "'Geist'", fontSize: "11px", fontWeight: 400, color: "#667080", lineHeight: "100%" }}>
-                          {source.journal}
-                        </Typography>
-                        <Typography sx={{ fontFamily: "'Geist'", fontSize: "11px", fontWeight: 400, color: "#00BCD4", lineHeight: "100%", cursor: "pointer", "&:hover": { textDecoration: "underline" } }}>
-                          {source.doi}
-                        </Typography>
-                      </Box>
-                    ))}
-                  </Box>
-                )}
-              </Box>
-            </Box>
-          </Box>
-
-          {/* Action Buttons */}
-          <Box sx={{ display: "flex", gap: "12px", mt: "16px" }}>
-            <Button onClick={() => setShowBranchDialog(true)} variant="outlined" sx={{ textTransform: "none", fontFamily: FONT, fontSize: "13px", color: TEXT_DARK, borderColor: BORDER, p: "6px 16px" }}>
-              Branch
-            </Button>
-            <Button variant="outlined" sx={{ textTransform: "none", fontFamily: FONT, fontSize: "13px", color: TEXT_DARK, borderColor: BORDER, p: "6px 16px" }}>
-              Rerun
-            </Button>
-            <Button variant="outlined" sx={{ textTransform: "none", fontFamily: FONT, fontSize: "13px", color: TEXT_DARK, borderColor: BORDER, p: "6px 16px" }}>
-              Export
-            </Button>
-          </Box>
-        </AccordionDetails>
-      </Accordion>
-      </Box>
-
-      {/* SUB-GRAPH Accordion - accordion style matching TXKG */}
-      <Box sx={{ p: "4px 0" }}>
-        <Accordion
-          expanded={expandedAccordion === "subgraph"}
-          onChange={() => setExpandedAccordion(expandedAccordion === "subgraph" ? "" : "subgraph")}
-          sx={{ border: `1px solid ${BORDER}`, borderRadius: "10px !important", "&:before": { display: "none" }, boxShadow: "none", bgcolor: "#FFFFFF" }}
-        >
-          <AccordionSummary
-            expandIcon={<ExpandMoreOutlined sx={{ color: "#94A3B8", width: 20, height: 20 }} />}
-            sx={{
-              minHeight: "48px",
-              p: "8px 16px",
-              "&.Mui-expanded": { minHeight: "48px" },
-              "& .MuiAccordionSummary-content": { margin: 0, alignItems: "center" }
-            }}
-          >
-            <Box sx={{ display: "flex", alignItems: "center", gap: "10px", width: "100%" }}>
-              <Box sx={{ width: 32, height: 32, borderRadius: "8px", bgcolor: "#F0FDF9", border: "1px solid #00BCD4", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 0L8.5 5.5L14 7L8.5 8.5L7 14L5.5 8.5L0 7L5.5 5.5L7 0Z" fill="#00BCD4"/></svg>
-              </Box>
-              <Typography sx={{ flex: 1, fontFamily: "'Geist', sans-serif", fontSize: "12px", fontWeight: 700, color: "#00BCD4", textTransform: "uppercase" }}>
-                SUBGRAPH
-              </Typography>
-            </Box>
-          </AccordionSummary>
-          <AccordionDetails sx={{ p: "16px" }}>
-            <Typography sx={{ fontFamily: FONT, fontSize: "15px", fontWeight: 400, color: TEXT_DARK, lineHeight: "22px", mb: "12px" }}>
-              Here is the generated knowledge graph for Type 2 Diabetes. This map illustrates the validated and predicted relationships between JAK2, drug molecules, associated pathways, and overlapping diseases based on TxKG relations:
-            </Typography>
-            <Box sx={{ borderRadius: "12px", overflow: "hidden", lineHeight: 0 }}>
-              <svg viewBox="0 0 840 360" width="100%" style={{maxWidth: 840}} xmlns="http://www.w3.org/2000/svg">
-                <rect width="840" height="360" fill="#0F172A" rx="12" />
-                {Array.from({ length: 15 }, (_, c) => Array.from({ length: 13 }, (_, r) => (
-                  <circle key={`d-${c}-${r}`} cx={c * 60} cy={r * 30} r="1" fill="white" opacity="0.07" />
-                )))}
-                {[[400,165,240,75],[400,165,500,60],[400,165,620,125],[400,165,140,175],[400,165,440,105],[400,165,220,265],[400,165,340,280],[400,165,110,255],[400,165,610,245],[400,165,500,275],[400,165,700,155],[400,165,680,295],[240,75,110,255],[240,75,610,245],[440,105,500,275],[140,175,220,265]].map(([x1,y1,x2,y2],i) => (
-                  <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="rgba(102,115,140,0.4)" strokeWidth="1.2" />
-                ))}
-                <circle cx="400" cy="165" r="26" fill="#1F2433" /><text x="400" y="200" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Geist,sans-serif" fontWeight="500">Type 2 Diabetes</text>
-                <circle cx="240" cy="75" r="17" fill="#F28C33" /><text x="240" y="102" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Geist,sans-serif" fontWeight="500">JAK2</text>
-                <circle cx="500" cy="60" r="15" fill="#F28C33" /><text x="500" y="86" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Geist,sans-serif" fontWeight="500">DPP4</text>
-                <circle cx="620" cy="125" r="14" fill="#F28C33" /><text x="620" y="150" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Geist,sans-serif" fontWeight="500">GLP1R</text>
-                <circle cx="140" cy="175" r="14" fill="#F28C33" /><text x="140" y="200" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Geist,sans-serif" fontWeight="500">SGLT2</text>
-                <circle cx="440" cy="105" r="12" fill="#F28C33" /><text x="440" y="128" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Geist,sans-serif" fontWeight="500">INSR</text>
-                <circle cx="220" cy="265" r="15" fill="#8C4DBF" /><text x="220" y="291" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Geist,sans-serif" fontWeight="500">Metformin</text>
-                <circle cx="340" cy="280" r="14" fill="#8C4DBF" /><text x="340" y="305" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Geist,sans-serif" fontWeight="500">Imatinib</text>
-                <circle cx="110" cy="255" r="12" fill="#8C4DBF" /><text x="110" y="278" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Geist,sans-serif" fontWeight="500">Ruxolitinib</text>
-                <circle cx="610" cy="245" r="15" fill="#149E99" /><text x="610" y="271" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Geist,sans-serif" fontWeight="500">JAK-STAT</text>
-                <circle cx="500" cy="275" r="13" fill="#149E99" /><text x="500" y="299" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Geist,sans-serif" fontWeight="500">Insulin Sig.</text>
-                <circle cx="700" cy="155" r="11" fill="#F25966" /><text x="700" y="177" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Geist,sans-serif" fontWeight="500">Obesity</text>
-                <circle cx="680" cy="295" r="12" fill="#F25966" /><text x="680" y="320" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Geist,sans-serif" fontWeight="500">Type 2 Diabetes</text>
-                <circle cx="24" cy="341" r="4" fill="#1F2433" /><text x="32" y="345" fill="#B3BAC7" fontSize="9" fontFamily="Geist,sans-serif" fontWeight="600">Disease Hub</text>
-                <circle cx="100" cy="341" r="4" fill="#F28C33" /><text x="108" y="345" fill="#B3BAC7" fontSize="9" fontFamily="Geist,sans-serif" fontWeight="600">Protein</text>
-                <circle cx="154" cy="341" r="4" fill="#149E99" /><text x="162" y="345" fill="#B3BAC7" fontSize="9" fontFamily="Geist,sans-serif" fontWeight="600">Pathway</text>
-                <circle cx="216" cy="341" r="4" fill="#8C4DBF" /><text x="224" y="345" fill="#B3BAC7" fontSize="9" fontFamily="Geist,sans-serif" fontWeight="600">Compound</text>
-                <circle cx="286" cy="341" r="4" fill="#F25966" /><text x="294" y="345" fill="#B3BAC7" fontSize="9" fontFamily="Geist,sans-serif" fontWeight="600">Comorbidity</text>
-              </svg>
-            </Box>
-            <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", p: "16px", bgcolor: "#F8FAFC", border: `1px solid ${BORDER}`, borderRadius: "8px", mt: "12px" }}>
-              {[{label:"RELATIONSHIPS FOUND",value:"52",unit:"relations"},{label:"DRUG CANDIDATES",value:"15",unit:"candidates"},{label:"PATHWAY CONNECTIONS",value:"10",unit:"connections"}].map((stat,i,arr) => (
-                <React.Fragment key={i}>
-                  <Box sx={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                    <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#475569", textTransform: "uppercase" }}>{stat.label}</Typography>
-                    <Typography sx={{ fontFamily: FONT, fontSize: "20px", fontWeight: 700, color: "#0F172A", lineHeight: "26px" }}>
-                      {stat.value} <Typography component="span" sx={{ fontSize: "14px", fontWeight: 400 }}>{stat.unit}</Typography>
-                    </Typography>
-                  </Box>
-                  {i < arr.length - 1 && <Box sx={{ width: "1px", height: "40px", bgcolor: BORDER }} />}
-                </React.Fragment>
-              ))}
-            </Box>
-            <Box sx={{ display: "flex", gap: "12px", mt: "12px" }}>
-              {["Branch","Rerun","Export"].map(label => (
-                <Button key={label} sx={{ textTransform: "none", fontFamily: FONT, fontSize: "14px", fontWeight: 600, color: "#1E293B", bgcolor: "#FFFFFF", border: `1px solid ${BORDER}`, borderRadius: "8px", p: "10px 16px" }}>{label}</Button>
-              ))}
-            </Box>
-          </AccordionDetails>
-        </Accordion>
-      </Box>
-
-      {/* METAPATH Accordion - accordion style matching TXKG */}
-      <Box sx={{ p: "4px 0" }}>
-        <Accordion
-          expanded={expandedAccordion === "metapath"}
-          onChange={() => setExpandedAccordion(expandedAccordion === "metapath" ? "" : "metapath")}
-          sx={{ border: `1px solid ${BORDER}`, borderRadius: "10px !important", "&:before": { display: "none" }, boxShadow: "none", bgcolor: "#FFFFFF" }}
-        >
-          <AccordionSummary
-            expandIcon={<ExpandMoreOutlined sx={{ color: "#94A3B8", width: 20, height: 20 }} />}
-            sx={{
-              minHeight: "48px",
-              p: "8px 16px",
-              "&.Mui-expanded": { minHeight: "48px" },
-              "& .MuiAccordionSummary-content": { margin: 0, alignItems: "center" }
-            }}
-          >
-            <Box sx={{ display: "flex", alignItems: "center", gap: "10px", width: "100%" }}>
-              <Box sx={{ width: 32, height: 32, borderRadius: "8px", bgcolor: "#F0FDF9", border: "1px solid #00BCD4", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 0L8.5 5.5L14 7L8.5 8.5L7 14L5.5 8.5L0 7L5.5 5.5L7 0Z" fill="#00BCD4"/></svg>
-              </Box>
-              <Typography sx={{ flex: 1, fontFamily: "'Geist', sans-serif", fontSize: "12px", fontWeight: 700, color: "#00BCD4", textTransform: "uppercase" }}>
-                METAPATH ANALYSIS
-              </Typography>
-            </Box>
-          </AccordionSummary>
-          <AccordionDetails sx={{ p: "16px" }}>
-            <Typography sx={{ fontFamily: "'Geist', sans-serif", fontSize: "16px", fontWeight: 700, color: "#111827", mb: "16px" }}>TxKG — Meta-Path Analysis</Typography>
-
-              {/* Stats Row */}
-              <Box sx={{ 
-                display: "flex",
-                alignItems: "center",
-                p: "12px 16px",
-                gap: "32px",
-                bgcolor: "#F9FAFB",
-                border: `1px solid ${BORDER}`,
-                borderRadius: "8px"
-              }}>
-                {[
-                  { value: "12", label: "Paths" },
-                  { value: "8", label: "Targets" },
-                  { value: "5", label: "Pathways" },
-                  { value: "1.5", label: "Avg/Target" },
-                  { value: "24", label: "Nodes" },
-                  { value: "38", label: "Edges" },
-                  { value: "4", label: "Clusters" }
-                ].map((stat, i) => (
-                  <Box key={i} sx={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                    <Typography sx={{ 
-                      fontFamily: "'Geist', sans-serif", 
-                      fontSize: "16px", 
-                      fontWeight: 700, 
-                      color: "#111827",
-                      lineHeight: "19px"
-                    }}>
-                      {stat.value}
-                    </Typography>
-                    <Typography sx={{ 
-                      fontFamily: "'Geist', sans-serif", 
-                      fontSize: "11px", 
-                      fontWeight: 400,
-                      color: "#6B7280",
-                      lineHeight: "13px"
-                    }}>
-                      {stat.label}
-                    </Typography>
-                  </Box>
-                ))}
-              </Box>
-
-              {/* Content Columns */}
-              <Box sx={{ display: "flex", gap: "16px", mt: "16px" }}>
-                {/* Target Prediction Scores */}
-                <Box sx={{ flex: 1, display: "flex", flexDirection: "column", gap: "6px" }}>
-                  <Typography sx={{ 
-                    fontFamily: "'Geist', sans-serif", 
-                    fontSize: "13px", 
-                    fontWeight: 600, 
-                    color: "#111827",
-                    lineHeight: "16px"
-                  }}>
-                    Target Prediction Scores
-                  </Typography>
-                  
-                  {[
-                    { name: "PPARG", desc: "Peroxisome proliferator-activated receptor gamma", score: "92" },
-                    { name: "DPP4", desc: "Dipeptidyl peptidase-4", score: "87" },
-                    { name: "GLP1R", desc: "Glucagon-like peptide-1 receptor", score: "79" },
-                    { name: "SGLT2", desc: "Sodium-glucose co-transporter 2", score: "71" },
-                    { name: "INSR", desc: "Insulin receptor", score: "65" }
-                  ].map((target, i) => (
-                    <Box key={i} sx={{ 
-                      display: "flex", 
-                      alignItems: "center",
-                      p: "8px 10px",
-                      gap: "8px",
-                      borderBottom: `1px solid ${BORDER}`
-                    }}>
-                      <Typography sx={{ 
-                        fontFamily: "'Geist', sans-serif", 
-                        fontSize: "13px", 
-                        fontWeight: 600, 
-                        color: "#111827",
-                        lineHeight: "16px"
-                      }}>
-                        {target.name}
-                      </Typography>
-                      <Typography sx={{ 
-                        flex: 1,
-                        fontFamily: "'Geist', sans-serif", 
-                        fontSize: "11px", 
-                        fontWeight: 400,
-                        color: "#6B7280",
-                        lineHeight: "13px"
-                      }}>
-                        {target.desc}
-                      </Typography>
-                      <Box sx={{ 
-                        display: "flex",
-                        alignItems: "center",
-                        p: "3px 8px",
-                        bgcolor: "#D1FAE5",
-                        borderRadius: "8px"
-                      }}>
-                        <Typography sx={{ 
-                          fontFamily: "'Geist', sans-serif", 
-                          fontSize: "11px", 
-                          fontWeight: 600, 
-                          color: "#059669",
-                          lineHeight: "13px"
-                        }}>
-                          {target.score}
-                        </Typography>
-                      </Box>
-                    </Box>
-                  ))}
-                </Box>
-
-                {/* Meta-Path Traversals */}
-                <Box sx={{ flex: 1, display: "flex", flexDirection: "column", gap: "6px" }}>
-                  <Typography sx={{ 
-                    fontFamily: "'Geist', sans-serif", 
-                    fontSize: "13px", 
-                    fontWeight: 600, 
-                    color: "#111827",
-                    lineHeight: "16px"
-                  }}>
-                    Meta-Path Traversals
-                  </Typography>
-                  
-                  {/* PPARG with expanded paths */}
-                  <Box sx={{ 
-                    display: "flex",
-                    flexDirection: "column",
-                    p: "10px 12px",
-                    gap: "6px",
-                    bgcolor: "#F9FAFB",
-                    borderRadius: "8px"
-                  }}>
-                    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                      <Typography sx={{ 
-                        fontFamily: "'Geist', sans-serif", 
-                        fontSize: "13px", 
-                        fontWeight: 600, 
-                        color: "#111827",
-                        lineHeight: "16px"
-                      }}>
-                        PPARG
-                      </Typography>
-                      <Box sx={{ 
-                        display: "flex",
-                        alignItems: "center",
-                        p: "3px 8px",
-                        bgcolor: "#00BCD4",
-                        borderRadius: "8px"
-                      }}>
-                        <Typography sx={{ 
-                          fontFamily: "'Geist', sans-serif", 
-                          fontSize: "11px", 
-                          fontWeight: 600, 
-                          color: "#FFFFFF",
-                          lineHeight: "13px"
-                        }}>
-                          92
-                        </Typography>
-                      </Box>
-                    </Box>
-                    <Typography sx={{ fontFamily: "'Geist', sans-serif", fontSize: "11px", fontWeight: 400, color: "#6B7280", lineHeight: "13px" }}>• T2D → PPARG</Typography>
-                    <Typography sx={{ fontFamily: "'Geist', sans-serif", fontSize: "11px", fontWeight: 400, color: "#6B7280", lineHeight: "13px" }}>• T2D → Insulin resistance → PPARG</Typography>
-                    <Typography sx={{ fontFamily: "'Geist', sans-serif", fontSize: "11px", fontWeight: 400, color: "#6B7280", lineHeight: "13px" }}>• T2D → Thiazolidinediones → PPARG</Typography>
-                  </Box>
-
-                  {/* Other targets */}
-                  {[
-                    { name: "DPP4", path: "T2D → GLP-1 → DPP4", score: "87" },
-                    { name: "GLP1R", path: "T2D → Incretin → GLP1R", score: "79" },
-                    { name: "SGLT2", path: "T2D → Glucose → SGLT2", score: "71" },
-                    { name: "INSR", path: "T2D → Insulin sig. → INSR", score: "65" }
-                  ].map((item, i) => (
-                    <Box key={i} sx={{ 
-                      display: "flex", 
-                      alignItems: "center",
-                      p: "6px 12px",
-                      gap: "8px",
-                      borderBottom: `1px solid ${BORDER}`
-                    }}>
-                      <Typography sx={{ 
-                        fontFamily: "'Geist', sans-serif", 
-                        fontSize: "12px", 
-                        fontWeight: 500, 
-                        color: "#111827",
-                        lineHeight: "15px"
-                      }}>
-                        {item.name}
-                      </Typography>
-                      <Typography sx={{ 
-                        flex: 1,
-                        fontFamily: "'Geist', sans-serif", 
-                        fontSize: "11px", 
-                        fontWeight: 400,
-                        color: "#6B7280",
-                        lineHeight: "13px"
-                      }}>
-                        {item.path}
-                      </Typography>
-                      <Box sx={{ 
-                        display: "flex",
-                        alignItems: "center",
-                        p: "3px 8px",
-                        bgcolor: "#D1FAE5",
-                        borderRadius: "8px"
-                      }}>
-                        <Typography sx={{ 
-                          fontFamily: "'Geist', sans-serif", 
-                          fontSize: "11px", 
-                          fontWeight: 600, 
-                          color: "#059669",
-                          lineHeight: "13px"
-                        }}>
-                          {item.score}
-                        </Typography>
-                      </Box>
-                    </Box>
-                  ))}
-                </Box>
-              </Box>
-
-              {/* Action Buttons */}
-              <Box sx={{ display: "flex", gap: "10px", pt: "4px" }}>
-                <Button sx={{ 
-                  textTransform: "none", 
-                  fontFamily: "'Geist', sans-serif", 
-                  fontSize: "14px",
-                  fontWeight: 500,
-                  color: "#1E293B", 
-                  bgcolor: "#FFFFFF",
-                  border: `1px solid ${BORDER}`,
-                  borderRadius: "8px",
-                  p: "10px 16px",
-                  "&:hover": { bgcolor: "#F8FAFC" }
-                }}>
-                  Branch
-                </Button>
-                <Button sx={{ 
-                  textTransform: "none", 
-                  fontFamily: "'Geist', sans-serif", 
-                  fontSize: "14px",
-                  fontWeight: 500,
-                  color: "#1E293B", 
-                  bgcolor: "#FFFFFF",
-                  border: `1px solid ${BORDER}`,
-                  borderRadius: "8px",
-                  p: "10px 16px",
-                  "&:hover": { bgcolor: "#F8FAFC" }
-                }}>
-                  Rerun
-                </Button>
-                <Button sx={{ 
-                  textTransform: "none", 
-                  fontFamily: "'Geist', sans-serif", 
-                  fontSize: "14px",
-                  fontWeight: 500,
-                  color: "#333840", 
-                  bgcolor: "#FFFFFF",
-                  border: `1px solid ${BORDER}`,
-                  borderRadius: "8px",
-                  p: "10px 16px",
-                  "&:hover": { bgcolor: "#F8FAFC" }
-                }}>
-                  Export
-                </Button>
-              </Box>
-            </AccordionDetails>
-          </Accordion>
-        </Box>
-
-      {/* Ready for Literature Mining */}
-      <Box sx={{ border: "1.5px dashed rgba(0,188,212,0.6)", borderRadius: "12px", mt: "8px", bgcolor: "rgba(0,188,212,0.02)" }}>
-      <div className="agent-message-row-bridge">
-        <div className="agent-icon"></div>
-        
-        <div className="bridge-content">
-          <h3 className="bridge-header">READY FOR LITERATURE MINING</h3>
-          
-          <p className="bridge-message">
-            TxKG analysis is complete. Would you like to proceed to LitMinex with the recommended targets, or select specific targets from the identified list?
-          </p>
-
-          <div className="option-cards">
-            {/* Card Recommended */}
-            <div className="option-card">
-              <h4 className="option-card-title">Proceed with Recommended Targets</h4>
-              <p className="option-card-description">
-                Run LitMinex on all 10 identified targets ranked by therapeutic relevance
-              </p>
-              <button 
-                className="option-card-button primary"
-                onClick={() => {
-                  setActiveStep(1);
-                  setWorkflowPhase("litminex-loading");
-                }}
-              >
-                <span className="option-card-button-label">Use recommended targets</span>
-              </button>
-            </div>
-
-            {/* Card Custom */}
-            <div className="option-card">
-              <h4 className="option-card-title">Select Custom Targets</h4>
-              <p className="option-card-description">
-                Choose specific targets from the list or enter your own for literature mining
-              </p>
-              <button 
-                className="option-card-button secondary"
-                onClick={() => setWorkflowPhase("target-selection")}
-              >
-                <span className="option-card-button-label">Select Targets</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-      </Box>
-    </Box>
-  );
-
-  // Target Selection (Figma Image 4) - shows collapsed accordions + selection panel
-  const renderTargetSelection = () => (
-    <Box sx={{ p: "24px 40px 0 40px", bgcolor: GRAY_BG }}>
-      {/* User Query Box - wider to match TxKG results */}
-      <Box sx={{ display: "flex", justifyContent: "flex-end", p: "8px 0" }}>
-        <Box sx={{ bgcolor: USER_MSG_BG, border: `1px solid ${BORDER}`, borderRadius: "12px", p: "16px", maxWidth: "680px" }}>
-          <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEAL, textTransform: "uppercase", letterSpacing: "0.5px", mb: "12px" }}>DR. PRIYA (YOU)</Typography>
-          <Typography sx={{ fontFamily: FONT, fontSize: "15px", fontWeight: 400, color: TEXT_DARK, lineHeight: "22px" }}>{query}</Typography>
-        </Box>
-      </Box>
-
-      {/* TXKG Accordion - same real content as txkg-results */}
-      <Box sx={{ p: "4px 0" }}>
-        <Accordion
-          expanded={expandedAccordion === "txkg"}
-          onChange={() => setExpandedAccordion(expandedAccordion === "txkg" ? "" : "txkg")}
-          sx={{ border: `1px solid ${BORDER}`, borderRadius: "12px !important", "&:before": { display: "none" }, boxShadow: "none", bgcolor: "#FFFFFF" }}
-        >
-          <AccordionSummary
-            expandIcon={<ExpandMoreOutlined sx={{ color: "#6B7280" }} />}
-            sx={{ minHeight: "48px", p: "8px 16px", "&.Mui-expanded": { minHeight: "48px" }, "& .MuiAccordionSummary-content": { margin: 0, alignItems: "center" } }}
-          >
-            <Box sx={{ display: "flex", alignItems: "center", gap: "10px", width: "100%" }}>
-              <Box sx={{ width: 30, height: 30, borderRadius: "8px", bgcolor: "#F0FDF9", border: "1px solid #00BCD4", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 0L8.5 5.5L14 7L8.5 8.5L7 14L5.5 8.5L0 7L5.5 5.5L7 0Z" fill="#00BCD4"/></svg>
-              </Box>
-              <Typography sx={{ flex: 1, fontFamily: "'Geist', sans-serif", fontSize: "12px", fontWeight: 700, color: "#00BCD4", textTransform: "uppercase", letterSpacing: "0.05em" }}>TXKG</Typography>
-            </Box>
-          </AccordionSummary>
-          <AccordionDetails sx={{ p: "16px" }}>
-            <Typography sx={{ fontFamily: FONT, fontSize: "15px", color: TEXT_DARK, lineHeight: "22px", mb: "12px" }}>
-              I found 10 protein targets strongly associated with Type 2 Diabetes pathways. Here are the top candidates ranked by therapeutic relevance:
-            </Typography>
-            {/* Same two-column layout as txkg-results */}
-            <Box sx={{ display: "flex", gap: "12px" }}>
-              <Box sx={{ flex: "0 0 52%", minWidth: 0 }}>
-                <Box sx={{ border: `1px solid ${BORDER}`, borderRadius: "8px", overflow: "hidden" }}>
-                  <Box sx={{ display: "flex", bgcolor: GRAY_BG, p: "10px 12px", borderBottom: `1px solid ${BORDER}` }}>
-                    {["UNIPROT ID","TARGET","SCORE"].map((h,i) => <Typography key={i} sx={{ flex: i===1?1:"0 0 100px", fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase", textAlign: i===2?"right":"left" }}>{h}</Typography>)}
-                  </Box>
-                  {mockTargets.map((t,i) => (
-                    <Box key={t.id} sx={{ display: "flex", p: "10px 12px", borderBottom: i<mockTargets.length-1?`1px solid ${BORDER}`:"none" }}>
-                      <Typography sx={{ flex: "0 0 100px", fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: TEAL }}>{t.id}</Typography>
-                      <Typography sx={{ flex: 1, fontFamily: FONT, fontSize: "13px", color: TEXT_DARK }}>{t.name}</Typography>
-                      <Typography sx={{ flex: "0 0 100px", fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: TEXT_DARK, textAlign: "right" }}>{t.score}</Typography>
-                    </Box>
-                  ))}
-                </Box>
-              </Box>
-              {/* Insights panel */}
-              <Box sx={{ flex: 1, border: `1px solid ${BORDER}`, borderRadius: "8px", overflow: "hidden" }}>
-                <Box sx={{ bgcolor: GRAY_BG, p: "10px 12px", borderBottom: `1px solid ${BORDER}` }}>
-                  <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 700, color: INSIGHTS_HEADER }}>Insights</Typography>
-                  <Typography sx={{ fontFamily: FONT, fontSize: "10px", color: TEXT_MUTED, mt: "2px" }}>AI-powered target recommendations and Q&A</Typography>
-                </Box>
-                <Box sx={{ borderBottom: `1px solid ${BORDER}`, px: "4px" }}>
-                  <Tabs value={insightTab} onChange={(_,v) => setInsightTab(v)} TabIndicatorProps={{ style: { display: "none" } }}
-                    sx={{ minHeight: "32px", "& .MuiTab-root": { minHeight: "28px", p: "4px 10px", textTransform: "none", fontFamily: FONT, fontSize: "10px", fontWeight: 600, color: TEXT_MUTED, "&.Mui-selected": { color: ACTIVE_TAB } } }}>
-                    <Tab label="Interpretation" /><Tab label="Recommendations" /><Tab label="Sources" />
-                  </Tabs>
-                </Box>
-                <Box sx={{ p: "12px", maxHeight: "320px", overflowY: "auto" }}>
-                  {insightTab === 0 && <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: "#404552", lineHeight: "160%" }}>The predicted therapeutic targets for Type 2 Diabetes suggest a potential mechanism of action involving the modulation of insulin signaling pathways, particularly those regulated by JAK2 and DPP4.</Typography>}
-                  {insightTab === 1 && (
-                    <Box sx={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                      {[{target:"JAK2",status:"High",desc:"Best entry point for insulin signaling inhibition."},{target:"DPP4",status:"High",desc:"Well-validated with existing gliptin class drugs."},{target:"GLP1R",status:"Medium",desc:"Incretin pathway modulation for glucose-dependent insulin secretion."}].map((r,i) => (
-                        <Box key={i} sx={{ p: "8px 10px", bgcolor: "#FAFCFF", border: `1px solid ${BORDER}`, borderRadius: "6px" }}>
-                          <Box sx={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                            <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 600, color: "#1A1A26" }}>{r.target}</Typography>
-                            <Chip label={r.status} size="small" sx={{ height: "16px", bgcolor: r.status==="High"?"rgba(20,158,133,0.12)":"rgba(217,140,26,0.12)", color: r.status==="High"?"#00BCD4":"#D98C1A", fontFamily: FONT, fontSize: "10px", fontWeight: 600, "& .MuiChip-label": { px: "6px" } }} />
-                          </Box>
-                          <Typography sx={{ fontFamily: FONT, fontSize: "11px", color: "#4D5461", mt: "2px" }}>{r.desc}</Typography>
-                        </Box>
-                      ))}
-                    </Box>
-                  )}
-                  {insightTab === 2 && (
-                    <Box sx={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                      {[{title:"JAK2 inhibition in Type 2 Diabetes",j:"Nature Reviews Drug Discovery, 2023",doi:"DOI: 10.1038/nrd.2023.142"},{title:"DPP4 inhibitors and cardiovascular outcomes",j:"The Lancet, 2022",doi:"DOI: 10.1016/S2213-8587(22)00156-2"}].map((s,i) => (
-                        <Box key={i}>
-                          <Typography sx={{ fontFamily: "'Geist',sans-serif", fontSize: "11px", fontWeight: 600, color: "#262E38" }}>[{i+1}] {s.title}</Typography>
-                          <Typography sx={{ fontFamily: "'Geist',sans-serif", fontSize: "11px", color: "#667080" }}>{s.j}</Typography>
-                          <Typography sx={{ fontFamily: "'Geist',sans-serif", fontSize: "11px", color: "#00BCD4", cursor: "pointer" }}>{s.doi}</Typography>
-                        </Box>
-                      ))}
-                    </Box>
-                  )}
-                </Box>
-              </Box>
-            </Box>
-            <Box sx={{ display: "flex", gap: "12px", mt: "12px" }}>
-              {["Branch","Rerun","Export"].map(l => <Button key={l} sx={{ textTransform: "none", fontFamily: FONT, fontSize: "13px", color: TEXT_DARK, bgcolor: "#FFFFFF", border: `1px solid ${BORDER}`, borderRadius: "8px", px: "16px", py: "6px" }}>{l}</Button>)}
-            </Box>
-          </AccordionDetails>
-        </Accordion>
-      </Box>
-
-      {/* SUB-GRAPH Accordion - same real content */}
-      <Box sx={{ p: "4px 0" }}>
-        <Accordion
-          expanded={expandedAccordion === "subgraph"}
-          onChange={() => setExpandedAccordion(expandedAccordion === "subgraph" ? "" : "subgraph")}
-          sx={{ border: `1px solid ${BORDER}`, borderRadius: "12px !important", "&:before": { display: "none" }, boxShadow: "none", bgcolor: "#FFFFFF" }}
-        >
-          <AccordionSummary
-            expandIcon={<ExpandMoreOutlined sx={{ color: "#6B7280" }} />}
-            sx={{ minHeight: "48px", p: "8px 16px", "&.Mui-expanded": { minHeight: "48px" }, "& .MuiAccordionSummary-content": { margin: 0, alignItems: "center" } }}
-          >
-            <Box sx={{ display: "flex", alignItems: "center", gap: "10px", width: "100%" }}>
-              <Box sx={{ width: 30, height: 30, borderRadius: "8px", bgcolor: "#F0FDF9", border: "1px solid #00BCD4", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 0L8.5 5.5L14 7L8.5 8.5L7 14L5.5 8.5L0 7L5.5 5.5L7 0Z" fill="#00BCD4"/></svg>
-              </Box>
-              <Typography sx={{ flex: 1, fontFamily: "'Geist', sans-serif", fontSize: "12px", fontWeight: 700, color: "#00BCD4", textTransform: "uppercase", letterSpacing: "0.05em" }}>SUBGRAPH</Typography>
-            </Box>
-          </AccordionSummary>
-          <AccordionDetails sx={{ p: "16px" }}>
-            <Typography sx={{ fontFamily: FONT, fontSize: "15px", color: TEXT_DARK, lineHeight: "22px", mb: "12px" }}>
-              Here is the generated knowledge graph for Type 2 Diabetes:
-            </Typography>
-            <Box sx={{ borderRadius: "12px", overflow: "hidden", lineHeight: 0 }}>
-              <svg viewBox="0 0 840 360" width="100%" style={{maxWidth:840}} xmlns="http://www.w3.org/2000/svg">
-                <rect width="840" height="360" fill="#0F172A" rx="12" />
-                {[[400,165,240,75],[400,165,500,60],[400,165,620,125],[400,165,140,175],[400,165,440,105],[400,165,220,265],[400,165,340,280],[400,165,110,255],[400,165,610,245],[400,165,500,275],[400,165,700,155],[400,165,680,295],[240,75,110,255],[240,75,610,245],[440,105,500,275],[140,175,220,265]].map(([x1,y1,x2,y2],i)=>(<line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="rgba(102,115,140,0.4)" strokeWidth="1.2"/>))}
-                <circle cx="400" cy="165" r="26" fill="#1F2433"/><text x="400" y="200" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Geist,sans-serif">Type 2 Diabetes</text>
-                <circle cx="240" cy="75" r="17" fill="#F28C33"/><text x="240" y="102" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Geist,sans-serif">JAK2</text>
-                <circle cx="500" cy="60" r="15" fill="#F28C33"/><text x="500" y="86" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Geist,sans-serif">DPP4</text>
-                <circle cx="620" cy="125" r="14" fill="#F28C33"/><text x="620" y="150" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Geist,sans-serif">GLP1R</text>
-                <circle cx="140" cy="175" r="14" fill="#F28C33"/><text x="140" y="200" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Geist,sans-serif">SGLT2</text>
-                <circle cx="220" cy="265" r="15" fill="#8C4DBF"/><text x="220" y="291" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Geist,sans-serif">Metformin</text>
-                <circle cx="610" cy="245" r="15" fill="#149E99"/><text x="610" y="271" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Geist,sans-serif">JAK-STAT</text>
-                <circle cx="700" cy="155" r="11" fill="#F25966"/><text x="700" y="177" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Geist,sans-serif">Obesity</text>
-                <circle cx="24" cy="341" r="4" fill="#1F2433"/><text x="32" y="345" fill="#B3BAC7" fontSize="9" fontFamily="Geist,sans-serif" fontWeight="600">Disease Hub</text>
-                <circle cx="100" cy="341" r="4" fill="#F28C33"/><text x="108" y="345" fill="#B3BAC7" fontSize="9" fontFamily="Geist,sans-serif" fontWeight="600">Protein</text>
-                <circle cx="154" cy="341" r="4" fill="#149E99"/><text x="162" y="345" fill="#B3BAC7" fontSize="9" fontFamily="Geist,sans-serif" fontWeight="600">Pathway</text>
-                <circle cx="216" cy="341" r="4" fill="#8C4DBF"/><text x="224" y="345" fill="#B3BAC7" fontSize="9" fontFamily="Geist,sans-serif" fontWeight="600">Compound</text>
-              </svg>
-            </Box>
-            {/* Stats card - Relationships Found / Drug Candidates / Pathway Connections */}
-            <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", p: "16px", bgcolor: GRAY_BG, border: `1px solid ${BORDER}`, borderRadius: "8px", mt: "12px" }}>
-              {[
-                { label: "RELATIONSHIPS FOUND", value: "52", unit: "relations" },
-                { label: "DRUG CANDIDATES", value: "15", unit: "candidates" },
-                { label: "PATHWAY CONNECTIONS", value: "10", unit: "connections" }
-              ].map((stat, i, arr) => (
-                <React.Fragment key={i}>
-                  <Box>
-                    <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#475569", textTransform: "uppercase" }}>{stat.label}</Typography>
-                    <Typography sx={{ fontFamily: FONT, fontSize: "20px", fontWeight: 700, color: TEXT_DARK }}>
-                      {stat.value} <Typography component="span" sx={{ fontSize: "13px", fontWeight: 400 }}>{stat.unit}</Typography>
-                    </Typography>
-                  </Box>
-                  {i < arr.length - 1 && <Box sx={{ width: "1px", height: "40px", bgcolor: BORDER }} />}
-                </React.Fragment>
-              ))}
-            </Box>
-            <Box sx={{ display: "flex", gap: "12px", mt: "12px" }}>
-              {["Branch","Rerun","Export"].map(l => <Button key={l} sx={{ textTransform: "none", fontFamily: FONT, fontSize: "13px", color: TEXT_DARK, bgcolor: "#FFFFFF", border: `1px solid ${BORDER}`, borderRadius: "8px", px: "16px", py: "6px" }}>{l}</Button>)}
-            </Box>
-          </AccordionDetails>
-        </Accordion>
-      </Box>
-
-      {/* METAPATH Accordion - same real content */}
-      <Box sx={{ p: "4px 0" }}>
-        <Accordion
-          expanded={expandedAccordion === "metapath"}
-          onChange={() => setExpandedAccordion(expandedAccordion === "metapath" ? "" : "metapath")}
-          sx={{ border: `1px solid ${BORDER}`, borderRadius: "12px !important", "&:before": { display: "none" }, boxShadow: "none", bgcolor: "#FFFFFF" }}
-        >
-          <AccordionSummary
-            expandIcon={<ExpandMoreOutlined sx={{ color: "#6B7280" }} />}
-            sx={{ minHeight: "48px", p: "8px 16px", "&.Mui-expanded": { minHeight: "48px" }, "& .MuiAccordionSummary-content": { margin: 0, alignItems: "center" } }}
-          >
-            <Box sx={{ display: "flex", alignItems: "center", gap: "10px", width: "100%" }}>
-              <Box sx={{ width: 30, height: 30, borderRadius: "8px", bgcolor: "#F0FDF9", border: "1px solid #00BCD4", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 0L8.5 5.5L14 7L8.5 8.5L7 14L5.5 8.5L0 7L5.5 5.5L7 0Z" fill="#00BCD4"/></svg>
-              </Box>
-              <Typography sx={{ flex: 1, fontFamily: "'Geist', sans-serif", fontSize: "12px", fontWeight: 700, color: "#00BCD4", textTransform: "uppercase", letterSpacing: "0.05em" }}>METAPATH ANALYSIS</Typography>
-            </Box>
-          </AccordionSummary>
-          <AccordionDetails sx={{ p: "16px" }}>
-            <Typography sx={{ fontFamily: "'Geist',sans-serif", fontSize: "16px", fontWeight: 700, color: "#111827", mb: "12px" }}>TxKG — Meta-Path Analysis</Typography>
-            {/* Stats row: 12 Paths, 8 Targets, 5 Pathways, 1.5 Avg/Target, 24 Nodes, 38 Edges, 4 Clusters */}
-            <Box sx={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "24px", p: "12px 16px", bgcolor: "#F9FAFB", border: `1px solid ${BORDER}`, borderRadius: "8px", mb: "16px" }}>
-              {[{v:"12",l:"Paths"},{v:"8",l:"Targets"},{v:"5",l:"Pathways"},{v:"1.5",l:"Avg/Target"},{v:"24",l:"Nodes"},{v:"38",l:"Edges"},{v:"4",l:"Clusters"}].map((s,i) => (
-                <Box key={i} sx={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                  <Typography sx={{ fontFamily: "'Geist',sans-serif", fontSize: "16px", fontWeight: 700, color: "#111827" }}>{s.v}</Typography>
-                  <Typography sx={{ fontFamily: "'Geist',sans-serif", fontSize: "11px", color: "#6B7280" }}>{s.l}</Typography>
-                </Box>
-              ))}
-            </Box>
-            <Box sx={{ display: "flex", gap: "16px" }}>
-              <Box sx={{ flex: 1 }}>
-                <Typography sx={{ fontFamily: "'Geist',sans-serif", fontSize: "13px", fontWeight: 600, color: "#111827", mb: "8px" }}>Target Prediction Scores</Typography>
-                {[{name:"PPARG",desc:"Peroxisome proliferator-activated receptor gamma",score:"92"},{name:"DPP4",desc:"Dipeptidyl peptidase-4",score:"87"},{name:"GLP1R",desc:"Glucagon-like peptide-1 receptor",score:"79"},{name:"SGLT2",desc:"Sodium-glucose co-transporter 2",score:"71"},{name:"INSR",desc:"Insulin receptor",score:"65"}].map((t,i) => (
-                  <Box key={i} sx={{ display:"flex", alignItems:"center", p:"8px 10px", gap:"8px", borderBottom:`1px solid ${BORDER}` }}>
-                    <Typography sx={{ fontFamily:"'Geist',sans-serif", fontSize:"13px", fontWeight:600, color:"#111827", minWidth:48 }}>{t.name}</Typography>
-                    <Typography sx={{ flex:1, fontFamily:"'Geist',sans-serif", fontSize:"11px", color:"#6B7280" }}>{t.desc}</Typography>
-                    <Box sx={{ p:"3px 8px", bgcolor:"#D1FAE5", borderRadius:"8px" }}><Typography sx={{ fontFamily:"'Geist',sans-serif", fontSize:"11px", fontWeight:600, color:"#059669" }}>{t.score}</Typography></Box>
-                  </Box>
-                ))}
-              </Box>
-              <Box sx={{ flex: 1 }}>
-                <Typography sx={{ fontFamily:"'Geist',sans-serif", fontSize:"13px", fontWeight:600, color:"#111827", mb:"8px" }}>Meta-Path Traversals</Typography>
-                {[{n:"PPARG",p:"T2D → PPARG / T2D → Insulin resistance → PPARG",s:"92",teal:true},{n:"DPP4",p:"T2D → GLP-1 → DPP4",s:"87"},{n:"GLP1R",p:"T2D → Incretin → GLP1R",s:"79"},{n:"SGLT2",p:"T2D → Glucose → SGLT2",s:"71"},{n:"INSR",p:"T2D → Insulin sig. → INSR",s:"65"}].map((item,i) => (
-                  <Box key={i} sx={{ display:"flex", alignItems:"center", p:"6px 10px", gap:"8px", borderBottom:`1px solid ${BORDER}` }}>
-                    <Typography sx={{ fontFamily:"'Geist',sans-serif", fontSize:"12px", fontWeight:500, color:"#111827", minWidth:44 }}>{item.n}</Typography>
-                    <Typography sx={{ flex:1, fontFamily:"'Geist',sans-serif", fontSize:"11px", color:"#6B7280" }}>{item.p}</Typography>
-                    <Box sx={{ p:"3px 8px", bgcolor:item.teal?"#00BCD4":"#D1FAE5", borderRadius:"8px" }}><Typography sx={{ fontFamily:"'Geist',sans-serif", fontSize:"11px", fontWeight:600, color:item.teal?"#FFFFFF":"#059669" }}>{item.s}</Typography></Box>
-                  </Box>
-                ))}
-              </Box>
-            </Box>
-            <Box sx={{ display: "flex", gap: "12px", mt: "12px" }}>
-              {["Branch","Export"].map(l => <Button key={l} sx={{ textTransform: "none", fontFamily: FONT, fontSize: "13px", color: TEXT_DARK, bgcolor: "#FFFFFF", border: `1px solid ${BORDER}`, borderRadius: "8px", px: "16px", py: "6px" }}>{l}</Button>)}
-            </Box>
-          </AccordionDetails>
-        </Accordion>
-      </Box>
-
-      {/* Target Selection Panel */}
-      <Box sx={{ bgcolor: "#FFFFFF", border: `1px solid ${BORDER}`, borderRadius: "12px", p: "20px", mb: "8px" }}>
-        <Typography sx={{ fontFamily: FONT, fontSize: "15px", fontWeight: 700, color: TEXT_DARK, mb: "4px" }}>
-          Select Targets for LitMinex
-        </Typography>
-        <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: TEXT_MUTED, mb: "16px" }}>
-          Choose from the identified targets or add your own
-        </Typography>
-
-        {mockTargets.map((target) => (
-          <Box key={target.id} sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", py: "10px", borderBottom: `1px solid ${BORDER}` }}>
-            <Box sx={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <Checkbox
-                checked={selectedTargets.includes(target.id)}
-                onChange={(e) => {
-                  if (e.target.checked) setSelectedTargets([...selectedTargets, target.id]);
-                  else setSelectedTargets(selectedTargets.filter(id => id !== target.id));
-                }}
-                sx={{ p: "4px", color: BORDER, "&.Mui-checked": { color: TEAL } }}
-              />
-              <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: selectedTargets.includes(target.id) ? 600 : 400, color: TEXT_DARK }}>
-                {target.name}
-              </Typography>
-            </Box>
-            <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: selectedTargets.includes(target.id) ? TEAL : TEXT_MUTED, fontWeight: selectedTargets.includes(target.id) ? 600 : 400 }}>
-              {target.score}
-            </Typography>
-          </Box>
-        ))}
-
-        {/* Add Custom Target */}
-        <Box sx={{ mt: "12px", mb: "16px" }}>
-          <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: TEXT_MUTED, mb: "8px" }}>Add custom target</Typography>
-          <TextField
-            placeholder="Add custom target (e.g. EGFR, VEGFR2...)"
-            fullWidth
-            size="small"
-            sx={{ "& .MuiOutlinedInput-root": { fontFamily: FONT, fontSize: "13px", borderRadius: "8px" } }}
-            InputProps={{ endAdornment: (
-              <IconButton size="small" sx={{ bgcolor: TEAL, borderRadius: "6px", p: "6px", "&:hover": { bgcolor: "#089B98" } }}>
-                <AddOutlined sx={{ fontSize: 16, color: "#FFFFFF" }} />
-              </IconButton>
-            )}}
-          />
-        </Box>
-
-        {/* Footer actions */}
-        <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: TEXT_DARK }}>
-            {selectedTargets.length} targets selected
-          </Typography>
-          <Box sx={{ display: "flex", gap: "12px" }}>
-            <Button onClick={() => setWorkflowPhase("txkg-results")} sx={{ textTransform: "none", fontFamily: FONT, fontSize: "13px", color: TEXT_DARK }}>
-              Cancel
-            </Button>
-            <Button
-              disabled={selectedTargets.length === 0}
-              onClick={() => { setActiveStep(1); setWorkflowPhase("litminex-loading"); }}
-              sx={{ bgcolor: TEAL, color: "#FFFFFF", textTransform: "none", fontFamily: FONT, fontSize: "13px", fontWeight: 600, px: "20px", borderRadius: "8px", "&:hover": { bgcolor: "#089B98" }, "&.Mui-disabled": { bgcolor: "#E2E8F0" } }}
-            >
-              Proceed to LitMinex
-            </Button>
-          </Box>
-        </Box>
-      </Box>
-    </Box>
-  );
-
-  const renderLitMinexLoading = () => (
-    <Box sx={{ p: "24px 16px 16px 16px", bgcolor: GRAY_BG }}>
-      {/* User Query Box */}
-      <Box sx={{ 
-        bgcolor: USER_MSG_BG, 
-        border: `1px solid ${BORDER}`, 
-        borderRadius: "12px", 
-        p: "16px", 
-        mb: "8px",
-        maxWidth: "680px",
-        width: "100%",
-        gap: "12px",
-        marginLeft: "auto"
-      }}>
-        <Typography sx={{ 
-          fontFamily: FONT, 
-          fontSize: "11px", 
-          fontWeight: 700, 
-          color: TEAL, 
-          textTransform: "uppercase", 
-          letterSpacing: "0.5px", 
-          mb: "12px" 
-        }}>
-          DR. PRIYA (YOU)
-        </Typography>
-        <Typography sx={{ fontFamily: FONT, fontSize: "15px", fontWeight: 400, color: TEXT_DARK, lineHeight: "22px" }}>
-          Mine literature for Type 2 Diabetes drug targets with confidence scoring
-        </Typography>
-      </Box>
-
-      {/* Loading Agent Card */}
-      <Box sx={{ 
-        bgcolor: "#FFFFFF", 
-        border: `1px solid ${BORDER}`, 
-        borderRadius: "12px", 
-        p: "16px",
-        width: "100%"
-      }}>
-        <Box sx={{ display: "flex", alignItems: "flex-start", gap: "16px" }}>
-          <Box sx={{ width: 30, height: 30, borderRadius: "8px", bgcolor: "#F0FDF9", border: "1px solid #00BCD4", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 0L8.5 5.5L14 7L8.5 8.5L7 14L5.5 8.5L0 7L5.5 5.5L7 0Z" fill="#00BCD4"/></svg>
-          </Box>
-
-          <Box sx={{ flex: 1 }}>
-            <Typography sx={{ 
-              fontFamily: FONT, 
-              fontSize: "13px", 
-              fontWeight: 700, 
-              color: TEXT_DARK, 
-              mb: "12px",
-              textTransform: "uppercase",
-              letterSpacing: "0.5px"
-            }}>
-              INOVAPATH LITMINEX AGENT
-            </Typography>
-
-            <Box sx={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <Box sx={{ display: "flex", gap: "6px", alignItems: "center" }}>
-                <Box sx={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
-                  bgcolor: TEAL,
-                  animation: "dot-pulse 1.4s ease-in-out infinite",
-                  "@keyframes dot-pulse": {
-                    "0%, 80%, 100%": { opacity: 0.3 },
-                    "40%": { opacity: 1 }
-                  }
-                }} />
-                <Box sx={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
-                  bgcolor: TEAL,
-                  animation: "dot-pulse 1.4s ease-in-out 0.2s infinite",
-                  "@keyframes dot-pulse": {
-                    "0%, 80%, 100%": { opacity: 0.3 },
-                    "40%": { opacity: 1 }
-                  }
-                }} />
-                <Box sx={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
-                  bgcolor: TEAL,
-                  animation: "dot-pulse 1.4s ease-in-out 0.4s infinite",
-                  "@keyframes dot-pulse": {
-                    "0%, 80%, 100%": { opacity: 0.3 },
-                    "40%": { opacity: 1 }
-                  }
-                }} />
-              </Box>
-              <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: TEXT_DARK }}>
-                Scanning PubMed and clinical databases for target literature...
-              </Typography>
-            </Box>
-          </Box>
-        </Box>
-      </Box>
-    </Box>
-  );
-
-  // Agent avatar: Figma spec — 30×30px, radius 8px, bg #F0FDF9, border 1px #00BCD4, sparkle 14×14
-  const AgentHeader = ({ label }) => (
-    <Box sx={{ display: "flex", alignItems: "center", gap: "12px", mb: "16px" }}>
-      <Box sx={{ width: 30, height: 30, borderRadius: "8px", bgcolor: "#F0FDF9", border: "1px solid #00BCD4", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 0L8.5 5.5L14 7L8.5 8.5L7 14L5.5 8.5L0 7L5.5 5.5L7 0Z" fill="#00BCD4"/></svg>
-      </Box>
-      <Typography sx={{ fontFamily: "'Geist', sans-serif", fontSize: "11px", fontWeight: 700, color: "#1E293B", textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</Typography>
-    </Box>
-  );
-
-  const renderLitMinexResults = () => {
-    const confidenceColor = (conf) => {
-      const n = parseInt(conf);
-      if (n >= 95) return { bg: "#D1FAE5", text: "#059669" };
-      if (n >= 85) return { bg: "#FEF9C3", text: "#854D0E" };
-      if (n >= 75) return { bg: "#FEF3C7", text: "#B45309" };
-      return { bg: "#FEE2E2", text: "#B91C1C" };
-    };
-    return (
-    <Box sx={{ p: "24px 40px 40px 40px", bgcolor: GRAY_BG }}>
-      {(() => {
-        const conversation = [
-          { role: "user", text: "Mine literature for Type 2 Diabetes drug targets with confidence scoring" },
-          ...chatMessages
-        ];
-
-        return conversation.map((msg, i) => (
-          msg.role === "user" ? (
-            <Box key={`${msg.role}-${i}`} sx={{ display: "flex", justifyContent: "flex-end", p: "8px 0" }}>
-              <Box sx={{ bgcolor: USER_MSG_BG, border: `1px solid ${BORDER}`, borderRadius: "12px", p: "16px", maxWidth: "680px" }}>
-                <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEAL, textTransform: "uppercase", mb: "8px" }}>DR. PRIYA (YOU)</Typography>
-                <Typography sx={{ fontFamily: FONT, fontSize: "15px", color: TEXT_DARK, lineHeight: "22px" }}>{msg.text}</Typography>
-              </Box>
-            </Box>
-          ) : (
-            <Box key={`${msg.role}-${i}`} sx={{ p: "8px 0" }}>
-              <Box sx={{ bgcolor: "#FFFFFF", border: `1px solid ${BORDER}`, borderRadius: "12px", p: "20px" }}>
-                <AgentHeader label="INOVAPATH LITMINEX AGENT" />
-                {msg.articleCard && (
-                  <Box sx={{ display: "flex", alignItems: "center", bgcolor: GRAY_BG, border: `1px solid ${BORDER}`, borderRadius: "8px", p: "12px 16px", mb: "12px", gap: "12px" }}>
-                    <Typography sx={{ fontSize: "20px", lineHeight: 1 }}>📄</Typography>
-                    <Box sx={{ flex: 1, minWidth: 0 }}>
-                      <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: TEXT_DARK, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{msg.articleCard.title}</Typography>
-                      <Typography sx={{ fontFamily: FONT, fontSize: "11px", color: TEXT_MUTED }}>{msg.articleCard.author}&nbsp;&nbsp;{msg.articleCard.year}</Typography>
-                    </Box>
-                    <IconButton size="small" sx={{ p: "2px" }}><CloseOutlined sx={{ fontSize: 14, color: TEXT_MUTED }} /></IconButton>
-                  </Box>
-                )}
-                <Typography sx={{ fontFamily: FONT, fontSize: "14px", color: TEXT_DARK, lineHeight: "22px" }}>{msg.text}</Typography>
-              </Box>
-            </Box>
-          )
-        ));
-      })()}
-
-      {/* Agent message row: padding 8px top/bottom, Fill 1120px */}
-      <Box sx={{ p: "8px 0" }}>
-        <Box sx={{ bgcolor: "#FFFFFF", border: `1px solid ${BORDER}`, borderRadius: "12px", p: "20px" }}>
-          <AgentHeader label="INOVAPATH LITMINEX AGENT" />
-          <Typography sx={{ fontFamily: FONT, fontSize: "14px", color: TEXT_DARK, mb: "16px" }}>
-            Literature mining complete. Found 124 articles across PubMed and clinical databases. Results ranked by confidence score with keyword extraction.
-          </Typography>
-
-          {/* content-columns: horizontal, Fill 1088px, gap 16px */}
-          <Box sx={{ display: "flex", gap: "16px" }}>
-            {/* left-col: Fixed 700px, gap 12px */}
-            <Box sx={{ width: "700px", flexShrink: 0, display: "flex", flexDirection: "column", gap: "12px" }}>
-              <Box sx={{ borderLeft: `3px solid ${TEAL}`, pl: "12px" }}>
-                <Typography sx={{ fontFamily: FONT, fontSize: "14px", fontWeight: 700, color: TEXT_DARK, mb: "8px" }}>Results - 124 articles found</Typography>
-                {/* Table header */}
-                <Box sx={{ display: "grid", gridTemplateColumns: "28px 32px 1fr 60px 120px 140px 36px", gap: "8px", px: "8px", py: "8px", borderBottom: `1px solid ${BORDER}` }}>
-                  <Box />
-                  <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase" }}>#</Typography>
-                  <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase" }}>Title</Typography>
-                  <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase" }}>Year</Typography>
-                  <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase" }}>Confidence Score</Typography>
-                  <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase" }}>Found Keywords</Typography>
-                  <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase" }}>Preview</Typography>
-                </Box>
-                {litMinexResults.map((article, idx) => {
-                  const cc = confidenceColor(article.confidence);
-                  return (
-                    <Box key={article.id} sx={{ display: "grid", gridTemplateColumns: "28px 32px 1fr 60px 120px 140px 36px", gap: "8px", px: "8px", py: "10px", borderBottom: `1px solid ${BORDER}`, bgcolor: idx === 0 ? "#F0FDFC" : "#FFFFFF", alignItems: "center" }}>
-                      <Checkbox size="small" checked={idx === 0} sx={{ p: 0, color: BORDER, "&.Mui-checked": { color: TEAL } }} />
-                      <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: TEXT_MUTED }}>{idx + 1}</Typography>
-                      <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: TEXT_DARK, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{article.title}</Typography>
-                      <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: TEXT_MUTED }}>{article.year}</Typography>
-                      <Box sx={{ bgcolor: cc.bg, borderRadius: "6px", p: "3px 8px", textAlign: "center" }}>
-                        <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: cc.text }}>{article.confidence}</Typography>
-                      </Box>
-                      <Typography sx={{ fontFamily: FONT, fontSize: "11px", color: TEXT_MUTED, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{article.keywords}</Typography>
-                      <IconButton size="small" onClick={() => { setSelectedArticle(article); setShowArticleDetail(true); }}>
-                        <VisibilityOutlined sx={{ fontSize: 16, color: TEAL }} />
-                      </IconButton>
-                    </Box>
-                  );
-                })}
-                {/* Pagination */}
-                <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", pt: "12px", px: "8px" }}>
-                  <Box sx={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                    {["‹", "1", "2", "3", "...", "12", "›"].map((p, i) => (
-                      <Box key={i} sx={{ width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "4px", bgcolor: p === "1" ? TEAL : "transparent", border: p === "1" ? "none" : `1px solid ${BORDER}`, cursor: "pointer" }}>
-                        <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: p === "1" ? "#FFFFFF" : TEXT_MUTED }}>{p}</Typography>
-                      </Box>
-                    ))}
-                    <Typography sx={{ fontFamily: FONT, fontSize: "11px", color: TEXT_MUTED, ml: "8px" }}>Showing 1-10 of 47 articles</Typography>
-                  </Box>
-                </Box>
-              </Box>
-              {/* Branch / Rerun / Export */}
-              <Box sx={{ display: "flex", gap: "12px" }}>
-                {["Branch", "Rerun", "Export"].map(label => (
-                  <Button key={label} sx={{ textTransform: "none", fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: TEXT_DARK, bgcolor: "#FFFFFF", border: `1px solid ${BORDER}`, borderRadius: "8px", px: "16px", py: "8px" }}>{label}</Button>
-                ))}
-              </Box>
-            </Box>
-
-            {/* ai-insights: Fill 372px, Fixed 605px, border #E2E8F0, padding 16px, gap 16px */}
-            <Box sx={{ flex: 1, border: "1px solid #E2E8F0", borderRadius: "8px", p: "16px", display: "flex", flexDirection: "column", gap: "16px", height: "605px", overflowY: "auto" }}>
-              <Typography sx={{ fontFamily: FONT, fontSize: "14px", fontWeight: 700, color: TEXT_DARK }}>Insights</Typography>
-              {litMinexResults[0] && (
-                /* novelty-card: bg #F9FAFB, border #00BCD4 at 40%, padding 12px, gap 8px */
-                <Box sx={{ bgcolor: "#F9FAFB", border: "1px solid rgba(0,194,181,0.4)", borderRadius: "8px", p: "12px", display: "flex", flexDirection: "column", gap: "8px" }}>
-                  <Typography sx={{ fontFamily: "'Geist', sans-serif", fontSize: "12px", fontWeight: 600, color: "#00BCD4", lineHeight: "100%" }}>Article Relevance</Typography>
-                  <Typography sx={{ fontFamily: "'Geist', sans-serif", fontSize: "11px", fontWeight: 400, color: "#6B7280", lineHeight: "100%" }}>
-                    This article demonstrates strong evidence for Metformin-JAK2 interaction with direct insulin signaling pathway involvement and therapeutic potential.
-                  </Typography>
-                </Box>
-              )}
-            </Box>
-          </Box>
-        </Box>
-      </Box>
-    </Box>
-  );
-  };
-
   // Article Detail Side Panel (Figma exact design)
   const ArticleDetailPanel = () => {
     if (!showArticleDetail || !selectedArticle) return null;
@@ -2437,334 +1340,6 @@ const CompleteWorkflow = () => {
     );
   };
 
-  const renderCurateXLoading = () => {
-    const curatexQuery = chatMessages.length > 0
-      ? chatMessages.filter(m => m.role === "user").slice(-1)[0]?.text
-      : "Generate a target candidate profile for JAK2.";
-    return (
-    <Box sx={{ p: "24px 40px 40px 40px", bgcolor: GRAY_BG }}>
-      {/* User message */}
-      <Box sx={{ display: "flex", justifyContent: "flex-end", p: "8px 0" }}>
-        <Box sx={{ bgcolor: USER_MSG_BG, border: `1px solid ${BORDER}`, borderRadius: "12px", p: "16px", maxWidth: "680px" }}>
-          <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEAL, textTransform: "uppercase", mb: "8px" }}>DR. PRIYA (YOU)</Typography>
-          <Typography sx={{ fontFamily: FONT, fontSize: "15px", color: TEXT_DARK, lineHeight: "22px" }}>{curatexQuery}</Typography>
-        </Box>
-      </Box>
-
-      {/* Agent loading card with progress bar and steps */}
-      <Box sx={{ p: "8px 0" }}>
-        <Box sx={{ bgcolor: "#FFFFFF", border: `1px solid ${BORDER}`, borderRadius: "12px", p: "24px" }}>
-          <AgentHeader label="INOVAPATH CURATEX AGENT" />
-          <Typography sx={{ fontFamily: FONT, fontSize: "14px", color: TEXT_DARK, mb: "20px" }}>
-            Searching for candidate compounds matching your JAK2 Target Profile...
-          </Typography>
-
-          {/* Progress bar */}
-          <Box sx={{ bgcolor: "#F1F5F9", borderRadius: "4px", height: "8px", mb: "20px", overflow: "hidden" }}>
-            <Box sx={{ bgcolor: TEAL, height: "100%", width: "40%", borderRadius: "4px",
-              animation: "progress-fill 2s ease-in-out forwards",
-              "@keyframes progress-fill": { from: { width: "10%" }, to: { width: "65%" } }
-            }} />
-          </Box>
-
-          {/* Step indicators */}
-          <Box sx={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-            {[
-              { label: "Analyzing target profile parameters...", done: true },
-              { label: "Scanning compound databases...", done: true },
-              { label: "Matching candidates against criteria...", done: false }
-            ].map((step, i) => (
-              <Box key={i} sx={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                {step.done ? (
-                  <Typography sx={{ fontSize: "14px", color: TEAL, lineHeight: 1 }}>&#10003;</Typography>
-                ) : (
-                  <Box sx={{ width: 14, height: 14, border: `2px solid ${TEAL}`, borderTopColor: "transparent", borderRadius: "50%",
-                    animation: "spin 1s linear infinite",
-                    "@keyframes spin": { from: { transform: "rotate(0deg)" }, to: { transform: "rotate(360deg)" } }
-                  }} />
-                )}
-                <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: step.done ? TEAL : TEXT_DARK }}>
-                  {step.label}
-                </Typography>
-              </Box>
-            ))}
-          </Box>
-        </Box>
-      </Box>
-    </Box>
-  );
-  };
-
-  const renderCurateXProfile = () => (
-    <Box sx={{ p: "24px 40px 40px 40px", bgcolor: GRAY_BG }}>
-      {/* Right-aligned user bubble */}
-      <Box sx={{ display: "flex", justifyContent: "flex-end", p: "8px 0" }}>
-        <Box sx={{ bgcolor: USER_MSG_BG, border: `1px solid ${BORDER}`, borderRadius: "12px", p: "16px", maxWidth: "680px" }}>
-          <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEAL, textTransform: "uppercase", letterSpacing: "0.5px", mb: "8px" }}>DR. PRIYA (YOU)</Typography>
-          <Typography sx={{ fontFamily: FONT, fontSize: "15px", color: TEXT_DARK, lineHeight: "22px" }}>
-            {profileEditMode ? "Please generate a Target Candidate Profile for JAK2." : "Generate a target candidate profile for JAK2."}
-          </Typography>
-        </Box>
-      </Box>
-
-      {/* Agent card */}
-      <Box sx={{ p: "8px 0" }}>
-        <Box sx={{ bgcolor: "#FFFFFF", border: `1px solid ${BORDER}`, borderRadius: "12px", p: "24px" }}>
-          <AgentHeader label="INOVAPATH CURATEX AGENT" />
-
-          <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: TEXT_DARK, mb: "16px" }}>
-            I've generated a Target Product Profile for JAK2. Review and adjust the parameters below, then submit to find matching candidates.
-          </Typography>
-
-          <Box sx={{ bgcolor: "#FFFFFF", border: `1px solid ${BORDER}`, borderRadius: "8px", p: "20px" }}>
-            <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: "16px" }}>
-              <Typography sx={{ fontFamily: FONT, fontSize: "15px", fontWeight: 700, color: TEXT_DARK }}>
-                Target Product Profile - JAK2
-              </Typography>
-            </Box>
-            
-            <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: TEXT_MUTED, mb: "20px" }}>
-              {profileEditMode 
-                ? "Editing mode — modify values below, then save changes"
-                : "Pre-filled parameters for repurposing candidate search"}
-            </Typography>
-
-            <Box sx={{ display: "grid", gridTemplateColumns: "1fr 2fr 1fr", gap: "16px" }}>
-              <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase" }}>
-                Property
-              </Typography>
-              <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase" }}>
-                Target Criterion
-              </Typography>
-              <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase" }}>
-                Weight
-              </Typography>
-
-              {Object.entries(profileData).map(([key, value]) => (
-                <React.Fragment key={key}>
-                  <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: TEXT_DARK, textTransform: "capitalize" }}>
-                    {key.replace(/([A-Z])/g, ' $1').trim()}
-                  </Typography>
-                  {profileEditMode ? (
-                    <TextField 
-                      value={value}
-                      onChange={(e) => setProfileData({ ...profileData, [key]: e.target.value })}
-                      size="small"
-                      fullWidth
-                      sx={{
-                        "& .MuiOutlinedInput-root": {
-                          fontFamily: FONT,
-                          fontSize: "13px",
-                          bgcolor: "#FFFFFF"
-                        }
-                      }}
-                    />
-                  ) : (
-                    <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: TEXT_DARK }}>
-                      {value}
-                    </Typography>
-                  )}
-                  <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: TEXT_MUTED }}>
-                    {profileEditMode ? "15%" : ""}
-                  </Typography>
-                  {profileEditMode && (
-                    <IconButton size="small" sx={{ gridColumn: "4 / 5" }}>
-                      <DeleteOutlineOutlined sx={{ fontSize: 18, color: TEXT_MUTED }} />
-                    </IconButton>
-                  )}
-                </React.Fragment>
-              ))}
-            </Box>
-
-            {profileEditMode && (
-              <Button
-                startIcon={<AddOutlined />}
-                sx={{ textTransform: "none", fontFamily: FONT, fontSize: "12px", color: TEAL, mt: "12px" }}
-              >
-                Add Parameter
-              </Button>
-            )}
-          </Box>
-
-          <Box sx={{ display: "flex", gap: "12px", mt: "20px" }}>
-            {profileEditMode ? (
-              <>
-                <Button 
-                  variant="contained"
-                  onClick={() => setProfileEditMode(false)}
-                  sx={{ 
-                    bgcolor: TEAL,
-                    color: "#FFFFFF",
-                    textTransform: "none",
-                    fontFamily: FONT,
-                    fontSize: "13px",
-                    fontWeight: 600,
-                    "&:hover": { bgcolor: "#089B98" }
-                  }}
-                >
-                  Save Changes
-                </Button>
-                <Button 
-                  variant="outlined"
-                  onClick={() => setProfileEditMode(false)}
-                  sx={{ 
-                    textTransform: "none",
-                    fontFamily: FONT,
-                    fontSize: "13px",
-                    color: TEXT_DARK,
-                    borderColor: BORDER
-                  }}
-                >
-                  Cancel
-                </Button>
-              </>
-            ) : (
-              <>
-                <Button 
-                  variant="contained"
-                  onClick={() => setWorkflowPhase("curatex-submitted")}
-                  sx={{ 
-                    bgcolor: TEAL,
-                    color: "#FFFFFF",
-                    textTransform: "none",
-                    fontFamily: FONT,
-                    fontSize: "13px",
-                    fontWeight: 600,
-                    "&:hover": { bgcolor: "#089B98" }
-                  }}
-                >
-                  Submit Profile
-                </Button>
-                <Button
-                  variant="outlined"
-                  onClick={() => setProfileEditMode(true)}
-                  sx={{ textTransform: "none", fontFamily: FONT, fontSize: "12px", color: TEAL, borderColor: BORDER }}
-                >
-                  Edit Values
-                </Button>
-              </>
-            )}
-          </Box>
-        </Box>
-      </Box>
-    </Box>
-  );
-
-  const renderCurateXResults = () => (
-    <Box sx={{ p: "24px 40px 40px 40px", bgcolor: GRAY_BG }}>
-      {/* Right-aligned user bubble */}
-      <Box sx={{ display: "flex", justifyContent: "flex-end", p: "8px 0" }}>
-        <Box sx={{ bgcolor: USER_MSG_BG, border: `1px solid ${BORDER}`, borderRadius: "12px", p: "16px", maxWidth: "680px" }}>
-          <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEAL, textTransform: "uppercase", letterSpacing: "0.5px", mb: "8px" }}>DR. PRIYA (YOU)</Typography>
-          <Typography sx={{ fontFamily: FONT, fontSize: "15px", color: TEXT_DARK, lineHeight: "22px" }}>Submit Profile</Typography>
-        </Box>
-      </Box>
-
-      {/* Agent card */}
-      <Box sx={{ p: "8px 0" }}>
-        <Box sx={{ bgcolor: "#FFFFFF", border: `1px solid ${BORDER}`, borderRadius: "12px", p: "24px" }}>
-          <AgentHeader label="INOVAPATH CURATEX AGENT" />
-
-          <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: TEXT_DARK, mb: "20px" }}>
-            Profile submitted. Scoring 124 compounds against your JAK2 target product profile. Here are the top candidates:
-          </Typography>
-
-          {/* Results Table */}
-          <Box sx={{ bgcolor: "#FFFFFF", borderRadius: "8px", overflow: "hidden", border: `1px solid ${BORDER}` }}>
-            {/* Table Header */}
-            <Box sx={{ 
-              display: "grid", 
-              gridTemplateColumns: "60px 1fr 2fr 1fr",
-              gap: "16px",
-              px: "16px",
-              py: "12px",
-              bgcolor: GRAY_BG,
-              borderBottom: `1px solid ${BORDER}`
-            }}>
-              <Typography sx={{ fontFamily: FONT, fontSize: "10px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase" }}>RANK</Typography>
-              <Typography sx={{ fontFamily: FONT, fontSize: "10px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase" }}>COMPOUND</Typography>
-              <Typography sx={{ fontFamily: FONT, fontSize: "10px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase" }}>MATCHED PROPERTIES</Typography>
-              <Typography sx={{ fontFamily: FONT, fontSize: "10px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase" }}>MISMATCHED</Typography>
-            </Box>
-
-            {/* Table Rows */}
-            {curateXResults.map((compound, index) => (
-              <Box 
-                key={compound.rank}
-                sx={{ 
-                  display: "grid", 
-                  gridTemplateColumns: "60px 1fr 2fr 1fr",
-                  gap: "16px",
-                  px: "16px",
-                  py: "14px",
-                  borderBottom: index < curateXResults.length - 1 ? `1px solid ${BORDER}` : "none",
-                  bgcolor: index === 0 ? "#F0FDFC" : "#FFFFFF",
-                  "&:hover": { bgcolor: "#F8FAFC", cursor: "pointer" },
-                  alignItems: "center"
-                }}
-                onClick={() => {
-                  setSelectedCompound(compound);
-                  setShowCompoundDetail(true);
-                }}
-              >
-                <Typography sx={{ fontFamily: FONT, fontSize: "14px", fontWeight: 700, color: TEXT_DARK }}>{compound.rank}</Typography>
-                <Typography sx={{ fontFamily: FONT, fontSize: "14px", fontWeight: 600, color: TEAL }}>{compound.name}</Typography>
-                <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: TEXT_DARK }}>{compound.matchedProps}</Typography>
-                <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: "#EF4444" }}>{compound.mismatchedProps}</Typography>
-              </Box>
-            ))}
-          </Box>
-
-          {/* Pagination */}
-          <Box sx={{ display: "flex", justifyContent: "center", mt: "16px" }}>
-            <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: TEXT_MUTED }}>
-              Showing 1-6 of 124 compounds
-            </Typography>
-          </Box>
-
-          {/* Recommendation */}
-          <Box sx={{ mt: "20px", p: "16px", bgcolor: "#FEF3C7", borderRadius: "8px", border: "1px solid #FCD34D" }}>
-            <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#78350F", mb: "4px" }}>
-              Recommendation
-            </Typography>
-            <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: "#92400E" }}>
-              Metformin and Pioglitazone are the strongest candidates. Both match on molecular weight, route of administration, and half-life. Metformin scores highest due to superior bioavailability alignment. Recommend carrying both forward to screening.
-            </Typography>
-          </Box>
-
-          {/* Action Buttons */}
-          <Box sx={{ display: "flex", gap: "12px", mt: "20px" }}>
-            <Button variant="outlined" sx={{ textTransform: "none", fontFamily: FONT, fontSize: "13px", color: TEXT_DARK, borderColor: BORDER }}>
-              Branch
-            </Button>
-            <Button variant="outlined" sx={{ textTransform: "none", fontFamily: FONT, fontSize: "13px", color: TEXT_DARK, borderColor: BORDER }}>
-              Rerun
-            </Button>
-            <Button 
-              variant="contained"
-              onClick={() => {
-                setActiveStep(3);
-                setWorkflowPhase("screensuite-loading");
-              }}
-              sx={{ 
-                bgcolor: TEAL,
-                color: "#FFFFFF",
-                textTransform: "none",
-                fontFamily: FONT,
-                fontSize: "13px",
-                fontWeight: 600,
-                ml: "auto",
-                "&:hover": { bgcolor: "#089B98" }
-              }}
-            >
-              Select for Screening
-            </Button>
-          </Box>
-        </Box>
-      </Box>
-    </Box>
-  );
-
   // Compound Detail Dialog (Figma Image 15)
   const CompoundDetailDialog = () => (
     <Dialog 
@@ -2854,6 +1429,158 @@ const CompleteWorkflow = () => {
     </Dialog>
   );
 
+  // ---------------------------------------------------------------------------
+  // Hand-offs.
+  //
+  // Moving to the next module used to be two local calls —
+  // setActiveStep(1); setWorkflowPhase("litminex-loading") — which changed the
+  // screen and nothing else. The next agent was never started, and the targets
+  // the researcher had ticked were never sent anywhere.
+  //
+  // Each hand-off now posts to /sessions/{id}/steps and adopts the jobId that
+  // comes back.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * TxKG → LitMineX, carrying the selected targets.
+   *
+   * The accession-to-gene-name translation is the important part: the table is
+   * keyed on UniProt accessions, and PubMed text never contains one, so sending
+   * the ticked ids verbatim would return nothing for every target.
+   */
+  const handleContinueToLitMineX = useCallback(() => {
+    const { targetIds, unresolved } = toGeneNames(selectedTargets, txkgResult.targets);
+
+    if (!targetIds.length) {
+      session.setStepError(
+        "Select at least one target before continuing to LitMineX.",
+        "txkg"
+      );
+      return;
+    }
+
+    if (unresolved.length) {
+      // Sent anyway — dropping a target the user explicitly ticked would be
+      // worse — but say so, because these are the ones likely to come back
+      // empty.
+      session.appendMessages(
+        [
+          {
+            role: "agent",
+            isError: true,
+            text:
+              `No gene symbol was available for ${unresolved.join(", ")}, so the ` +
+              "accession was sent instead. Literature results for those targets may be empty.",
+          },
+        ],
+        "txkg"
+      );
+    }
+
+    session.handOff("litminex", buildSelections("litminex", { targetIds }));
+  }, [selectedTargets, txkgResult.targets, session]);
+
+  /**
+   * CurateX "Submit Profile" → POST /agents/curatex/compounds.
+   *
+   * This is a direct agent call rather than a session step: the compound
+   * scoring is CurateX's second job, and it has to carry the weights the
+   * researcher just edited. It used to set six hardcoded compound rows.
+   */
+  const handleSubmitProfile = useCallback(async (editedWeights) => {
+    const target =
+      curatexProfile.data?.target ||
+      toGeneNames(selectedTargets, txkgResult.targets).targetIds[0] ||
+      null;
+
+    if (!target) {
+      session.setStepError(
+        "There is no target to score compounds against. Go back to TxKG and select one.",
+        "curatex"
+      );
+      return;
+    }
+
+    setWorkflowPhase("curatex-submitted");
+
+    try {
+      const response = await curatexApi.scoreCompounds({
+        target,
+        disease: txkgResult.disease ?? null,
+        // The researcher's edits, translated from the form's field names back
+        // to the criterion names the scorer keys on.
+        weights: toApiWeights(editedWeights, curatexProfile.data),
+        numResults: 20,
+      });
+
+      const jobId = response?.jobId ?? response?.job_id ?? null;
+      if (!jobId) {
+        throw new Error("The compound scoring job did not return a job id.");
+      }
+
+      // Stored on the step rather than in local state so it survives
+      // navigating away to another module and back.
+      session.setStepData({ compoundsJobId: jobId }, "curatex");
+    } catch (err) {
+      session.setStepError(
+        err?.userMessage || err?.message || "Compound scoring could not be started.",
+        "curatex"
+      );
+    }
+  }, [curatexProfile.data, selectedTargets, txkgResult, session, setWorkflowPhase]);
+
+  /** CurateX → ScreenSuite, carrying the chosen candidates. */
+  const handleContinueToScreenSuite = useCallback(() => {
+    const target = curatexResults.data?.target || curatexProfile.data?.target || null;
+    const compounds = selectedCompound
+      ? [selectedCompound.name]
+      : (curatexResults.data?.compounds ?? []).slice(0, 5).map((c) => c.name);
+
+    session.handOff("screensuite", buildSelections("screensuite", { target, compounds }));
+  }, [curatexResults.data, curatexProfile.data, selectedCompound, session]);
+
+  /**
+   * Retry a failed step.
+   *
+   * A rerun is the real retry: re-polling a job the backend has already marked
+   * failed returns "failed" again. Where there is no step id to rerun — a
+   * direct agent call, or a session the server has lost — re-polling is the
+   * only option left.
+   */
+  const retryActiveStep = useCallback(() => {
+    if (session.activeStepId) {
+      session.rerunActiveStep({});
+    } else {
+      job.retry();
+    }
+  }, [session, job]);
+
+  /** Which module the error screen belongs to, and what to say about it. */
+  const activeErrorInfo = useMemo(() => {
+    const owner = moduleForPhase(workflowPhase);
+    if (!owner) return null;
+
+    const label = owner.label;
+
+    // Docking cannot succeed on this deployment, so its failure is a known
+    // limitation rather than a fault and is presented as one.
+    if (owner.key === "screensuite" && SCREENSUITE_UNAVAILABLE) {
+      return {
+        title: `${label} cannot run on this deployment`,
+        message: SCREENSUITE_UNAVAILABLE_MESSAGE,
+        detail: session.activeError || null,
+        expected: true,
+      };
+    }
+
+    return {
+      title: `${label} could not finish`,
+      message: session.activeError || "The agent run failed without a reason.",
+      detail: null,
+      expected: false,
+    };
+  }, [workflowPhase, session.activeError]);
+
   // Render Content Based on Phase
   const renderContent = () => {
     if (viewMode === "lineage") {
@@ -2870,11 +1597,61 @@ const CompleteWorkflow = () => {
         </Box>
       );
     }
+
+    /**
+     * The session itself failed — no module ever started, so there is no phase
+     * screen to fall back to.
+     */
+    if (session.status === "error" && !session.activeKey) {
+      return (
+        <PhaseError
+          title="The research session could not be started"
+          message={session.error}
+          detail="The supervisor decides which agent runs, so nothing can proceed until this call succeeds."
+          onRetry={startSession}
+        />
+      );
+    }
+
+    /**
+     * A failed step. Checked before the phase branches below, because an
+     * "-error" phase matches none of their lists — previously a failure had
+     * nowhere to render and the loading screen simply stayed put.
+     */
+    if (isErrorPhase(workflowPhase) && activeErrorInfo) {
+      const previous = session.activationOrder[session.activationOrder.indexOf(session.activeKey) - 1];
+      return (
+        <PhaseError
+          title={activeErrorInfo.title}
+          message={activeErrorInfo.message}
+          detail={activeErrorInfo.detail}
+          onRetry={activeErrorInfo.expected ? undefined : retryActiveStep}
+          onBack={previous ? () => session.goToModule(previous) : undefined}
+          backLabel={previous ? `Back to ${MODULE_BY_KEY[previous]?.label ?? "previous step"}` : undefined}
+          expected={activeErrorInfo.expected}
+        />
+      );
+    }
+
+    /** The whole-pipeline run — all five agents as one job. */
+    if (workflowPhase.startsWith("pipeline")) {
+      return (
+        <PipelinePhase
+          workflowPhase={workflowPhase}
+          pipeline={pipeline.data}
+          progressMessage={job.progressMessage}
+          query={query}
+        />
+      );
+    }
+
     if (["txkg-loading", "txkg-results", "target-selection"].includes(workflowPhase)) {
       return (
         <TXKGPhase
           workflowPhase={workflowPhase}
           query={query}
+          txkg={txkgResult}
+          progressMessage={job.progressMessage}
           expandedAccordion={expandedAccordion}
           setExpandedAccordion={setExpandedAccordion}
           insightTab={insightTab}
@@ -2884,6 +1661,11 @@ const CompleteWorkflow = () => {
           setWorkflowPhase={setWorkflowPhase}
           setActiveStep={setActiveStep}
           setShowBranchDialog={setShowBranchDialog}
+          // Posts the step and starts the next agent, instead of just
+          // switching which screen is shown.
+          onContinue={handleContinueToLitMineX}
+          continuePending={session.pending}
+          jobId={session.steps.txkg?.jobId ?? null}
         />
       );
     }
@@ -2895,6 +1677,15 @@ const CompleteWorkflow = () => {
           litMinexResults={litMinexResults}
           setSelectedArticle={setSelectedArticle}
           setShowArticleDetail={setShowArticleDetail}
+          progressMessage={job.progressMessage}
+          loading={litminex.loading}
+          error={litminex.error}
+          onRetry={litminex.reload}
+          insights={litminex.data?.insights ?? null}
+          total={litminex.data?.total ?? 0}
+          page={litminex.data?.page ?? 1}
+          totalPages={litminex.data?.totalPages ?? 1}
+          onPageChange={setLitminexPage}
         />
       );
     }
@@ -2919,125 +1710,92 @@ const CompleteWorkflow = () => {
           setProfileEditMode={setProfileEditMode}
           curateXResults={curateXResults}
           setCurateXResults={setCurateXResults}
+          selectedCompound={selectedCompound}
           setSelectedCompound={setSelectedCompound}
           setShowCompoundDetail={setShowCompoundDetail}
           setActiveStep={setActiveStep}
+          progressMessage={job.progressMessage || compoundsJob.progressMessage}
+          profile={curatexProfile.data}
+          profileLoading={curatexProfile.loading}
+          profileError={curatexProfile.error}
+          onRetryProfile={curatexProfile.reload}
+          resultsLoading={curatexResults.loading}
+          resultsError={curatexResults.error}
+          onRetryResults={curatexResults.reload}
+          // Scores compounds against the edited weights.
+          onSubmitProfile={handleSubmitProfile}
+          // Posts the ScreenSuite step.
+          onContinue={handleContinueToScreenSuite}
+          continuePending={session.pending}
+          page={curatexResults.data?.page ?? 1}
+          totalPages={curatexResults.data?.totalPages ?? 1}
+          total={curatexResults.data?.total ?? 0}
+          onPageChange={setCuratexPage}
         />
       );
     }
     if (workflowPhase.startsWith("screensuite")) {
-      return <ScreeningSuitePhase workflowPhase={workflowPhase} />;
+      return (
+        <ScreeningSuitePhase
+          workflowPhase={workflowPhase}
+          progressMessage={job.progressMessage}
+          hits={screensuite.data?.hits ?? []}
+          loading={screensuite.loading}
+          error={screensuite.error}
+          onRetry={screensuite.reload}
+          unavailable={SCREENSUITE_UNAVAILABLE}
+          unavailableMessage={SCREENSUITE_UNAVAILABLE_MESSAGE}
+        />
+      );
     }
     if (workflowPhase.startsWith("novelty")) {
-      return <NoveltySearchPhase workflowPhase={workflowPhase} />;
+      return (
+        <NoveltySearchPhase
+          workflowPhase={workflowPhase}
+          progressMessage={job.progressMessage}
+          report={novsearch.data}
+          loading={novsearch.loading}
+          error={novsearch.error}
+          onRetry={novsearch.reload}
+        />
+      );
     }
+
+    /**
+     * A phase with no screen. Reachable when the supervisor names a module this
+     * build has no UI for, which is worth saying plainly rather than showing a
+     * bare phase string.
+     */
     return (
-      <Box sx={{ flex: 1, p: "24px" }}>
-        <Typography>Phase: {workflowPhase}</Typography>
-      </Box>
+      <PhaseError
+        title="No screen for this step"
+        message={`The workflow reached "${workflowPhase}", which this build has no view for.`}
+        detail="This usually means the backend added a module the UI has not caught up with."
+        expected
+      />
     );
   };
 
-  const METFORMIN_ARTICLE_CARD = {
-    title: "Metformin repurposing for JAK2-mediated insulin resistance...",
-    author: "Chen, S. et al.",
-    year: "2024"
-  };
-
-  const handleChatSubmit = () => {
-    if (!chatInputValue.trim()) return;
-    const userMsg = { role: "user", text: chatInputValue.trim() };
-    const lc = chatInputValue.toLowerCase();
-
-    // ScreenSuite hands the conversation to NovSearch when the next request
-    // asks for patent or novelty analysis.
-    // The module the message was typed into — recorded before any hand-off, so
-    // the message stays attached to the step the user was actually on.
-    const originKey = session.activeKey;
-
-    if (
-      workflowPhase.startsWith("screensuite") &&
-      (lc.includes("patent") || lc.includes("novelty"))
-    ) {
-      // This branch used to return without recording userMsg, so the message
-      // that triggered the hand-off disappeared from the thread.
-      appendMessages([userMsg], originKey);
-      setChatInputValue("");
-      session.activateModule("novsearch", { phase: "novelty-results" });
-      return;
-    }
-
-    // Navigate to CurateX when user signals they're done with LitMineX chat
-    if (lc.includes("target candidate profile") || lc.includes("done with the chat") || (lc.includes("generate") && lc.includes("jak2"))) {
-      appendMessages([userMsg], originKey);
-      setChatInputValue("");
-      setTimeout(() => {
-        session.activateModule("curatex", { phase: "curatex-loading" });
-      }, 400);
-      return;
-    }
-    let agentMsg;
-    if (lc.includes("metformin") || lc.includes("modulate")) {
-      agentMsg = { role: "agent", articleCard: METFORMIN_ARTICLE_CARD, text: "Based on this article, Metformin activates AMPK which suppresses JAK2 phosphorylation at Tyr1007/1008, reducing downstream STAT3 activation. [1] This restores insulin receptor substrate-1 (IRS-1) signaling, improving glucose uptake. The authors demonstrate this through both in-vitro kinase assays and mouse model studies (Fig. 3, Table 2). [1]" };
-    } else if (lc.includes("limitation")) {
-      agentMsg = { role: "agent", text: "The authors note three main limitations: (1) the mouse model used does not fully recapitulate human JAK2 V617F mutations, (2) long-term effects of Metformin on JAK2-STAT signaling remain unstudied, and (3) dosage optimization for the dual AMPK/JAK2 pathway was not explored. [Chen et al., Discussion, p.12]" };
-    } else {
-      agentMsg = { role: "agent", text: "Based on the literature analysis, the JAK2 pathway shows strong therapeutic potential for Type 2 Diabetes. Multiple studies confirm AMPK-mediated modulation of JAK-STAT signaling." };
-    }
-    appendMessages([userMsg, agentMsg], originKey);
-    setChatInputValue("");
-  };
-
-  // Persistent chat input bar
-  const ChatInputBar = () => (
-    <Box sx={{ 
-      p: "12px 16px",
-      bgcolor: GRAY_BG,
-      borderTop: `1px solid ${BORDER}`,
-      flexShrink: 0
-    }}>
-      <Box sx={{
-        bgcolor: "#FFFFFF",
-        border: "1.5px solid #E2E8F0",
-        borderRadius: "16px",
-        p: "16px",
-        display: "flex",
-        flexDirection: "column",
-        gap: "12px"
-      }}>
-        <TextField
-          value={chatInputValue}
-          onChange={(e) => setChatInputValue(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleChatSubmit(); } }}
-          placeholder="Type @ for modules or ask a research question..."
-          fullWidth
-          multiline
-          maxRows={3}
-          variant="standard"
-          sx={{
-            "& .MuiInput-root": { fontFamily: FONT, fontSize: "13px", color: TEXT_DARK },
-            "& .MuiInput-root:before": { display: "none" },
-            "& .MuiInput-root:after": { display: "none" }
-          }}
-        />
-        <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <IconButton size="small" sx={{ color: TEXT_MUTED }}>
-            <AddOutlined sx={{ fontSize: 18 }} />
-          </IconButton>
-          <Box sx={{ display: "flex", gap: "8px", alignItems: "center" }}>
-            <IconButton size="small" sx={{ color: TEXT_MUTED }}>
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <rect x="5" y="1" width="6" height="9" rx="3" stroke="#94A3B8" strokeWidth="1.3"/>
-                <path d="M2 8C2 11.3137 4.68629 14 8 14M8 14C11.3137 14 14 11.3137 14 8M8 14V15.5" stroke="#94A3B8" strokeWidth="1.3" strokeLinecap="round"/>
-              </svg>
-            </IconButton>
-            <IconButton size="small" onClick={handleChatSubmit} sx={{ bgcolor: TEAL, color: "#FFFFFF", width: 32, height: 32, "&:hover": { bgcolor: "#089B98" } }}>
-              <Box component="span" sx={{ fontSize: "14px", lineHeight: 1 }}>↑</Box>
-            </IconButton>
-          </Box>
-        </Box>
-      </Box>
-    </Box>
+  /**
+   * The chat bar — POST /sessions/{id}/messages, and nothing else.
+   *
+   * This replaced a block of keyword matching that decided routing locally:
+   * "patent" or "novelty" jumped to NovSearch, "target candidate profile"
+   * jumped to CurateX, "metformin" and "limitation" returned two paragraphs of
+   * hardcoded prose about a paper the session may never have retrieved.
+   *
+   * All of it is gone. The backend answers from the step's stored result, and
+   * only an explicit @Module starts a new agent run — at which point the
+   * response carries a jobId and useWorkflowSession activates whichever module
+   * the response names. A UI that guesses the module puts the researcher on a
+   * screen the backend knows nothing about.
+   */
+  const handleChatSubmit = useCallback(
+    (text) => {
+      session.sendMessage(text);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [session.sendMessage]
   );
 
   return (
@@ -3057,7 +1815,20 @@ const CompleteWorkflow = () => {
               {renderContent()}
             </Box>
             {viewMode === "chat" && !workflowPhase.startsWith("novelty") && (
-              <ChatInputBar />
+              /* ChatInputBar is imported rather than declared here on purpose —
+                 see the note in its own file. Declared inline, it was rebuilt
+                 on every parent render, and the parent re-renders roughly once
+                 a second while a job is polling, which remounted the field and
+                 threw away the caret mid-sentence. */
+              <ChatInputBar
+                onSend={handleChatSubmit}
+                pending={session.pending}
+                hint={
+                  session.pending
+                    ? "Asking the agent…"
+                    : "Mention a module with @ to start a new run"
+                }
+              />
             )}
           </Box>
         </Box>

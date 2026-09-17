@@ -4,7 +4,7 @@ import {
   Box, Typography, Button, Tabs, Tab, Checkbox,
   TextField, Accordion, AccordionSummary, AccordionDetails, Chip, IconButton
 } from '@mui/material';
-import apiClient from '../../../services/apiClient';
+import litminexApi from '../../../services/api/litminex';
 import { ExpandMoreOutlined, AddOutlined } from '@mui/icons-material';
 import {
   FONT, TEAL, USER_MSG_BG, GRAY_BG, BORDER, BORDER_LIGHT,
@@ -46,6 +46,7 @@ const SectionAccordionSummary = ({ label }) => (
 const TXKGPhase = ({
   workflowPhase,
   query,
+  txkg,
   expandedAccordion,
   setExpandedAccordion,
   insightTab,
@@ -55,11 +56,125 @@ const TXKGPhase = ({
   setWorkflowPhase,
   setActiveStep,
   setShowBranchDialog,
+  /** The runner's live progress line, shown on the loading screen. */
+  progressMessage,
+  /**
+   * Hands the session to LitMineX via POST /sessions/{id}/steps, carrying the
+   * selected targets translated to gene names.
+   *
+   * Both "proceed" buttons used to call
+   * setActiveStep(1); setWorkflowPhase("litminex-loading") — which changed the
+   * screen without starting an agent or sending the selections anywhere.
+   */
+  onContinue,
+  continuePending = false,
 }) => {
-  const mockTargets = MOCK_TARGETS;
+  // Real TxKG results when the job has returned; the original fixture until
+  // then, so the screen is never empty. `mockTargets` keeps its name because
+  // three separate tables below render from it.
+  const hasLiveData = Boolean(txkg?.hasData);
+  const mockTargets = hasLiveData ? txkg.targets : MOCK_TARGETS;
+
+  // The old copy hard-coded "10 protein targets" and "Type 2 Diabetes". Both
+  // come from the response now — the sample run returned 11 targets for
+  // Cancer Pain, so either half being stale was visibly wrong.
+  const diseaseLabel = hasLiveData ? txkg.disease : "Type 2 Diabetes";
+  const targetCount = hasLiveData ? txkg.count : MOCK_TARGETS.length;
+
+  const headline = `I found ${targetCount} protein target${targetCount === 1 ? "" : "s"} strongly associated with ${diseaseLabel} pathways. Here are the top candidates ranked by therapeutic relevance:`;
+
+  /**
+   * Insights → Recommendations.
+   *
+   * The API returns one recommendation object plus per-target novelty, so the
+   * list is built from the top targets and the chip reads the novelty label
+   * rather than a hard-coded "High"/"Medium".
+   */
+  const recommendationRows = hasLiveData
+    ? txkg.targets.slice(0, 5).map((t) => ({
+        target: t.name,
+        status: t.noveltyLabel || "—",
+        desc:
+          `${t.category || "Candidate"} · score ${t.score}` +
+          (t.pathCount ? ` · ${t.pathCount} connecting path${t.pathCount === 1 ? "" : "s"}` : "") +
+          (t.literatureHits != null ? ` · ${t.literatureHits} literature hit${t.literatureHits === 1 ? "" : "s"}` : ""),
+      }))
+    : [
+        { target: "JAK2", status: "High", desc: "Best entry point for insulin signaling inhibition; may reduce glucose regulation." },
+        { target: "DPP4", status: "High", desc: "Well-validated target with existing gliptin class drugs; strong repurposing potential." },
+        { target: "GLP1R", status: "Medium", desc: "Incretin pathway modulation for glucose-dependent insulin secretion enhancement." },
+        { target: "SGLT2", status: "Medium", desc: "Renal glucose reabsorption target; proven clinical efficacy across multiple cytokine pathways." },
+      ];
+
+  /**
+   * Insights → Sources.
+   *
+   * The response carries `supportingSources` per target — the curated
+   * databases a path was sourced from — not journal citations with DOIs. So
+   * this tab now lists the real evidence bases and how many targets each
+   * supports, which is what the data actually describes.
+   */
+  const FIXTURE_TOP = [
+    { name: "PPARG", desc: "Peroxisome proliferator-activated receptor gamma", score: "92" },
+    { name: "DPP4", desc: "Dipeptidyl peptidase-4", score: "87" },
+    { name: "GLP1R", desc: "Glucagon-like peptide-1 receptor", score: "79" },
+    { name: "SGLT2", desc: "Sodium-glucose co-transporter 2", score: "71" },
+    { name: "INSR", desc: "Insulin receptor", score: "65" },
+  ];
+
+  /** Top five, for the graph-side summary panels. */
+  const topTargets = hasLiveData
+    ? txkg.targets.slice(0, 5).map((t) => ({
+        name: t.name,
+        desc: t.fullName || t.name,
+        score: t.score,
+      }))
+    : FIXTURE_TOP;
+
+  /**
+   * Metapaths come from each target's `connectionTypes`, e.g.
+   * "disease→gene/protein→pathway→gene/protein". Substituting the disease name
+   * for the literal word "disease" makes them readable without inventing
+   * anything.
+   */
+  const prettyPath = (p) =>
+    String(p || "")
+      .replace(/disease/gi, diseaseLabel || "disease")
+      .split("→")
+      .map((s) => s.trim())
+      .join(" → ");
+
+  /** The #1 target is shown as its own featured card, so these start at rank 2. */
+  const featuredTarget = hasLiveData ? txkg.targets[0] : null;
+
+  const metapathRows = hasLiveData
+    ? txkg.targets.slice(1, 5).map((t) => ({
+        name: t.name,
+        path: t.connectionTypes.length ? prettyPath(t.connectionTypes[0]) : "No sourced path",
+        score: t.score,
+      }))
+    : [
+        { name: "DPP4", path: "T2D → GLP-1 → DPP4", score: "87" },
+        { name: "GLP1R", path: "T2D → Incretin → GLP1R", score: "79" },
+        { name: "SGLT2", path: "T2D → Glucose → SGLT2", score: "71" },
+        { name: "INSR", path: "T2D → Insulin sig. → INSR", score: "65" },
+      ];
+
+  const sourceRows = (() => {
+    if (!hasLiveData) return null;
+    const tally = new Map();
+    txkg.targets.forEach((t) => {
+      t.supportingSources.forEach((s) => tally.set(s, (tally.get(s) || 0) + 1));
+    });
+    return [...tally.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, count]) => ({ name, count }));
+  })();
+
   const [customTargets, setCustomTargets] = useState([]);
   const [customTargetInput, setCustomTargetInput] = useState('');
   const [isAddingCustomTarget, setIsAddingCustomTarget] = useState(false);
+  const [customTargetError, setCustomTargetError] = useState(null);
 
   const normalizeTargetList = (responseData) => {
     if (!Array.isArray(responseData)) return [];
@@ -86,11 +201,11 @@ const TXKGPhase = ({
 
   const fetchCustomTargets = async () => {
     try {
-      const response = await apiClient.get('/agents/litminex/targets/custom');
-      const payload = response?.data?.data ?? response?.data ?? [];
-      setCustomTargets(normalizeTargetList(Array.isArray(payload) ? payload : [payload]));
+      const payload = await litminexApi.getCustomTargets();
+      const list = Array.isArray(payload) ? payload : [payload];
+      setCustomTargets(normalizeTargetList(list));
     } catch (error) {
-      console.error('Failed to fetch custom targets:', error);
+      setCustomTargetError(error?.userMessage || error?.message || 'Custom targets could not be loaded.');
       setCustomTargets([]);
     }
   };
@@ -100,21 +215,24 @@ const TXKGPhase = ({
     if (!trimmedTarget) return;
 
     setIsAddingCustomTarget(true);
+    setCustomTargetError(null);
 
     try {
-      await apiClient.post('/agents/litminex/targets/custom', {
-        targetName: trimmedTarget,
-      });
+      await litminexApi.addCustomTarget(trimmedTarget);
 
       // Re-fetch the canonical list of custom targets so UI stays in sync
       await fetchCustomTargets();
 
+      // A hand-written target is already a gene symbol, so it goes into the
+      // selection as typed — toGeneNames() passes symbols through untouched.
       setSelectedTargets((prev) => (
         prev.includes(trimmedTarget) ? prev : [...prev, trimmedTarget]
       ));
       setCustomTargetInput('');
     } catch (error) {
-      console.error('Failed to add custom target:', error);
+      // This used to console.error and leave the input looking like it had
+      // worked, with the target silently absent from the next agent's run.
+      setCustomTargetError(error?.userMessage || error?.message || 'The target could not be added.');
     } finally {
       setIsAddingCustomTarget(false);
     }
@@ -152,7 +270,13 @@ const TXKGPhase = ({
                 <div className="spinner-dot"></div>
                 <div className="spinner-dot"></div>
               </div>
-              <span className="processing-text">Searching biomedical databases (NCBI, UniProt, TxKG relations)...</span>
+              {/* The agent's own progress line when it has reported one. The
+                  fixed string below is only the state before the first poll
+                  returns — it used to be all the user ever saw, regardless of
+                  what the run was actually doing. */}
+              <span className="processing-text">
+                {progressMessage || 'Searching biomedical databases (NCBI, UniProt, TxKG relations)...'}
+              </span>
             </div>
           </div>
         </div>
@@ -190,7 +314,7 @@ const TXKGPhase = ({
             </AccordionSummary>
             <AccordionDetails sx={{ p: "16px", bgcolor: "#FFFFFF" }}>
               <Typography sx={{ fontFamily: FONT, fontSize: "15px", fontWeight: 400, color: TEXT_DARK, lineHeight: "22px", mb: "12px" }}>
-                I found 10 protein targets strongly associated with Type 2 Diabetes pathways. Here are the top candidates ranked by therapeutic relevance:
+                {headline}
               </Typography>
               <Box sx={{ display: "flex", gap: "12px" }}>
                 {/* Target Table */}
@@ -226,49 +350,131 @@ const TXKGPhase = ({
                   </Box>
                   <Box sx={{ p: "16px", overflowY: "auto", maxHeight: "340px" }}>
                     {insightTab === 0 && (
-                      <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 400, color: "#404552", lineHeight: 1.6 }}>
-                        The predicted therapeutic targets for Type 2 Diabetes suggest a potential mechanism of action involving the modulation of insulin signaling pathways, particularly those regulated by JAK2 and DPP4.
-                        <br /><br />
-                        The involvement of JAK2, which is a key downstream effector of cytokine receptor signaling, implies that inhibiting this pathway may help mitigate elevated blood glucose and insulin resistance. The identification of GLP1R and SGLT2 as potential targets also hints at roles for incretin-related pathways in the pathogenesis of Type 2 Diabetes.
-                        <br /><br />
-                        These findings highlight the complexity of Type 2 Diabetes and the need for further investigation into the interplay between metabolic and immune signaling pathways.
-                      </Typography>
+                      hasLiveData && txkg.interpretationBlocks.length ? (
+                        <Box sx={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                          {txkg.summary && (
+                            <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 600, color: INSIGHTS_HEADER, lineHeight: 1.5 }}>
+                              {txkg.summary}
+                            </Typography>
+                          )}
+                          {/* The API returns interpretation as "**Name (ID)**: prose"
+                              blocks; rendering them as titled paragraphs keeps the
+                              markdown asterisks off the page. */}
+                          {txkg.interpretationBlocks.map((block, i) => (
+                            <Box key={i} sx={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                              {block.title && (
+                                <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 700, color: "#1A1F26", lineHeight: 1.4 }}>
+                                  {block.title}
+                                </Typography>
+                              )}
+                              <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 400, color: "#404552", lineHeight: 1.6 }}>
+                                {block.body}
+                              </Typography>
+                            </Box>
+                          ))}
+                        </Box>
+                      ) : (
+                        <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 400, color: "#404552", lineHeight: 1.6 }}>
+                          The predicted therapeutic targets for Type 2 Diabetes suggest a potential mechanism of action involving the modulation of insulin signaling pathways, particularly those regulated by JAK2 and DPP4.
+                          <br /><br />
+                          The involvement of JAK2, which is a key downstream effector of cytokine receptor signaling, implies that inhibiting this pathway may help mitigate elevated blood glucose and insulin resistance. The identification of GLP1R and SGLT2 as potential targets also hints at roles for incretin-related pathways in the pathogenesis of Type 2 Diabetes.
+                          <br /><br />
+                          These findings highlight the complexity of Type 2 Diabetes and the need for further investigation into the interplay between metabolic and immune signaling pathways.
+                        </Typography>
+                      )
                     )}
                     {insightTab === 1 && (
                       <Box sx={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                         <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 700, color: "#1A1F26", lineHeight: "100%" }}>Recommendations</Typography>
-                        {[
-                          { target: "JAK2", status: "High", desc: "Best entry point for insulin signaling inhibition; may reduce glucose regulation." },
-                          { target: "DPP4", status: "High", desc: "Well-validated target with existing gliptin class drugs; strong repurposing potential." },
-                          { target: "GLP1R", status: "Medium", desc: "Incretin pathway modulation for glucose-dependent insulin secretion enhancement." },
-                          { target: "SGLT2", status: "Medium", desc: "Renal glucose reabsorption target; proven clinical efficacy across multiple cytokine pathways." },
-                        ].map((rec, i) => (
+
+                        {/* The agent's own next step, when it gave one. It names the
+                            module to hand off to, which is the same information the
+                            supervisor provides — arriving mid-pipeline. */}
+                        {hasLiveData && txkg.recommendation?.text && (
+                          <Box sx={{ display: "flex", flexDirection: "column", gap: "6px", p: "10px 12px", bgcolor: "#F0FDFC", border: `1px solid ${TEAL}`, borderRadius: "8px" }}>
+                            <Box sx={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                              <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEAL, textTransform: "uppercase", letterSpacing: "0.5px", lineHeight: "100%" }}>
+                                Suggested next step
+                              </Typography>
+                              {txkg.nextModule && (
+                                <Chip label={txkg.nextModule} size="small" sx={{ bgcolor: "rgba(0,188,212,0.14)", color: TEAL, fontFamily: FONT, fontSize: "10px", fontWeight: 700, height: "17px", borderRadius: "4px", "& .MuiChip-label": { px: "8px", py: "2px", lineHeight: "100%" } }} />
+                              )}
+                            </Box>
+                            <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 400, color: "#404552", lineHeight: 1.55 }}>
+                              {txkg.recommendation.text}
+                            </Typography>
+                          </Box>
+                        )}
+
+                        {recommendationRows.map((rec, i) => (
                           <Box key={i} sx={{ display: "flex", flexDirection: "column", gap: "4px", p: "10px 12px", bgcolor: "#FAFCFF", border: `1px solid ${BORDER}`, borderRadius: "8px" }}>
                             <Box sx={{ display: "flex", alignItems: "center", gap: "8px" }}>
                               <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#1A1A26", lineHeight: "100%" }}>{rec.target}</Typography>
                               <Chip label={rec.status} size="small" sx={{ bgcolor: rec.status === "High" ? "rgba(20,158,133,0.12)" : "rgba(217,140,26,0.12)", color: rec.status === "High" ? "#00BCD4" : "#D98C1A", fontFamily: FONT, fontSize: "10px", fontWeight: 600, height: "17px", borderRadius: "4px", "& .MuiChip-label": { px: "8px", py: "2px", lineHeight: "100%" } }} />
                             </Box>
-                            <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 400, color: "#4D5461", lineHeight: "100%" }}>{rec.desc}</Typography>
+                            {/* lineHeight was 100%, which clipped any wrapped desc —
+                                the live descriptions are longer than the fixture's. */}
+                            <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 400, color: "#4D5461", lineHeight: 1.45 }}>{rec.desc}</Typography>
                           </Box>
                         ))}
                       </Box>
                     )}
                     {insightTab === 2 && (
                       <Box sx={{ display: "flex", flexDirection: "column", gap: "16px", pt: "12px" }}>
-                        <Typography sx={{ fontFamily: FONT, fontSize: "14px", fontWeight: 600, color: "#262E38", lineHeight: "100%" }}>References</Typography>
-                        {[
-                          { title: "JAK2 inhibition in Type 2 Diabetes: A systematic review", journal: "Nature Reviews Drug Discovery, 2023", doi: "DOI: 10.1038/nrd.2023.142" },
-                          { title: "DPP4 inhibitors and cardiovascular outcomes in diabetic patients", journal: "The Lancet Diabetes & Endocrinology, 2022", doi: "DOI: 10.1016/S2213-8587(22)00156-2" },
-                          { title: "GLP-1 receptor agonists: mechanisms and therapeutic potential", journal: "Cell Metabolism, 2023", doi: "DOI: 10.1016/j.cmet.2023.04.008" },
-                          { title: "SGLT2 inhibitors in the management of Type 2 Diabetes", journal: "New England Journal of Medicine, 2022", doi: "DOI: 10.1056/NEJMra2203096" },
-                          { title: "Insulin signaling pathways as drug targets for T2D", journal: "Pharmacological Reviews, 2023", doi: "DOI: 10.1124/pharmrev.122.000560" },
-                        ].map((source, i) => (
-                          <Box key={i} sx={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                            <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 600, color: "#262E38", lineHeight: "100%" }}>[{i + 1}] {source.title}</Typography>
-                            <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 400, color: "#667080", lineHeight: "100%" }}>{source.journal}</Typography>
-                            <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 400, color: "#00BCD4", lineHeight: "100%", cursor: "pointer", "&:hover": { textDecoration: "underline" } }}>{source.doi}</Typography>
-                          </Box>
-                        ))}
+                        {hasLiveData ? (
+                          <>
+                            {/* The response carries curated evidence bases per target
+                                (`supportingSources`), not journal citations with DOIs —
+                                so this lists the real sources and how many targets each
+                                one supports. */}
+                            <Typography sx={{ fontFamily: FONT, fontSize: "14px", fontWeight: 600, color: "#262E38", lineHeight: "100%" }}>Evidence sources</Typography>
+                            {sourceRows.length ? (
+                              sourceRows.map((source, i) => (
+                                <Box key={source.name} sx={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                                  <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 600, color: "#262E38", lineHeight: 1.4 }}>[{i + 1}] {source.name}</Typography>
+                                  <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 400, color: "#667080", lineHeight: "100%" }}>
+                                    Supports {source.count} of {txkg.targets.length} targets
+                                  </Typography>
+                                </Box>
+                              ))
+                            ) : (
+                              <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: "#667080", lineHeight: 1.5 }}>
+                                No targets in this run carried a curated supporting source.
+                              </Typography>
+                            )}
+
+                            {txkg.method && (
+                              <Box sx={{ pt: "4px", borderTop: `1px solid ${BORDER}` }}>
+                                <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase", letterSpacing: "0.5px", mt: "10px", mb: "6px", lineHeight: "100%" }}>Method</Typography>
+                                <Typography sx={{ fontFamily: FONT, fontSize: "11px", color: "#667080", lineHeight: 1.6 }}>
+                                  {[
+                                    txkg.method.graph_nodes != null && `${txkg.method.graph_nodes.toLocaleString()} nodes`,
+                                    txkg.method.graph_edges != null && `${txkg.method.graph_edges.toLocaleString()} edges`,
+                                    txkg.method.candidate_pool != null && `pool of ${txkg.method.candidate_pool}`,
+                                    txkg.method.correction_method,
+                                  ].filter(Boolean).join(" · ")}
+                                </Typography>
+                              </Box>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <Typography sx={{ fontFamily: FONT, fontSize: "14px", fontWeight: 600, color: "#262E38", lineHeight: "100%" }}>References</Typography>
+                            {[
+                              { title: "JAK2 inhibition in Type 2 Diabetes: A systematic review", journal: "Nature Reviews Drug Discovery, 2023", doi: "DOI: 10.1038/nrd.2023.142" },
+                              { title: "DPP4 inhibitors and cardiovascular outcomes in diabetic patients", journal: "The Lancet Diabetes & Endocrinology, 2022", doi: "DOI: 10.1016/S2213-8587(22)00156-2" },
+                              { title: "GLP-1 receptor agonists: mechanisms and therapeutic potential", journal: "Cell Metabolism, 2023", doi: "DOI: 10.1016/j.cmet.2023.04.008" },
+                              { title: "SGLT2 inhibitors in the management of Type 2 Diabetes", journal: "New England Journal of Medicine, 2022", doi: "DOI: 10.1056/NEJMra2203096" },
+                              { title: "Insulin signaling pathways as drug targets for T2D", journal: "Pharmacological Reviews, 2023", doi: "DOI: 10.1124/pharmrev.122.000560" },
+                            ].map((source, i) => (
+                              <Box key={i} sx={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                                <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 600, color: "#262E38", lineHeight: "100%" }}>[{i + 1}] {source.title}</Typography>
+                                <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 400, color: "#667080", lineHeight: "100%" }}>{source.journal}</Typography>
+                                <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 400, color: "#00BCD4", lineHeight: "100%", cursor: "pointer", "&:hover": { textDecoration: "underline" } }}>{source.doi}</Typography>
+                              </Box>
+                            ))}
+                          </>
+                        )}
                       </Box>
                     )}
                   </Box>
@@ -300,7 +506,9 @@ const TXKGPhase = ({
             </AccordionSummary>
             <AccordionDetails sx={{ p: "16px" }}>
               <Typography sx={{ fontFamily: FONT, fontSize: "15px", fontWeight: 400, color: TEXT_DARK, lineHeight: "22px", mb: "12px" }}>
-                Here is the generated knowledge graph for Type 2 Diabetes. This map illustrates the validated and predicted relationships between JAK2, drug molecules, associated pathways, and overlapping diseases based on TxKG relations:
+                {hasLiveData
+                  ? `Here is the generated knowledge graph for ${diseaseLabel}. This map illustrates the validated and predicted relationships between ${txkg.targets[0]?.name || "the top target"}, associated pathways and overlapping proteins based on TxKG relations:`
+                  : "Here is the generated knowledge graph for Type 2 Diabetes. This map illustrates the validated and predicted relationships between JAK2, drug molecules, associated pathways, and overlapping diseases based on TxKG relations:"}
               </Typography>
               <Box sx={{ borderRadius: "12px", overflow: "hidden", lineHeight: 0 }}>
                 <svg viewBox="0 0 840 360" width="100%" style={{ maxWidth: 840 }} xmlns="http://www.w3.org/2000/svg">
@@ -376,7 +584,7 @@ const TXKGPhase = ({
               <Box sx={{ display: "flex", gap: "16px", mt: "16px" }}>
                 <Box sx={{ flex: 1, display: "flex", flexDirection: "column", gap: "6px" }}>
                   <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#111827", lineHeight: "16px" }}>Target Prediction Scores</Typography>
-                  {[{ name: "PPARG", desc: "Peroxisome proliferator-activated receptor gamma", score: "92" }, { name: "DPP4", desc: "Dipeptidyl peptidase-4", score: "87" }, { name: "GLP1R", desc: "Glucagon-like peptide-1 receptor", score: "79" }, { name: "SGLT2", desc: "Sodium-glucose co-transporter 2", score: "71" }, { name: "INSR", desc: "Insulin receptor", score: "65" }].map((target, i) => (
+                  {topTargets.map((target, i) => (
                     <Box key={i} sx={{ display: "flex", alignItems: "center", p: "8px 10px", gap: "8px", borderBottom: `1px solid ${BORDER}` }}>
                       <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#111827", lineHeight: "16px" }}>{target.name}</Typography>
                       <Typography sx={{ flex: 1, fontFamily: FONT, fontSize: "11px", fontWeight: 400, color: "#6B7280", lineHeight: "13px" }}>{target.desc}</Typography>
@@ -390,16 +598,26 @@ const TXKGPhase = ({
                   <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#111827", lineHeight: "16px" }}>Meta-Path Traversals</Typography>
                   <Box sx={{ display: "flex", flexDirection: "column", p: "10px 12px", gap: "6px", bgcolor: "#F9FAFB", borderRadius: "8px" }}>
                     <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                      <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#111827", lineHeight: "16px" }}>PPARG</Typography>
+                      <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#111827", lineHeight: "16px" }}>
+                        {featuredTarget ? featuredTarget.name : "PPARG"}
+                      </Typography>
                       <Box sx={{ display: "flex", alignItems: "center", p: "3px 8px", bgcolor: "#00BCD4", borderRadius: "8px" }}>
-                        <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#FFFFFF", lineHeight: "13px" }}>92</Typography>
+                        <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#FFFFFF", lineHeight: "13px" }}>
+                          {featuredTarget ? featuredTarget.score : "92"}
+                        </Typography>
                       </Box>
                     </Box>
-                    <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 400, color: "#6B7280", lineHeight: "13px" }}>• T2D → PPARG</Typography>
-                    <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 400, color: "#6B7280", lineHeight: "13px" }}>• T2D → Insulin resistance → PPARG</Typography>
-                    <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 400, color: "#6B7280", lineHeight: "13px" }}>• T2D → Thiazolidinediones → PPARG</Typography>
+                    {/* Each sourced connection type for the top-ranked target. */}
+                    {(featuredTarget
+                      ? (featuredTarget.connectionTypes.length
+                          ? featuredTarget.connectionTypes.map(prettyPath)
+                          : ["No sourced path for this target"])
+                      : ["T2D → PPARG", "T2D → Insulin resistance → PPARG", "T2D → Thiazolidinediones → PPARG"]
+                    ).map((path, i) => (
+                      <Typography key={i} sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 400, color: "#6B7280", lineHeight: 1.35 }}>• {path}</Typography>
+                    ))}
                   </Box>
-                  {[{ name: "DPP4", path: "T2D → GLP-1 → DPP4", score: "87" }, { name: "GLP1R", path: "T2D → Incretin → GLP1R", score: "79" }, { name: "SGLT2", path: "T2D → Glucose → SGLT2", score: "71" }, { name: "INSR", path: "T2D → Insulin sig. → INSR", score: "65" }].map((item, i) => (
+                  {metapathRows.map((item, i) => (
                     <Box key={i} sx={{ display: "flex", alignItems: "center", p: "6px 12px", gap: "8px", borderBottom: `1px solid ${BORDER}` }}>
                       <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 500, color: "#111827", lineHeight: "15px" }}>{item.name}</Typography>
                       <Typography sx={{ flex: 1, fontFamily: FONT, fontSize: "11px", fontWeight: 400, color: "#6B7280", lineHeight: "13px" }}>{item.path}</Typography>
@@ -431,9 +649,18 @@ const TXKGPhase = ({
               <div className="option-cards">
                 <div className="option-card">
                   <h4 className="option-card-title">Proceed with Recommended Targets</h4>
-                  <p className="option-card-description">Run LitMinex on all 10 identified targets ranked by therapeutic relevance</p>
-                  <button className="option-card-button primary" onClick={() => { setActiveStep(1); setWorkflowPhase("litminex-loading"); }}>
-                    <span className="option-card-button-label">Use recommended targets</span>
+                  <p className="option-card-description">
+                    Run LitMinex on {targetCount === 1 ? "the" : `all ${targetCount}`} identified target
+                    {targetCount === 1 ? "" : "s"} ranked by therapeutic relevance
+                  </p>
+                  <button
+                    className="option-card-button primary"
+                    disabled={continuePending}
+                    onClick={onContinue}
+                  >
+                    <span className="option-card-button-label">
+                      {continuePending ? "Starting LitMineX…" : "Use recommended targets"}
+                    </span>
                   </button>
                 </div>
                 <div className="option-card">
@@ -479,7 +706,7 @@ const TXKGPhase = ({
             </AccordionSummary>
             <AccordionDetails sx={{ p: "16px" }}>
               <Typography sx={{ fontFamily: FONT, fontSize: "15px", color: TEXT_DARK, lineHeight: "22px", mb: "12px" }}>
-                I found 10 protein targets strongly associated with Type 2 Diabetes pathways. Here are the top candidates ranked by therapeutic relevance:
+                {headline}
               </Typography>
               <Box sx={{ display: "flex", gap: "12px" }}>
                 <Box sx={{ flex: "0 0 52%", minWidth: 0 }}>
@@ -508,7 +735,13 @@ const TXKGPhase = ({
                     </Tabs>
                   </Box>
                   <Box sx={{ p: "12px", maxHeight: "320px", overflowY: "auto" }}>
-                    {insightTab === 0 && <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: "#404552", lineHeight: 1.6 }}>The predicted therapeutic targets for Type 2 Diabetes suggest a potential mechanism of action involving the modulation of insulin signaling pathways, particularly those regulated by JAK2 and DPP4.</Typography>}
+                    {insightTab === 0 && (
+                      <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: "#404552", lineHeight: 1.6 }}>
+                        {hasLiveData
+                          ? (txkg.summary || txkg.interpretationBlocks[0]?.body || "No interpretation was returned for this run.")
+                          : "The predicted therapeutic targets for Type 2 Diabetes suggest a potential mechanism of action involving the modulation of insulin signaling pathways, particularly those regulated by JAK2 and DPP4."}
+                      </Typography>
+                    )}
                     {insightTab === 1 && (
                       <Box sx={{ display: "flex", flexDirection: "column", gap: "8px" }}>
                         {[{ target: "JAK2", status: "High", desc: "Best entry point for insulin signaling inhibition." }, { target: "DPP4", status: "High", desc: "Well-validated with existing gliptin class drugs." }, { target: "GLP1R", status: "Medium", desc: "Incretin pathway modulation for glucose-dependent insulin secretion." }].map((r, i) => (
@@ -549,7 +782,9 @@ const TXKGPhase = ({
               </Box>
             </AccordionSummary>
             <AccordionDetails sx={{ p: "16px" }}>
-              <Typography sx={{ fontFamily: FONT, fontSize: "15px", color: TEXT_DARK, lineHeight: "22px", mb: "12px" }}>Here is the generated knowledge graph for Type 2 Diabetes:</Typography>
+              <Typography sx={{ fontFamily: FONT, fontSize: "15px", color: TEXT_DARK, lineHeight: "22px", mb: "12px" }}>
+                {`Here is the generated knowledge graph for ${hasLiveData ? diseaseLabel : "Type 2 Diabetes"}:`}
+              </Typography>
               <Box sx={{ borderRadius: "12px", overflow: "hidden", lineHeight: 0 }}>
                 <svg viewBox="0 0 840 360" width="100%" style={{ maxWidth: 840 }} xmlns="http://www.w3.org/2000/svg">
                   <rect width="840" height="360" fill="#0F172A" rx="12" />
@@ -613,7 +848,7 @@ const TXKGPhase = ({
               <Box sx={{ display: "flex", gap: "16px" }}>
                 <Box sx={{ flex: 1 }}>
                   <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#111827", mb: "8px" }}>Target Prediction Scores</Typography>
-                  {[{ name: "PPARG", desc: "Peroxisome proliferator-activated receptor gamma", score: "92" }, { name: "DPP4", desc: "Dipeptidyl peptidase-4", score: "87" }, { name: "GLP1R", desc: "Glucagon-like peptide-1 receptor", score: "79" }, { name: "SGLT2", desc: "Sodium-glucose co-transporter 2", score: "71" }, { name: "INSR", desc: "Insulin receptor", score: "65" }].map((t, i) => (
+                  {topTargets.map((t, i) => (
                     <Box key={i} sx={{ display: "flex", alignItems: "center", p: "8px 10px", gap: "8px", borderBottom: `1px solid ${BORDER}` }}>
                       <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#111827", minWidth: 48 }}>{t.name}</Typography>
                       <Typography sx={{ flex: 1, fontFamily: FONT, fontSize: "11px", color: "#6B7280" }}>{t.desc}</Typography>
@@ -623,7 +858,23 @@ const TXKGPhase = ({
                 </Box>
                 <Box sx={{ flex: 1 }}>
                   <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#111827", mb: "8px" }}>Meta-Path Traversals</Typography>
-                  {[{ n: "PPARG", p: "T2D → PPARG / T2D → Insulin resistance → PPARG", s: "92", teal: true }, { n: "DPP4", p: "T2D → GLP-1 → DPP4", s: "87" }, { n: "GLP1R", p: "T2D → Incretin → GLP1R", s: "79" }, { n: "SGLT2", p: "T2D → Glucose → SGLT2", s: "71" }, { n: "INSR", p: "T2D → Insulin sig. → INSR", s: "65" }].map((item, i) => (
+                  {(hasLiveData
+                    ? txkg.targets.slice(0, 5).map((t, i) => ({
+                        n: t.name,
+                        p: t.connectionTypes.length
+                          ? t.connectionTypes.map(prettyPath).join(" / ")
+                          : "No sourced path",
+                        s: t.score,
+                        teal: i === 0,
+                      }))
+                    : [
+                        { n: "PPARG", p: "T2D → PPARG / T2D → Insulin resistance → PPARG", s: "92", teal: true },
+                        { n: "DPP4", p: "T2D → GLP-1 → DPP4", s: "87" },
+                        { n: "GLP1R", p: "T2D → Incretin → GLP1R", s: "79" },
+                        { n: "SGLT2", p: "T2D → Glucose → SGLT2", s: "71" },
+                        { n: "INSR", p: "T2D → Insulin sig. → INSR", s: "65" },
+                      ]
+                  ).map((item, i) => (
                     <Box key={i} sx={{ display: "flex", alignItems: "center", p: "6px 10px", gap: "8px", borderBottom: `1px solid ${BORDER}` }}>
                       <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 500, color: "#111827", minWidth: 44 }}>{item.n}</Typography>
                       <Typography sx={{ flex: 1, fontFamily: FONT, fontSize: "11px", color: "#6B7280" }}>{item.p}</Typography>
@@ -693,7 +944,7 @@ const TXKGPhase = ({
             <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: TEXT_MUTED, mb: "8px" }}>Add custom target</Typography>
             <TextField
               value={customTargetInput}
-              onChange={(event) => setCustomTargetInput(event.target.value)}
+              onChange={(event) => { setCustomTargetInput(event.target.value); setCustomTargetError(null); }}
               onKeyDown={(event) => {
                 if (event.key === 'Enter') {
                   event.preventDefault();
@@ -715,17 +966,27 @@ const TXKGPhase = ({
                 </IconButton>
               )}}
             />
+            {/* A failed add used to be swallowed by console.error, so the
+                target looked accepted but never reached the next agent. */}
+            {customTargetError && (
+              <Typography
+                role="alert"
+                sx={{ fontFamily: FONT, fontSize: "12px", color: "#DC2626", mt: "6px" }}
+              >
+                {customTargetError}
+              </Typography>
+            )}
           </Box>
           <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: TEXT_DARK }}>{selectedTargets.length} targets selected</Typography>
             <Box sx={{ display: "flex", gap: "12px" }}>
               <Button onClick={() => setWorkflowPhase("txkg-results")} sx={{ textTransform: "none", fontFamily: FONT, fontSize: "13px", color: TEXT_DARK }}>Cancel</Button>
               <Button
-                disabled={selectedTargets.length === 0}
-                onClick={() => { setActiveStep(1); setWorkflowPhase("litminex-loading"); }}
+                disabled={selectedTargets.length === 0 || continuePending}
+                onClick={onContinue}
                 sx={{ bgcolor: TEAL, color: "#FFFFFF", textTransform: "none", fontFamily: FONT, fontSize: "13px", fontWeight: 600, px: "20px", borderRadius: "8px", "&:hover": { bgcolor: "#089B98" }, "&.Mui-disabled": { bgcolor: "#E2E8F0" } }}
               >
-                Proceed to LitMinex
+                {continuePending ? "Starting LitMineX…" : "Proceed to LitMinex"}
               </Button>
             </Box>
           </Box>
