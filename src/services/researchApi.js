@@ -12,6 +12,18 @@ export const getOnboardingStatus = async () =>
 export const getResearchFocus = async () =>
   unwrap(await apiClient.get("/users/me/research-focus"));
 
+/**
+ * Save the researcher's chosen therapeutic areas.
+ *
+ * @param {string[]} therapeuticAreas
+ *
+ * Writes drp_user_profiles.therapeutic_areas. Backs the welcome screen's
+ * Quick Start picker, which was a hardcoded SPECIALTIES list that saved
+ * nowhere.
+ */
+export const saveResearchFocus = async (therapeuticAreas) =>
+  unwrap(await apiClient.post("/users/me/research-focus", { therapeuticAreas }));
+
 export const completeOnboarding = async (payload) =>
   unwrap(await apiClient.post("/users/me/onboarding/complete", payload));
 
@@ -29,6 +41,7 @@ const researchApi = {
   getCurrentUser,
   getOnboardingStatus,
   getResearchFocus,
+  saveResearchFocus,
   completeOnboarding,
   getTherapeuticAreas,
   getDashboardSummary,

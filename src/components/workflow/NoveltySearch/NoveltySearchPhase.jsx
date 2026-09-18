@@ -2,6 +2,9 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Box, Button, Typography } from "@mui/material";
 import { TEAL, GRAY_BG } from "../workflowConstants";
 
+import { agentHeadingFor } from "../../../workflow/moduleMap";
+import { useCurrentUser } from "../../../context/CurrentUserContext";
+
 const NOVSEARCH_FONT = "'Inter', sans-serif";
 
 /* ============================================================================
@@ -214,7 +217,7 @@ const AgentHeader = () => (
         color: TEAL,
       }}
     >
-      INOVAPATH NOVSEARCH AGENT
+      {agentHeadingFor("novsearch")}
     </Typography>
   </Box>
 );
@@ -223,7 +226,9 @@ const AgentHeader = () => (
    USER MESSAGE
 ============================================================================ */
 
-const UserMessage = ({ children }) => (
+const UserMessage = ({ children }) => {
+  const { chatLabel: userLabel } = useCurrentUser();
+  return (
   <Box
     sx={{
       display: "flex",
@@ -253,7 +258,7 @@ const UserMessage = ({ children }) => (
           mb: "12px",
         }}
       >
-        DR. PRIYA (YOU)
+        {userLabel}
       </Typography>
 
       <Typography
@@ -269,7 +274,8 @@ const UserMessage = ({ children }) => (
       </Typography>
     </Box>
   </Box>
-);
+  );
+};
 
 /* ============================================================================
    RESULTS TABLE
@@ -526,7 +532,7 @@ const InsightsCard = ({ report }) => {
    RESULTS ACTIONS
 ============================================================================ */
 
-const ResultsActions = ({ onCompare }) => (
+const ResultsActions = ({ onCompare, actions = {} }) => (
   <Box
     sx={{
       display: "flex",
@@ -551,9 +557,9 @@ const ResultsActions = ({ onCompare }) => (
       View Patent Details
     </Button>
 
-    <Button sx={buttonBase}>Branch</Button>
+    <Button sx={buttonBase} onClick={actions.onBranch} disabled={!actions.onBranch || Boolean(actions.busy)}>{actions.busy === "branch" ? "Branching…" : "Branch"}</Button>
 
-    <Button sx={buttonBase}>Rerun</Button>
+    <Button sx={buttonBase} onClick={actions.onRerun} disabled={!actions.onRerun || Boolean(actions.busy)}>{actions.busy === "rerun" ? "Rerunning…" : "Rerun"}</Button>
 
     <Button sx={buttonBase}>Share Insights</Button>
   </Box>
@@ -563,7 +569,7 @@ const ResultsActions = ({ onCompare }) => (
    RESULTS SCREEN
 ============================================================================ */
 
-const ResultsScreen = ({ onCompare, report, loading, error, onRetry }) => {
+const ResultsScreen = ({ onCompare, report, loading, error, onRetry, actions = {} }) => {
   const patentRows = report?.patents ?? [];
   const subject = [report?.drug, report?.target, report?.disease]
     .filter(Boolean)
@@ -635,7 +641,7 @@ const ResultsScreen = ({ onCompare, report, loading, error, onRetry }) => {
           <InsightsCard report={report} />
         </Box>
 
-        <ResultsActions onCompare={onCompare} />
+        <ResultsActions onCompare={onCompare} actions={actions} />
       </Box>
     </>
   );
@@ -645,7 +651,7 @@ const ResultsScreen = ({ onCompare, report, loading, error, onRetry }) => {
    COMPARISON SCREEN
 ============================================================================ */
 
-const ComparisonScreen = () => (
+const ComparisonScreen = ({ actions = {} }) => (
   <>
     <Box
       sx={{
@@ -682,9 +688,9 @@ const ComparisonScreen = () => (
           View Patent Details
         </Button>
 
-        <Button sx={buttonBase}>Branch</Button>
+        <Button sx={buttonBase} onClick={actions.onBranch} disabled={!actions.onBranch || Boolean(actions.busy)}>{actions.busy === "branch" ? "Branching…" : "Branch"}</Button>
 
-        <Button sx={buttonBase}>Rerun</Button>
+        <Button sx={buttonBase} onClick={actions.onRerun} disabled={!actions.onRerun || Boolean(actions.busy)}>{actions.busy === "rerun" ? "Rerunning…" : "Rerun"}</Button>
 
         <Button sx={buttonBase}>Share Insights</Button>
       </Box>
@@ -762,7 +768,7 @@ const ComparisonScreen = () => (
    COMPILING SCREEN
 ============================================================================ */
 
-const DecisionScreen = ({ onContinue, onEndTask }) => (
+const DecisionScreen = ({ onContinue, onEndTask, actions = {} }) => (
   <>
     <UserMessage>
       Complete this research task. Generate a final summary report for the
@@ -907,7 +913,7 @@ const CompilingScreen = ({ progressMessage }) => (
    SUMMARY SCREEN
 ============================================================================ */
 
-const SummaryScreen = () => (
+const SummaryScreen = ({ actions = {} }) => (
   <>
     <UserMessage>End Task</UserMessage>
 
@@ -1041,8 +1047,8 @@ const SummaryScreen = () => (
           flexWrap: "wrap",
         }}
       >
-        <Button sx={primaryButton}>Export Report</Button>
-        <Button sx={buttonBase}>Branch</Button>
+        <Button sx={primaryButton} onClick={() => actions.onExport?.("pdf")} disabled={!actions.onExport || Boolean(actions.busy)}>{actions.busy === "export" ? "Exporting…" : "Export Report"}</Button>
+        <Button sx={buttonBase} onClick={actions.onBranch} disabled={!actions.onBranch || Boolean(actions.busy)}>{actions.busy === "branch" ? "Branching…" : "Branch"}</Button>
         <Button sx={buttonBase}>+ New Research</Button>
         <Button sx={buttonBase}>Share Results</Button>
       </Box>
@@ -1203,6 +1209,8 @@ const NoveltySearchPhase = ({
   loading = false,
   error = null,
   onRetry,
+  /** Branch / Rerun / Export handlers from usePhaseActions. */
+  actions = {},
 }) => {
   const [stage, setStage] = useState(() =>
     getInitialStage(workflowPhase)
@@ -1311,6 +1319,7 @@ const NoveltySearchPhase = ({
 
         {stage === "results" && (
           <ResultsScreen
+            actions={actions}
             onCompare={() => setStage("comparison")}
             report={report}
             loading={loading}
@@ -1324,7 +1333,7 @@ const NoveltySearchPhase = ({
         ================================================================= */}
 
         {stage === "comparison" && (
-          <ComparisonScreen />
+          <ComparisonScreen actions={actions} />
         )}
 
         {/* ================================================================
@@ -1333,6 +1342,7 @@ const NoveltySearchPhase = ({
 
         {stage === "decision" && (
           <DecisionScreen
+            actions={actions}
             onContinue={() => setStage("results")}
             onEndTask={() => setStage("compiling")}
           />
@@ -1344,7 +1354,7 @@ const NoveltySearchPhase = ({
             FINAL SUMMARY
         ================================================================= */}
 
-        {stage === "summary" && <SummaryScreen />}
+        {stage === "summary" && <SummaryScreen actions={actions} />}
 
       </Box>
 

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Box,
   Typography,
@@ -6,6 +6,9 @@ import {
   Checkbox,
   IconButton,
 } from '@mui/material';
+import { agentHeadingFor } from '../../../workflow/moduleMap';
+import PhaseActions from '../PhaseActions';
+import { useCurrentUser } from '../../../context/CurrentUserContext';
 import {
   VisibilityOutlined,
   CloseOutlined,
@@ -91,7 +94,8 @@ const LitMineXSparkleIcon = ({ size = 16 }) => (
    ========================================================================== */
 
 const LitMineXAgentHeader = ({
-  label = 'INOVAPATH LITMINEX AGENT',
+  // One naming scheme for all five modules, from moduleMap.
+  label = agentHeadingFor('litminex'),
 }) => (
   <Box
     sx={{
@@ -228,7 +232,26 @@ const LiteminexPhase = ({
   page = 1,
   totalPages = 1,
   onPageChange,
+  /**
+   * What this step is actually about, for the request bubble. The copy used to
+   * read "Mine literature for Type 2 Diabetes drug targets" on every run, so a
+   * thrombocytosis session showed the wrong disease.
+   */
+  requestText,
+  /** Article selection, lifted so the hand-off can carry it. */
+  selectedArticles = [],
+  onToggleArticle,
+  /** "Continue to CurateX" → POST /sessions/{id}/steps. */
+  onContinue,
+  continuePending = false,
+  /** Branch / Rerun / Export handlers from usePhaseActions. */
+  actions = {},
 }) => {
+  const { chatLabel: userLabel } = useCurrentUser();
+  const agentHeading = agentHeadingFor('litminex');
+
+  // Falls back only when the parent supplied nothing.
+  const requestLabel = requestText || 'Mine literature for the selected drug targets';
 
   /* ------------------------------------------------------------------------
      LOADING
@@ -267,7 +290,7 @@ const LiteminexPhase = ({
               mb: '12px',
             }}
           >
-            DR. PRIYA (YOU)
+            {userLabel}
           </Typography>
 
           <Typography
@@ -279,7 +302,7 @@ const LiteminexPhase = ({
               lineHeight: '22px',
             }}
           >
-            Mine literature for Type 2 Diabetes drug targets with confidence scoring
+            {requestLabel}
           </Typography>
         </Box>
 
@@ -333,7 +356,7 @@ const LiteminexPhase = ({
                   letterSpacing: '0.5px',
                 }}
               >
-                INOVAPATH LITMINEX AGENT
+                {agentHeading}
               </Typography>
 
 
@@ -404,7 +427,7 @@ const LiteminexPhase = ({
 
     const firstUserMsg = {
       role: 'user',
-      text: 'Mine literature for Type 2 Diabetes drug targets with confidence scoring',
+      text: requestLabel,
     };
 
 
@@ -448,7 +471,7 @@ const LiteminexPhase = ({
                 mb: '6px',
               }}
             >
-              DR. PRIYA (YOU)
+              {userLabel}
             </Typography>
 
             <Typography
@@ -480,7 +503,7 @@ const LiteminexPhase = ({
         >
 
           {/* Agent header */}
-          <LitMineXAgentHeader label="INOVAPATH LITMINEX AGENT" />
+          <LitMineXAgentHeader />
 
 
           {/* Description */}
@@ -662,19 +685,25 @@ const LiteminexPhase = ({
                           idx < litMinexResults.length - 1
                             ? `1px solid ${BORDER}`
                             : 'none',
-                        bgcolor:
-                          idx === 0
-                            ? '#F0FDFC'
-                            : '#FFFFFF',
+                        // Follows the actual selection now, not the row index.
+                        bgcolor: selectedArticles.includes(article.id)
+                          ? '#F0FDFC'
+                          : '#FFFFFF',
                         alignItems: 'center',
                       }}
                     >
 
-                      {/* Checkbox */}
+                      {/* Selection.
+                          This was `checked={idx === 0} readOnly`, so the first
+                          row was permanently ticked and no row could be
+                          selected or cleared. */}
                       <Checkbox
                         size="small"
-                        checked={idx === 0}
-                        readOnly
+                        checked={selectedArticles.includes(article.id)}
+                        onChange={() => onToggleArticle?.(article.id)}
+                        inputProps={{
+                          'aria-label': `Select ${article.title}`,
+                        }}
                         sx={{
                           p: 0,
                           color: BORDER,
@@ -878,38 +907,20 @@ const LiteminexPhase = ({
                   ACTION BUTTONS
                   ========================================================== */}
 
-              <Box
-                sx={{
-                  display: 'flex',
-                  gap: '10px',
-                  pt: '4px',
-                }}
-              >
-                {['Branch', 'Rerun', 'Export'].map(label => (
-                  <Button
-                    key={label}
-                    sx={{
-                      textTransform: 'none',
-                      fontFamily: FONT,
-                      fontSize: '13px',
-                      fontWeight: 500,
-                      color: TEXT_DARK,
-                      bgcolor: '#FFFFFF',
-                      border: `1px solid ${BORDER}`,
-                      borderRadius: '8px',
-                      px: '16px',
-                      py: '7px',
-
-                      '&:hover': {
-                        bgcolor: '#F8FAFC',
-                        borderColor: '#CBD5E1',
-                      },
-                    }}
-                  >
-                    {label}
-                  </Button>
-                ))}
-              </Box>
+              {/* Branch / Rerun / Export are wired here, and this is also the
+                  only way forward out of LitMineX. Previously the step had no
+                  continue control at all — the only route to CurateX was
+                  typing "@curatex …" in the chat, which sent the whole sentence
+                  as the target and produced
+                  "No reviewed human UniProt entry matched 'Create drug profile
+                  for JAK2'". This button sends the gene symbols instead. */}
+              <PhaseActions
+                {...actions}
+                continueLabel="Continue to CurateX"
+                onContinue={onContinue}
+                continuePending={continuePending}
+                continueDisabled={!onContinue}
+              />
 
             </Box>
 
@@ -1027,7 +1038,7 @@ const LiteminexPhase = ({
                     mb: '6px',
                   }}
                 >
-                  DR. PRIYA (YOU)
+                  {userLabel}
                 </Typography>
 
                 <Typography
@@ -1060,7 +1071,7 @@ const LiteminexPhase = ({
                 }}
               >
 
-                <LitMineXAgentHeader label="INOVAPATH LITMINEX AGENT" />
+                <LitMineXAgentHeader />
 
                 {msg.articleCard && (
                   <Box

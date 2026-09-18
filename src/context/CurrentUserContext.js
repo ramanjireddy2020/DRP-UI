@@ -1,0 +1,98 @@
+import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { getCurrentUser as getUserProfile } from "../services/researchApi";
+
+/**
+ * The signed-in researcher, fetched once from GET /users/me.
+ *
+ * This exists because "Dr. Priya" was hardcoded in about twenty-five places —
+ * every chat bubble in all five phase screens, the sidebar, the welcome screen,
+ * the share dialog. Threading a prop down six levels to reach a chat bubble
+ * would have been worse than a context, and the value changes once per session.
+ *
+ * Nothing here blocks rendering. A screen that has not got the profile yet
+ * shows the neutral fallback rather than an empty bubble or a spinner, because
+ * the name is chrome and the research content around it is not.
+ */
+
+const FALLBACK_NAME = "Researcher";
+
+const CurrentUserContext = createContext({
+  user: null,
+  loading: false,
+  error: null,
+  displayName: FALLBACK_NAME,
+  chatLabel: `${FALLBACK_NAME.toUpperCase()} (YOU)`,
+  initials: "",
+  refresh: () => {},
+});
+
+/**
+ * "Dr. Priya Sharma" → "PS". Used for the avatar and the share list.
+ */
+const initialsFor = (name) => {
+  const words = String(name ?? "")
+    .replace(/^(dr|mr|mrs|ms|prof)\.?\s+/i, "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (!words.length) return "";
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+};
+
+export const CurrentUserProvider = ({ children }) => {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    let mounted = true;
+
+    setLoading(true);
+    setError(null);
+
+    getUserProfile()
+      .then((profile) => {
+        if (!mounted) return;
+        setUser(profile);
+        setLoading(false);
+      })
+      .catch((err) => {
+        if (!mounted) return;
+        // A 401 is already handled globally by the response interceptor, so
+        // reaching here means the profile is unavailable for another reason.
+        // The app keeps working on the fallback name.
+        setError(err?.userMessage || err?.message || "Could not load your profile.");
+        setLoading(false);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [attempt]);
+
+  const value = useMemo(() => {
+    const name = user?.name?.trim() || FALLBACK_NAME;
+    return {
+      user,
+      loading,
+      error,
+      displayName: name,
+      /** The form the chat bubbles use: "DR. PRIYA SHARMA (YOU)". */
+      chatLabel: `${name.toUpperCase()} (YOU)`,
+      initials: initialsFor(name),
+      role: user?.role ?? null,
+      email: user?.email ?? null,
+      avatarUrl: user?.avatarUrl || null,
+      refresh: () => setAttempt((n) => n + 1),
+    };
+  }, [user, loading, error]);
+
+  return <CurrentUserContext.Provider value={value}>{children}</CurrentUserContext.Provider>;
+};
+
+export const useCurrentUser = () => useContext(CurrentUserContext);
+
+export default CurrentUserContext;

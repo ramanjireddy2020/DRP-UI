@@ -20,6 +20,9 @@ import {
   TEXT_MUTED,
 } from "../workflowConstants";
 import AgentHeader from "../AgentHeader";
+import PhaseActions from "../PhaseActions";
+import { agentHeadingFor } from "../../../workflow/moduleMap";
+import { useCurrentUser } from "../../../context/CurrentUserContext";
 import "./CuratexPhase.css";
 
 // Default weight allocation per property — matches Figma "Target Product
@@ -167,7 +170,11 @@ const CuratexPhase = ({
   totalPages = 1,
   total = 0,
   onPageChange,
+  /** Branch / Rerun / Export handlers from usePhaseActions. */
+  actions = {},
 }) => {
+  const { chatLabel: userLabel } = useCurrentUser();
+  const agentHeading = agentHeadingFor("curatex");
   const activeCompound = selectedCompound || curateXResults?.[0];
 
   // Local state — weights per property, and the "Adding new parameter"
@@ -316,7 +323,7 @@ const CuratexPhase = ({
         <div className="curatex-user-row">
           <div className="curatex-user-bubble">
             <Typography className="curatex-user-name">
-              DR. PRIYA (YOU)
+              {userLabel}
             </Typography>
 
             <Typography className="curatex-user-text">
@@ -326,7 +333,7 @@ const CuratexPhase = ({
         </div>
 
         <div className="curatex-agent-card">
-          <AgentHeader label="INOVAPATH CURATEX AGENT" />
+          <AgentHeader label={agentHeading} />
 
           <Typography className="curatex-body-text curatex-loading-description">
             {progressMessage ||
@@ -384,7 +391,7 @@ const CuratexPhase = ({
         <div className="curatex-user-row">
           <div className="curatex-user-bubble">
             <Typography className="curatex-user-name">
-              DR. PRIYA (YOU)
+              {userLabel}
             </Typography>
 
             <Typography className="curatex-user-text">
@@ -398,7 +405,7 @@ const CuratexPhase = ({
         </div>
 
         <div className="curatex-agent-card">
-          <AgentHeader label="INOVAPATH CURATEX AGENT" />
+          <AgentHeader label={agentHeading} />
 
           <Typography className="curatex-body-text curatex-profile-intro">
             {profileError
@@ -614,7 +621,7 @@ const CuratexPhase = ({
     return (
       <Box className="curatex-page curatex-submitted-page">
         <div className="curatex-agent-card curatex-submitted-card">
-          <AgentHeader label="INOVAPATH CURATEX AGENT" />
+          <AgentHeader label={agentHeading} />
           <Typography className="curatex-body-text curatex-results-intro">
             Profile submitted. Scoring compounds against your {targetLabel} target product
             profile...
@@ -639,7 +646,7 @@ const CuratexPhase = ({
         <div className="curatex-user-row">
           <div className="curatex-user-bubble">
             <Typography className="curatex-user-name">
-              DR. PRIYA (YOU)
+              {userLabel}
             </Typography>
 
             <Typography className="curatex-user-text">
@@ -649,7 +656,7 @@ const CuratexPhase = ({
         </div>
 
         <div className="curatex-agent-card curatex-results-card">
-          <AgentHeader label="INOVAPATH CURATEX AGENT" />
+          <AgentHeader label={agentHeading} />
 
           <Typography className="curatex-body-text curatex-results-intro">
             {/* Was "Scoring 124 compounds against your JAK2 target product
@@ -1062,7 +1069,7 @@ const CuratexPhase = ({
         <div className="curatex-user-row">
           <div className="curatex-user-bubble curatex-user-bubble--wide">
             <Typography className="curatex-user-name">
-              DR. PRIYA (YOU)
+              {userLabel}
             </Typography>
 
             <Typography className="curatex-user-text">
@@ -1073,7 +1080,7 @@ const CuratexPhase = ({
         </div>
 
         <div className="curatex-agent-card curatex-exploration-card">
-          <AgentHeader label="INOVAPATH CURATEX AGENT" />
+          <AgentHeader label={agentHeading} />
 
           <Typography className="curatex-body-text curatex-exploration-intro">
             Here is the detailed compound profile for{" "}
@@ -1144,7 +1151,7 @@ const CuratexPhase = ({
     return (
       <Box className="curatex-page curatex-candidate-page">
         <div className="curatex-agent-card curatex-candidate-question-card">
-          <AgentHeader label="INOVAPATH CURATEX AGENT" />
+          <AgentHeader label={agentHeading} />
 
           <Typography className="curatex-body-text curatex-candidate-question">
             Would you like to select specific candidates for screening, or
@@ -1156,7 +1163,7 @@ const CuratexPhase = ({
         <div className="curatex-user-row">
           <div className="curatex-user-bubble curatex-user-bubble--wide">
             <Typography className="curatex-user-name">
-              DR. PRIYA (YOU)
+              {userLabel}
             </Typography>
 
             <Typography className="curatex-user-text">
@@ -1167,7 +1174,7 @@ const CuratexPhase = ({
         </div>
 
         <div className="curatex-agent-card curatex-candidate-card">
-          <AgentHeader label="INOVAPATH CURATEX AGENT" />
+          <AgentHeader label={agentHeading} />
 
           <Typography className="curatex-body-text curatex-candidate-intro">
             Selected candidates forwarded to ScreenSuite for molecular

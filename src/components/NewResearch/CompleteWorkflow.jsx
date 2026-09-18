@@ -23,6 +23,10 @@ import { normalizeTxkgResult } from "../../workflow/txkgResult";
 import { toGeneNames, buildSelections } from "../../workflow/selections";
 import { toApiWeights } from "../../workflow/phaseResults";
 import curatexApi from "../../services/api/curatex";
+import litminexApi from "../../services/api/litminex";
+import txkgApi from "../../services/api/txkg";
+import usePhaseActions from "../../hooks/usePhaseActions";
+import { pubmedUrl } from "../../workflow/sourceLinks";
 import {
   SCREENSUITE_UNAVAILABLE,
   SCREENSUITE_UNAVAILABLE_MESSAGE,
@@ -331,6 +335,139 @@ const CompleteWorkflow = () => {
   });
 
   /**
+   * Branch / Rerun / Export for whichever step is on screen.
+   *
+   * All three were dead buttons in every phase. Export needs a completed job,
+   * so it is keyed on the active step's jobId — or CurateX's compounds job,
+   * whose results are what the CurateX table actually shows.
+   */
+  const exportableJobId =
+    session.activeKey === "curatex" && compoundsJobId ? compoundsJobId : activeJobId;
+
+  const actions = usePhaseActions({
+    session,
+    jobId: exportableJobId,
+    moduleLabel: session.activeModule?.label,
+  });
+
+  /**
+   * Item 23: which articles the researcher has ticked.
+   *
+   * The checkboxes were `checked={idx === 0} readOnly`, so the first row was
+   * always ticked and none could be changed.
+   */
+  const [selectedArticles, setSelectedArticles] = useState([]);
+
+  const handleToggleArticle = useCallback((articleId) => {
+    setSelectedArticles((prev) =>
+      prev.includes(articleId) ? prev.filter((id) => id !== articleId) : [...prev, articleId]
+    );
+  }, []);
+
+  /**
+   * Item 18: the knowledge graph, which is its own job.
+   *
+   * POST /agents/subgraph/generate returns a jobId that has to be polled
+   * separately from the TxKG query, then read from /agents/subgraph/{id} and
+   * /stats. Nothing built it before — the picture on screen was a static SVG.
+   */
+  const [graphJobId, setGraphJobId] = useState(null);
+  const [graphState, setGraphState] = useState({ graph: null, stats: null, error: null });
+  const graphJob = useJob(graphJobId, { enabled: Boolean(graphJobId), fetchResult: false });
+
+  const handleGenerateSubgraph = useCallback(async () => {
+    if (!txkgResult.hasData) return;
+
+    setGraphState({ graph: null, stats: null, error: null });
+    try {
+      const response = await txkgApi.generateSubgraph({
+        disease: txkgResult.disease,
+        targetIds: txkgResult.targets.slice(0, 10).map((t) => t.id),
+        maxNodes: 100,
+      });
+      const jobId = response?.jobId ?? response?.job_id ?? null;
+      if (!jobId) throw new Error("The graph job did not return a job id.");
+      setGraphJobId(jobId);
+    } catch (err) {
+      setGraphState({
+        graph: null,
+        stats: null,
+        error: err?.userMessage || err?.message || "The knowledge graph could not be built.",
+      });
+    }
+  }, [txkgResult]);
+
+  // Once the graph job finishes, read its nodes/edges and its counts.
+  useEffect(() => {
+    if (!graphJob.isDone || !graphJobId) return;
+
+    let mounted = true;
+    Promise.all([
+      txkgApi.getSubgraph(graphJobId),
+      txkgApi.getSubgraphStats(graphJobId).catch(() => null),
+    ])
+      .then(([graph, stats]) => {
+        if (mounted) setGraphState({ graph, stats, error: null });
+      })
+      .catch((err) => {
+        if (mounted) {
+          setGraphState({
+            graph: null,
+            stats: null,
+            error: err?.userMessage || err?.message || "The graph could not be read.",
+          });
+        }
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [graphJob.isDone, graphJobId]);
+
+  useEffect(() => {
+    if (graphJob.isFailed) {
+      setGraphState({ graph: null, stats: null, error: graphJob.error });
+    }
+  }, [graphJob.isFailed, graphJob.error]);
+
+  /** One node's neighbours, appended to the graph on click. */
+  const handleExploreNode = useCallback(
+    async (nodeId) => {
+      if (!graphJobId) return;
+      try {
+        const extra = await txkgApi.exploreNode(graphJobId, nodeId);
+        setGraphState((prev) => {
+          if (!prev.graph) return prev;
+          const seen = new Set(prev.graph.nodes.map((n) => n.id));
+          return {
+            ...prev,
+            graph: {
+              ...prev.graph,
+              nodes: [...prev.graph.nodes, ...(extra?.nodes ?? []).filter((n) => !seen.has(n.id))],
+              edges: [...(prev.graph.edges ?? []), ...(extra?.edges ?? [])],
+            },
+          };
+        });
+      } catch {
+        // A failed expansion leaves the existing graph alone; the node simply
+        // does not open. Worth no banner of its own.
+      }
+    },
+    [graphJobId]
+  );
+
+  const subgraph = useMemo(
+    () => ({
+      graph: graphState.graph,
+      stats: graphState.stats,
+      error: graphState.error,
+      loading: graphJob.isPolling || (Boolean(graphJobId) && !graphState.graph && !graphState.error),
+      onNodeClick: graphJobId ? handleExploreNode : undefined,
+    }),
+    [graphState, graphJob.isPolling, graphJobId, handleExploreNode]
+  );
+
+  /**
    * The profile form is seeded from the API's criteria the first time they
    * arrive, then left alone so the researcher's edits are not overwritten by a
    * re-fetch.
@@ -395,7 +532,12 @@ const CompleteWorkflow = () => {
         // than the active step" no longer means "already done".
         const railStep = session.rail.find((r) => r.key === step.key);
         const isActive = Boolean(railStep?.isActive);
-        const isCompleted = Boolean(railStep?.visited) && !isActive;
+        // Item 27: a tick means the step actually completed. This was
+        // `visited && !isActive`, so a module that had merely been activated —
+        // or whose run failed — showed a completed tick the moment the user
+        // looked at another step.
+        const isCompleted = Boolean(railStep?.isCompleted) && !isActive;
+        const isFailed = Boolean(railStep?.isFailed) && !isActive;
         const canNavigate = Boolean(railStep?.isNavigable);
 
         // Requirement: the user can move between steps from this panel. Only
@@ -407,8 +549,10 @@ const CompleteWorkflow = () => {
 
         return (
           <React.Fragment key={step.id}>
-            {isCompleted ? (
-              /* Completed: dark dash + circle with checkmark — clickable */
+            {isCompleted || isFailed ? (
+              /* Completed: dark dash + circle with checkmark — clickable.
+                 Failed: the same row in red with a "!", so a crashed step is
+                 not indistinguishable from a finished one. */
               <Box
                 onClick={goToStep}
                 role={canNavigate ? "button" : undefined}
@@ -435,11 +579,13 @@ const CompleteWorkflow = () => {
                     : undefined,
                 }}
               >
-                <Box sx={{ width: "20px", height: 0, borderTop: "1.5px solid #1A2E44", flexShrink: 0 }} />
-                <Box sx={{ width: 24, height: 24, borderRadius: "50%", bgcolor: "#1A2E44", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                  <Typography sx={{ fontFamily: "'Geist',sans-serif", fontSize: "13px", fontWeight: 700, color: "#FFFFFF", lineHeight: 1 }}>✓</Typography>
+                <Box sx={{ width: "20px", height: 0, borderTop: `1.5px solid ${isFailed ? "#DC2626" : "#1A2E44"}`, flexShrink: 0 }} />
+                <Box sx={{ width: 24, height: 24, borderRadius: "50%", bgcolor: isFailed ? "#DC2626" : "#1A2E44", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <Typography sx={{ fontFamily: "'Geist',sans-serif", fontSize: "13px", fontWeight: 700, color: "#FFFFFF", lineHeight: 1 }}>
+                    {isFailed ? "!" : "✓"}
+                  </Typography>
                 </Box>
-                <Typography sx={{ fontFamily: "'Geist',sans-serif", fontSize: "15px", fontWeight: 700, color: "#1A2E44", ml: "10px", lineHeight: 1 }}>
+                <Typography sx={{ fontFamily: "'Geist',sans-serif", fontSize: "15px", fontWeight: 700, color: isFailed ? "#DC2626" : "#1A2E44", ml: "10px", lineHeight: 1 }}>
                   {step.label}
                 </Typography>
               </Box>
@@ -499,14 +645,15 @@ const CompleteWorkflow = () => {
       { id: "main", label: "Main", sub: "Main research path" },
       { id: "alt-jak2", label: "Alt · JAK2 + TPOR (MPL)", sub: "Forked at Target identification" },
     ];
-    const lastCrumb = (() => {
-      if (["txkg-loading", "txkg-results", "target-selection"].includes(workflowPhase)) return "TxKG Query";
-      if (["litminex-loading", "litminex-results"].includes(workflowPhase)) return "LitMineX";
-      if (workflowPhase.startsWith("curatex")) return "CurateX";
-      if (workflowPhase.startsWith("screensuite")) return "ScreenSuite";
-      if (workflowPhase.startsWith("novelty")) return "NovSearch";
-      return `${WORKFLOW_STEPS[activeStep]?.label || ""} Results`;
-    })();
+    /**
+     * The last breadcrumb is just the module's name.
+     *
+     * It read "TxKG Query" for the TxKG phases; the trailing "Query" is dropped
+     * so the crumb matches the step name in the rail.
+     */
+    const lastCrumb = moduleForPhase(workflowPhase)?.label
+      || WORKFLOW_STEPS[activeStep]?.label
+      || "";
     return (
       <Box sx={{ bgcolor: "#FFFFFF", flexShrink: 0, position: "relative" }}>
         {/* Row 1: breadcrumb + All changes saved — hug height, 32px L/R padding, bottom border */}
@@ -516,7 +663,15 @@ const CompleteWorkflow = () => {
           borderBottom: "1px solid #E2E8F0"
         }}>
           <Box sx={{ display: "flex", alignItems: "center", gap: "6px" }}>
-            {["New Project", "Type 2 Diabetes", lastCrumb].map((crumb, i, arr) => (
+            {/* The disease came from a hardcoded "Type 2 Diabetes", so a
+                thrombocytosis session still read as diabetes. It now comes from
+                the TxKG result, and falls back to the project name rather than
+                naming a disease the session is not about. */}
+            {[
+              location.state?.projectName || "New Project",
+              txkgResult.disease || null,
+              lastCrumb,
+            ].filter(Boolean).map((crumb, i, arr) => (
               <React.Fragment key={i}>
                 <Typography sx={{ fontFamily: "'Geist',sans-serif", fontSize: "13px", fontWeight: i === arr.length-1 ? 600 : 400, color: i === arr.length-1 ? "#0F172A" : "#94A3B8" }}>
                   {crumb}
@@ -1238,12 +1393,29 @@ const CompleteWorkflow = () => {
     </Dialog>
   );
 
-  // Article Detail Side Panel (Figma exact design)
+  /**
+   * Article Detail Side Panel.
+   *
+   * Items 21 and 22. The abstract was a fixed paragraph about Metformin and
+   * JAK2, the authors defaulted to "Chen, S. et al.", "View on PubMed Central"
+   * was a Typography with no href, and both buttons had no onClick. All four
+   * now come from GET /articles/{id} and its sibling endpoints.
+   */
   const ArticleDetailPanel = () => {
     if (!showArticleDetail || !selectedArticle) return null;
-    const keywords = selectedArticle.keywords
-      ? selectedArticle.keywords.split(', ').map(k => k.trim())
-      : [];
+
+    // The list row is shown immediately; the full record fills in behind it.
+    const article = articleDetail || selectedArticle;
+
+    const keywords = Array.isArray(article.keywords)
+      ? article.keywords
+      : typeof article.keywords === "string"
+      ? article.keywords.split(",").map((k) => k.trim()).filter(Boolean)
+      : article.keywordList || [];
+
+    // The API's pmcLink when it has one; otherwise the PubMed record derived
+    // from the article id, which is a real destination rather than a dead label.
+    const externalUrl = article.pmcLink || pubmedUrl(article.id);
 
     return (
       <Box sx={{
@@ -1261,7 +1433,6 @@ const CompleteWorkflow = () => {
         overflow: "hidden",
       }}>
         <Box sx={{ flex: 1, overflowY: "auto", p: "28px 28px 32px", display: "flex", flexDirection: "column", gap: "20px" }}>
-          {/* Close */}
           <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
             <IconButton size="small" onClick={() => setShowArticleDetail(false)} sx={{ color: "#6B7280" }}>
               <CloseOutlined sx={{ fontSize: 18 }} />
@@ -1272,68 +1443,142 @@ const CompleteWorkflow = () => {
             Article Detail
           </Typography>
 
-          {/* Article Title */}
           <Box>
             <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.06em", mb: "8px" }}>
               ARTICLE TITLE
             </Typography>
             <Typography sx={{ fontFamily: FONT, fontSize: "15px", fontWeight: 700, color: "#111827", lineHeight: "22px" }}>
-              {selectedArticle.title}
+              {article.title}
             </Typography>
           </Box>
 
-          {/* Authors + Year */}
           <Box sx={{ display: "flex", gap: "40px" }}>
             <Box>
               <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 500, color: "#6B7280", mb: "4px" }}>Authors</Typography>
-              <Typography sx={{ fontFamily: FONT, fontSize: "14px", color: "#111827" }}>{selectedArticle.author || "Chen, S. et al."}</Typography>
+              {/* Was hardcoded "Chen, S. et al." whenever the row had none. */}
+              <Typography sx={{ fontFamily: FONT, fontSize: "14px", color: "#111827" }}>
+                {article.authors || article.author || (articleBusy === "detail" ? "Loading…" : "Not listed")}
+              </Typography>
             </Box>
             <Box>
               <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 500, color: "#6B7280", mb: "4px" }}>Year</Typography>
-              <Typography sx={{ fontFamily: FONT, fontSize: "14px", color: "#111827" }}>{selectedArticle.year}</Typography>
+              <Typography sx={{ fontFamily: FONT, fontSize: "14px", color: "#111827" }}>{article.year || "—"}</Typography>
             </Box>
           </Box>
 
-          {/* Abstract */}
           <Box>
             <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.06em", mb: "8px" }}>
               ABSTRACT
             </Typography>
             <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: "#374151", lineHeight: 1.6 }}>
-              This study investigates the repurposing potential of Metformin for JAK2-mediated insulin resistance pathways. Our findings suggest that Metformin can modulate JAK2 signaling to improve glucose uptake and reduce hyperglycemia in Type 2 Diabetes patients.
+              {article.abstract
+                || (articleBusy === "detail" ? "Loading the abstract…" : "No abstract was returned for this article.")}
             </Typography>
           </Box>
 
-          {/* Keywords */}
-          <Box>
-            <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.06em", mb: "8px" }}>
-              KEYWORDS
-            </Typography>
-            <Box sx={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-              {keywords.map((kw, i) => (
-                <Box key={i} sx={{ px: "10px", py: "5px", bgcolor: "#F3F4F6", borderRadius: "4px" }}>
-                  <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 500, color: "#374151" }}>{kw}</Typography>
-                </Box>
-              ))}
+          {keywords.length > 0 && (
+            <Box>
+              <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.06em", mb: "8px" }}>
+                KEYWORDS
+              </Typography>
+              <Box sx={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                {keywords.map((kw, i) => (
+                  <Box key={i} sx={{ px: "10px", py: "5px", bgcolor: "#F3F4F6", borderRadius: "4px" }}>
+                    <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 500, color: "#374151" }}>{kw}</Typography>
+                  </Box>
+                ))}
+              </Box>
             </Box>
-          </Box>
+          )}
 
-          {/* PMC Link */}
           <Box>
             <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.06em", mb: "8px" }}>
-              PMC LINK
+              FULL TEXT
             </Typography>
-            <Typography sx={{ fontFamily: FONT, fontSize: "14px", fontWeight: 500, color: TEAL, cursor: "pointer", "&:hover": { textDecoration: "underline" } }}>
-              ↗ View on PubMed Central
+            {/* Item 21: a real anchor. This was a Typography with a pointer
+                cursor and no href, so it looked like a link and did nothing. */}
+            {externalUrl ? (
+              <Typography
+                component="a"
+                href={externalUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                sx={{ fontFamily: FONT, fontSize: "14px", fontWeight: 500, color: TEAL, textDecoration: "none", "&:hover": { textDecoration: "underline" } }}
+              >
+                ↗ {article.pmcLink ? "View on PubMed Central" : "View on PubMed"}
+              </Typography>
+            ) : (
+              <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: TEXT_MUTED }}>
+                No full-text link was returned for this article.
+              </Typography>
+            )}
+          </Box>
+
+          {/* Item 22: article chat. */}
+          <Box>
+            <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.06em", mb: "8px" }}>
+              ASK ABOUT THIS PAPER
+            </Typography>
+
+            {articleChat.length > 0 && (
+              <Box sx={{ display: "flex", flexDirection: "column", gap: "8px", mb: "10px" }}>
+                {articleChat.map((msg, i) => (
+                  <Box
+                    key={i}
+                    sx={{
+                      p: "10px 12px",
+                      borderRadius: "8px",
+                      bgcolor: msg.role === "user" ? "#F0FDFC" : "#F8FAFC",
+                      border: `1px solid ${BORDER}`,
+                    }}
+                  >
+                    <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: msg.isError ? "#DC2626" : "#374151", lineHeight: 1.6 }}>
+                      {msg.content}
+                    </Typography>
+                  </Box>
+                ))}
+              </Box>
+            )}
+
+            <TextField
+              placeholder="e.g. How does it modulate JAK2 signaling?"
+              fullWidth
+              size="small"
+              multiline
+              maxRows={3}
+              disabled={articleBusy === "chat"}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  const value = e.target.value;
+                  e.target.value = "";
+                  handleAskArticle(value);
+                }
+              }}
+              sx={{ "& .MuiOutlinedInput-root": { fontFamily: FONT, fontSize: "13px", borderRadius: "8px" } }}
+            />
+            <Typography sx={{ fontFamily: FONT, fontSize: "11px", color: TEXT_MUTED, mt: "4px" }}>
+              {articleBusy === "chat" ? "Asking…" : "Press Enter to ask"}
             </Typography>
           </Box>
 
-          {/* Buttons */}
-          <Button fullWidth sx={{ bgcolor: "#FFFFFF", color: TEAL, border: `1.5px solid ${TEAL}`, textTransform: "none", fontFamily: FONT, fontSize: "14px", fontWeight: 600, p: "12px 24px", borderRadius: "8px", "&:hover": { bgcolor: "#F0FDFC" } }}>
-            Chat with Article
-          </Button>
-          <Button fullWidth sx={{ bgcolor: TEAL, color: "#FFFFFF", textTransform: "none", fontFamily: FONT, fontSize: "14px", fontWeight: 600, p: "12px 24px", borderRadius: "8px", "&:hover": { bgcolor: "#089B98" } }}>
-            Save Article
+          {articleNotice && (
+            <Typography
+              role="status"
+              sx={{ fontFamily: FONT, fontSize: "12px", color: articleNotice === "Article saved." ? "#059669" : "#DC2626" }}
+            >
+              {articleNotice}
+            </Typography>
+          )}
+
+          {/* Item 22: both buttons had no onClick at all. */}
+          <Button
+            fullWidth
+            onClick={handleSaveArticle}
+            disabled={articleBusy === "save"}
+            sx={{ bgcolor: TEAL, color: "#FFFFFF", textTransform: "none", fontFamily: FONT, fontSize: "14px", fontWeight: 600, p: "12px 24px", borderRadius: "8px", "&:hover": { bgcolor: "#089B98" }, "&.Mui-disabled": { bgcolor: "#E2E8F0", color: "#94A3B8" } }}
+          >
+            {articleBusy === "save" ? "Saving…" : "Save Article"}
           </Button>
         </Box>
       </Box>
@@ -1555,6 +1800,127 @@ const CompleteWorkflow = () => {
     }
   }, [session, job]);
 
+  /**
+   * LitMineX → CurateX, carrying a gene symbol.
+   *
+   * This is the control the testing team found missing. Without it the only
+   * route onwards was typing "@curatex create drug profile for JAK2", and the
+   * backend took the whole sentence as the target — hence
+   * "RunnerError: No reviewed human UniProt entry matched 'Create drug profile
+   * for JAK2'. Use the gene symbol". A structured `selections` payload cannot
+   * produce that error.
+   */
+  const handleContinueToCurateX = useCallback(() => {
+    // Whatever went into LitMineX is already symbol-form; fall back to
+    // re-deriving from the TxKG table if the step carries nothing.
+    const fromStep = session.steps.litminex?.data?.selections?.targetIds;
+    const targetIds = Array.isArray(fromStep) && fromStep.length
+      ? fromStep
+      : toGeneNames(selectedTargets, txkgResult.targets).targetIds;
+
+    if (!targetIds.length) {
+      session.setStepError(
+        "There is no target to build a drug profile for. Go back to TxKG and select one.",
+        "litminex"
+      );
+      return;
+    }
+
+    session.handOff("curatex", buildSelections("curatex", { targetIds }));
+  }, [session, selectedTargets, txkgResult.targets]);
+
+  /** The article the detail panel is showing, enriched from /articles/{id}. */
+  const [articleDetail, setArticleDetail] = useState(null);
+  const [articleBusy, setArticleBusy] = useState(null);
+  const [articleNotice, setArticleNotice] = useState(null);
+  const [articleChat, setArticleChat] = useState([]);
+
+  /**
+   * Item 21/22: open the detail panel with the FULL article.
+   *
+   * The list endpoint returns no abstract, authors or PMC link, so the panel
+   * used to show a fixed Metformin abstract and a dead "View on PubMed
+   * Central" label. GET /articles/{id} supplies the real thing.
+   */
+  useEffect(() => {
+    if (!showArticleDetail || !selectedArticle?.id) {
+      setArticleDetail(null);
+      setArticleChat([]);
+      setArticleNotice(null);
+      return undefined;
+    }
+
+    let mounted = true;
+    setArticleBusy("detail");
+    setArticleNotice(null);
+
+    Promise.all([
+      litminexApi.getArticle(selectedArticle.id),
+      litminexApi.getArticleChatHistory(selectedArticle.id).catch(() => []),
+    ])
+      .then(([detail, history]) => {
+        if (!mounted) return;
+        setArticleDetail(detail);
+        setArticleChat(Array.isArray(history) ? history : []);
+        setArticleBusy(null);
+      })
+      .catch((err) => {
+        if (!mounted) return;
+        setArticleNotice(err?.userMessage || err?.message || "The article could not be loaded.");
+        setArticleBusy(null);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [showArticleDetail, selectedArticle?.id]);
+
+  /** Item 22: bookmark the article. */
+  const handleSaveArticle = useCallback(async () => {
+    if (!selectedArticle?.id) return;
+    setArticleBusy("save");
+    setArticleNotice(null);
+    try {
+      await litminexApi.saveArticle(selectedArticle.id, location.state?.projectId ?? null);
+      setArticleNotice("Article saved.");
+    } catch (err) {
+      setArticleNotice(err?.userMessage || err?.message || "The article could not be saved.");
+    } finally {
+      setArticleBusy(null);
+    }
+  }, [selectedArticle, location.state]);
+
+  /** Item 22: ask a question about this article. */
+  const handleAskArticle = useCallback(
+    async (question) => {
+      if (!selectedArticle?.id || !question.trim()) return;
+
+      setArticleChat((prev) => [...prev, { role: "user", content: question.trim() }]);
+      setArticleBusy("chat");
+      setArticleNotice(null);
+
+      try {
+        const reply = await litminexApi.askArticle(selectedArticle.id, question.trim());
+        setArticleChat((prev) => [
+          ...prev,
+          { role: reply?.role || "agent", content: reply?.content || "", citations: reply?.citations ?? [] },
+        ]);
+      } catch (err) {
+        setArticleChat((prev) => [
+          ...prev,
+          {
+            role: "agent",
+            isError: true,
+            content: err?.userMessage || err?.message || "The question could not be answered.",
+          },
+        ]);
+      } finally {
+        setArticleBusy(null);
+      }
+    },
+    [selectedArticle]
+  );
+
   /** Which module the error screen belongs to, and what to say about it. */
   const activeErrorInfo = useMemo(() => {
     const owner = moduleForPhase(workflowPhase);
@@ -1666,6 +2032,9 @@ const CompleteWorkflow = () => {
           onContinue={handleContinueToLitMineX}
           continuePending={session.pending}
           jobId={session.steps.txkg?.jobId ?? null}
+          actions={actions}
+          subgraph={subgraph}
+          onGenerateSubgraph={handleGenerateSubgraph}
         />
       );
     }

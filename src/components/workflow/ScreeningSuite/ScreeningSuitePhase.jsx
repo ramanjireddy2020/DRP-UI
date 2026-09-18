@@ -1,6 +1,9 @@
 import React, { useState } from "react";
 import { Box, Typography, Button } from "@mui/material";
 import { FONT, TEAL, GRAY_BG } from "../workflowConstants";
+import PhaseActions from "../PhaseActions";
+import { agentHeadingFor } from "../../../workflow/moduleMap";
+import { useCurrentUser } from "../../../context/CurrentUserContext";
 
 /* ============================================================================
    DATA
@@ -239,7 +242,9 @@ const ScreenSuiteIcon = () => (
    USER MESSAGE
 ============================================================================ */
 
-const UserMessage = ({ subject }) => (
+const UserMessage = ({ subject }) => {
+  const { chatLabel: userLabel } = useCurrentUser();
+  return (
   <Box
     sx={{
       display: "flex",
@@ -269,7 +274,7 @@ const UserMessage = ({ subject }) => (
           mb: "8px",
         }}
       >
-        DR. PRIYA (YOU)
+        {userLabel}
       </Typography>
 
       <Typography
@@ -287,7 +292,8 @@ const UserMessage = ({ subject }) => (
       </Typography>
     </Box>
   </Box>
-);
+  );
+};
 
 /* ============================================================================
    AGENT HEADER
@@ -328,7 +334,7 @@ const AgentHeader = () => (
         textTransform: "uppercase",
       }}
     >
-      INOVAPATH SCREENSUITE AGENT
+      {agentHeadingFor("screensuite")}
     </Typography>
   </Box>
 );
@@ -1008,7 +1014,7 @@ const ExpandedPLPReport = () => {
    bundles as unavailable on this deployment). Kept so the markup is ready if
    those endpoints appear, rather than deleted and rebuilt from scratch. */
 // eslint-disable-next-line no-unused-vars
-const ActionButtons = ({ expanded }) => {
+const ActionButtons = ({ expanded, actions = {} }) => {
   const normalButton = {
     minHeight: "32px",
     height: "32px",
@@ -1044,7 +1050,7 @@ const ActionButtons = ({ expanded }) => {
     >
       <Button sx={normalButton}>Branch</Button>
 
-      <Button sx={normalButton}>Rerun</Button>
+      <Button sx={normalButton} onClick={actions.onRerun} disabled={!actions.onRerun || Boolean(actions.busy)}>{actions.busy === "rerun" ? "Rerunning…" : "Rerun"}</Button>
 
       <Button
         sx={{
@@ -1229,6 +1235,8 @@ const ScreeningSuitePhase = ({
   onRetry,
   unavailable = false,
   unavailableMessage,
+  /** Branch / Rerun / Export handlers from usePhaseActions. */
+  actions = {},
 }) => {
   const [selectedReport, setSelectedReport] = useState(null);
 

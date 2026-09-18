@@ -12,11 +12,20 @@
  * "novsearch".
  */
 
+/**
+ * `label` + `agentRole` are the one naming scheme every module answers with.
+ *
+ * Each phase screen used to write its own header — "INOVAPATH TXKG AGENT",
+ * "INOVAPATH LITMINEX AGENT" — so the product name leaked into the agent's
+ * identity and no two modules described themselves the same way. Renderers now
+ * read `agentName` (see agentNameFor) and there is one place to change it.
+ */
 export const MODULES = [
   {
     key: "txkg",
     index: 0,
     label: "TxKG",
+    agentRole: "Target Identification Agent",
     number: "01",
     // The spelling POST /sessions/{id}/steps expects in `module`. Taken from
     // the collection's /modules response, not guessed from the label.
@@ -30,6 +39,7 @@ export const MODULES = [
     key: "litminex",
     index: 1,
     label: "LitMineX",
+    agentRole: "Literature Mining Agent",
     number: "02",
     apiKey: "LitMineX",
     phasePrefix: "litminex",
@@ -41,6 +51,7 @@ export const MODULES = [
     key: "curatex",
     index: 2,
     label: "CurateX",
+    agentRole: "Drug Curation Agent",
     number: "03",
     // /modules returns key "CurateX" but displayName "CuraTeX" — the key is
     // what the API matches on.
@@ -55,6 +66,7 @@ export const MODULES = [
     key: "screensuite",
     index: 3,
     label: "ScreenSuite",
+    agentRole: "Virtual Screening Agent",
     number: "04",
     apiKey: "ScreenSuite",
     phasePrefix: "screensuite",
@@ -66,6 +78,7 @@ export const MODULES = [
     key: "novsearch",
     index: 4,
     label: "NovSearch",
+    agentRole: "Novelty Search Agent",
     number: "05",
     apiKey: "NovSearch",
     // NOTE: phases use the "novelty" prefix, not "novsearch".
@@ -92,6 +105,7 @@ export const PIPELINE = {
   key: "pipeline",
   index: 0,
   label: "SaaS Pipeline",
+  agentRole: "Full Pipeline Agent",
   number: "—",
   apiKey: "SaaS Pipeline",
   isPipeline: true,
@@ -198,6 +212,27 @@ export const getModule = (key) => MODULE_BY_KEY[resolveModuleKey(key)] ?? null;
  * re-route by keyword, which silently ignores the user's choice.
  */
 export const apiModuleKey = (key) => MODULE_BY_KEY[resolveModuleKey(key)]?.apiKey ?? null;
+
+/**
+ * The single name a module identifies itself by, e.g.
+ * "TxKG — Target Identification Agent".
+ *
+ * Every phase header, every agent chat message and every artifact label reads
+ * this, so the five modules can no longer drift apart. Accepts a module key or
+ * anything resolveModuleKey understands, including the `agentName` the API
+ * returns on a chat reply ("DRP LitMineX Agent").
+ */
+export const agentNameFor = (key) => {
+  const module = MODULE_BY_KEY[resolveModuleKey(key)];
+  if (!module) return null;
+  return module.agentRole ? `${module.label} — ${module.agentRole}` : module.label;
+};
+
+/** Uppercase form, for the phase screens that render the name as a heading. */
+export const agentHeadingFor = (key) => {
+  const name = agentNameFor(key);
+  return name ? name.toUpperCase() : null;
+};
 
 /**
  * Phases whose names do not carry their module's prefix. Currently only
@@ -370,6 +405,8 @@ const moduleMap = {
   resolveModuleKey,
   getModule,
   apiModuleKey,
+  agentNameFor,
+  agentHeadingFor,
   moduleForPhase,
   isErrorPhase,
   isLoadingPhase,

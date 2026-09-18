@@ -698,17 +698,36 @@ const useWorkflowSession = () => {
     [state.conversation]
   );
 
-  /** Step descriptors for the left rail, in pipeline order. */
+  /**
+   * Step descriptors for the left rail, in pipeline order.
+   *
+   * `isCompleted` is deliberately NOT "visited and not active". The rail used
+   * to derive the tick from `visited` alone, so a module that had merely been
+   * activated — including one whose run failed outright — showed a completed
+   * tick as soon as the user looked at something else. A step is complete only
+   * when it has reached its results phase without an error.
+   */
   const rail = useMemo(
     () =>
       MODULES.map((m) => {
         const step = state.steps[m.key];
+        const isActive = state.activeKey === m.key;
+        const phase = step.phase ?? "";
+
+        const isFailed = Boolean(step.error) || phase.endsWith("-error");
+        const isRunning = phase.endsWith("-loading");
+        const isCompleted =
+          step.visited && !isFailed && !isRunning && Boolean(step.phase);
+
         return {
           ...m,
           visited: step.visited,
-          isActive: state.activeKey === m.key,
+          isActive,
+          isCompleted,
+          isRunning,
+          isFailed,
           // Visited but not the one being viewed — reachable by clicking.
-          isNavigable: step.visited && state.activeKey !== m.key,
+          isNavigable: step.visited && !isActive,
           phase: step.phase,
           jobId: step.jobId,
           error: step.error,

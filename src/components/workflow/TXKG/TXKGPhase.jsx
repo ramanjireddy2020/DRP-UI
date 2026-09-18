@@ -5,6 +5,11 @@ import {
   TextField, Accordion, AccordionSummary, AccordionDetails, Chip, IconButton
 } from '@mui/material';
 import litminexApi from '../../../services/api/litminex';
+import { agentHeadingFor } from '../../../workflow/moduleMap';
+import { linksForSource, uniprotUrl } from '../../../workflow/sourceLinks';
+import PhaseActions from '../PhaseActions';
+import SubgraphView from '../SubgraphView';
+import { useCurrentUser } from '../../../context/CurrentUserContext';
 import { ExpandMoreOutlined, AddOutlined } from '@mui/icons-material';
 import {
   FONT, TEAL, USER_MSG_BG, GRAY_BG, BORDER, BORDER_LIGHT,
@@ -68,7 +73,19 @@ const TXKGPhase = ({
    */
   onContinue,
   continuePending = false,
+  /** Branch / Rerun / Export handlers from usePhaseActions. */
+  actions = {},
+  /** Live subgraph from /agents/subgraph/* — replaces the static SVG. */
+  subgraph = null,
+  onGenerateSubgraph,
 }) => {
+  /**
+   * The signed-in researcher's own label for chat bubbles, and the one agent
+   * name this module answers by. Both were hardcoded — "DR. PRIYA (YOU)" and
+   * "INOVAPATH TXKG AGENT".
+   */
+  const { chatLabel: userLabel } = useCurrentUser();
+  const agentHeading = agentHeadingFor('txkg');
   // Real TxKG results when the job has returned; the original fixture until
   // then, so the screen is never empty. `mockTargets` keeps its name because
   // three separate tables below render from it.
@@ -168,7 +185,7 @@ const TXKGPhase = ({
     });
     return [...tally.entries()]
       .sort((a, b) => b[1] - a[1])
-      .map(([name, count]) => ({ name, count }));
+      .map(([name, count]) => ({ name, count, links: linksForSource(name) }));
   })();
 
   const [customTargets, setCustomTargets] = useState([]);
@@ -251,7 +268,7 @@ const TXKGPhase = ({
         <div className="user-message-row">
           <div className="user-message-bubble">
             <div className="user-bubble-header">
-              <span className="user-name">DR. PRIYA (YOU)</span>
+              <span className="user-name">{userLabel}</span>
             </div>
             <div className="user-message-text">{query}</div>
           </div>
@@ -262,7 +279,7 @@ const TXKGPhase = ({
               <div className="agent-avatar">
                 <SparkleIcon size={11.67} />
               </div>
-              <span className="agent-name">INOVAPATH TXKG AGENT</span>
+              <span className="agent-name">{agentHeading}</span>
             </div>
             <div className="status-processing">
               <div className="spinner-container">
@@ -292,7 +309,7 @@ const TXKGPhase = ({
         <div className="user-message-row">
           <div className="user-message-bubble">
             <div className="user-bubble-header">
-              <span className="user-name">DR. PRIYA (YOU)</span>
+              <span className="user-name">{userLabel}</span>
             </div>
             <div className="user-message-text">{query}</div>
           </div>
@@ -327,7 +344,7 @@ const TXKGPhase = ({
                     </Box>
                     {mockTargets.map((target, i) => (
                       <Box key={target.id} sx={{ display: "flex", p: "12px 16px", borderBottom: i < mockTargets.length - 1 ? `1px solid ${BORDER}` : "none", bgcolor: i === 0 ? "rgba(0,188,212,0.08)" : "transparent", "&:hover": { bgcolor: i === 0 ? "rgba(0,188,212,0.12)" : "#F8FAFC" } }}>
-                        <Typography sx={{ flex: "0 0 100px", fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: TEAL }}>{target.id}</Typography>
+                        <Typography component="a" href={uniprotUrl(target.id)} target="_blank" rel="noopener noreferrer" sx={{ flex: "0 0 100px", fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: TEAL, textDecoration: "none", "&:hover": { textDecoration: "underline" } }}>{target.id}</Typography>
                         <Typography sx={{ flex: 1, fontFamily: FONT, fontSize: "13px", color: TEXT_DARK }}>{target.name}</Typography>
                         <Typography sx={{ flex: "0 0 80px", fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: TEXT_DARK, textAlign: "right" }}>{target.score}</Typography>
                       </Box>
@@ -338,7 +355,7 @@ const TXKGPhase = ({
                 <Box sx={{ flex: 1, minWidth: 0, border: `1px solid ${BORDER}`, borderRadius: "8px", overflow: "hidden" }}>
                   <Box sx={{ bgcolor: GRAY_BG, p: "10px 12px", borderBottom: `1px solid ${BORDER_LIGHT}` }}>
                     <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 700, color: INSIGHTS_HEADER, lineHeight: "100%" }}>Insights</Typography>
-                    <Typography sx={{ fontFamily: FONT, fontSize: "10px", fontWeight: 400, color: TEXT_MUTED, lineHeight: "100%", mt: "4px" }}>AI-powered target recommendations and Q&A</Typography>
+                    
                   </Box>
                   <Box sx={{ borderBottom: `1px solid ${BORDER}`, p: "4px" }}>
                     <Tabs value={insightTab} onChange={(e, val) => setInsightTab(val)} TabIndicatorProps={{ style: { display: "none" } }}
@@ -435,6 +452,37 @@ const TXKGPhase = ({
                                   <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 400, color: "#667080", lineHeight: "100%" }}>
                                     Supports {source.count} of {txkg.targets.length} targets
                                   </Typography>
+
+                                  {/* Item 17: the sources are followable now.
+                                      The API gives prose labels with no URL and
+                                      no accession, so these are the databases'
+                                      own entry points — one label can name
+                                      several ("CTD / MedGen …"). A label that
+                                      matches nothing stays unlinked rather than
+                                      pointing somewhere invented. */}
+                                  {source.links.length > 0 && (
+                                    <Box sx={{ display: "flex", flexWrap: "wrap", gap: "8px", mt: "2px" }}>
+                                      {source.links.map((link) => (
+                                        <Typography
+                                          key={link.url}
+                                          component="a"
+                                          href={link.url}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          sx={{
+                                            fontFamily: FONT,
+                                            fontSize: "11px",
+                                            fontWeight: 600,
+                                            color: TEAL,
+                                            textDecoration: "none",
+                                            "&:hover": { textDecoration: "underline" },
+                                          }}
+                                        >
+                                          {link.name} ↗
+                                        </Typography>
+                                      ))}
+                                    </Box>
+                                  )}
                                 </Box>
                               ))
                             ) : (
@@ -505,53 +553,20 @@ const TXKGPhase = ({
               <SectionAccordionSummary label="SUBGRAPH" />
             </AccordionSummary>
             <AccordionDetails sx={{ p: "16px" }}>
-              <Typography sx={{ fontFamily: FONT, fontSize: "15px", fontWeight: 400, color: TEXT_DARK, lineHeight: "22px", mb: "12px" }}>
-                {hasLiveData
-                  ? `Here is the generated knowledge graph for ${diseaseLabel}. This map illustrates the validated and predicted relationships between ${txkg.targets[0]?.name || "the top target"}, associated pathways and overlapping proteins based on TxKG relations:`
-                  : "Here is the generated knowledge graph for Type 2 Diabetes. This map illustrates the validated and predicted relationships between JAK2, drug molecules, associated pathways, and overlapping diseases based on TxKG relations:"}
-              </Typography>
-              <Box sx={{ borderRadius: "12px", overflow: "hidden", lineHeight: 0 }}>
-                <svg viewBox="0 0 840 360" width="100%" style={{ maxWidth: 840 }} xmlns="http://www.w3.org/2000/svg">
-                  <rect width="840" height="360" fill="#0F172A" rx="12" />
-                  {Array.from({ length: 15 }, (_, c) => Array.from({ length: 13 }, (_, r) => (
-                    <circle key={`d-${c}-${r}`} cx={c * 60} cy={r * 30} r="1" fill="white" opacity="0.07" />
-                  )))}
-                  {[[400,165,240,75],[400,165,500,60],[400,165,620,125],[400,165,140,175],[400,165,440,105],[400,165,220,265],[400,165,340,280],[400,165,110,255],[400,165,610,245],[400,165,500,275],[400,165,700,155],[400,165,680,295],[240,75,110,255],[240,75,610,245],[440,105,500,275],[140,175,220,265]].map(([x1,y1,x2,y2], i) => (
-                    <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="rgba(102,115,140,0.4)" strokeWidth="1.2" />
-                  ))}
-                  <circle cx="400" cy="165" r="26" fill="#1F2433" /><text x="400" y="200" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Inter,sans-serif" fontWeight="500">Type 2 Diabetes</text>
-                  <circle cx="240" cy="75" r="17" fill="#F28C33" /><text x="240" y="102" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Inter,sans-serif" fontWeight="500">JAK2</text>
-                  <circle cx="500" cy="60" r="15" fill="#F28C33" /><text x="500" y="86" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Inter,sans-serif" fontWeight="500">DPP4</text>
-                  <circle cx="620" cy="125" r="14" fill="#F28C33" /><text x="620" y="150" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Inter,sans-serif" fontWeight="500">GLP1R</text>
-                  <circle cx="140" cy="175" r="14" fill="#F28C33" /><text x="140" y="200" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Inter,sans-serif" fontWeight="500">SGLT2</text>
-                  <circle cx="440" cy="105" r="12" fill="#F28C33" /><text x="440" y="128" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Inter,sans-serif" fontWeight="500">INSR</text>
-                  <circle cx="220" cy="265" r="15" fill="#8C4DBF" /><text x="220" y="291" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Inter,sans-serif" fontWeight="500">Metformin</text>
-                  <circle cx="340" cy="280" r="14" fill="#8C4DBF" /><text x="340" y="305" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Inter,sans-serif" fontWeight="500">Imatinib</text>
-                  <circle cx="110" cy="255" r="12" fill="#8C4DBF" /><text x="110" y="278" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Inter,sans-serif" fontWeight="500">Ruxolitinib</text>
-                  <circle cx="610" cy="245" r="15" fill="#149E99" /><text x="610" y="271" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Inter,sans-serif" fontWeight="500">JAK-STAT</text>
-                  <circle cx="500" cy="275" r="13" fill="#149E99" /><text x="500" y="299" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Inter,sans-serif" fontWeight="500">Insulin Sig.</text>
-                  <circle cx="700" cy="155" r="11" fill="#F25966" /><text x="700" y="177" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Inter,sans-serif" fontWeight="500">Obesity</text>
-                  <circle cx="680" cy="295" r="12" fill="#F25966" /><text x="680" y="320" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Inter,sans-serif" fontWeight="500">Type 2 Diabetes</text>
-                </svg>
-              </Box>
-              <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", p: "16px", bgcolor: GRAY_BG, border: `1px solid ${BORDER}`, borderRadius: "8px", mt: "12px" }}>
-                {[{ label: "RELATIONSHIPS FOUND", value: "52", unit: "relations" }, { label: "DRUG CANDIDATES", value: "15", unit: "candidates" }, { label: "PATHWAY CONNECTIONS", value: "10", unit: "connections" }].map((stat, i, arr) => (
-                  <React.Fragment key={i}>
-                    <Box sx={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                      <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#475569", textTransform: "uppercase" }}>{stat.label}</Typography>
-                      <Typography sx={{ fontFamily: FONT, fontSize: "20px", fontWeight: 700, color: "#0F172A", lineHeight: "26px" }}>
-                        {stat.value} <Typography component="span" sx={{ fontSize: "14px", fontWeight: 400 }}>{stat.unit}</Typography>
-                      </Typography>
-                    </Box>
-                    {i < arr.length - 1 && <Box sx={{ width: "1px", height: "40px", bgcolor: BORDER }} />}
-                  </React.Fragment>
-                ))}
-              </Box>
-              <Box sx={{ display: "flex", gap: "12px", mt: "12px" }}>
-                {["Branch", "Rerun", "Export"].map(label => (
-                  <Button key={label} sx={{ textTransform: "none", fontFamily: FONT, fontSize: "14px", fontWeight: 600, color: "#1E293B", bgcolor: "#FFFFFF", border: `1px solid ${BORDER}`, borderRadius: "8px", p: "10px 16px" }}>{label}</Button>
-                ))}
-              </Box>
+              {/* Item 18: the subgraph is live now. This was a hand-drawn SVG
+                  with Type 2 Diabetes at the centre and JAK2 / DPP4 / GLP1R /
+                  Metformin at fixed coordinates, plus fixed footer counts of
+                  52 / 15 / 10 — the same picture for every disease. */}
+              <SubgraphView
+                graph={subgraph?.graph}
+                stats={subgraph?.stats}
+                loading={subgraph?.loading}
+                error={subgraph?.error}
+                onGenerate={onGenerateSubgraph}
+                onNodeClick={subgraph?.onNodeClick}
+                diseaseLabel={hasLiveData ? diseaseLabel : null}
+              />
+              <PhaseActions {...actions} />
             </AccordionDetails>
           </Accordion>
           </div>
@@ -582,18 +597,11 @@ const TXKGPhase = ({
                 ))}
               </Box>
               <Box sx={{ display: "flex", gap: "16px", mt: "16px" }}>
-                <Box sx={{ flex: 1, display: "flex", flexDirection: "column", gap: "6px" }}>
-                  <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#111827", lineHeight: "16px" }}>Target Prediction Scores</Typography>
-                  {topTargets.map((target, i) => (
-                    <Box key={i} sx={{ display: "flex", alignItems: "center", p: "8px 10px", gap: "8px", borderBottom: `1px solid ${BORDER}` }}>
-                      <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#111827", lineHeight: "16px" }}>{target.name}</Typography>
-                      <Typography sx={{ flex: 1, fontFamily: FONT, fontSize: "11px", fontWeight: 400, color: "#6B7280", lineHeight: "13px" }}>{target.desc}</Typography>
-                      <Box sx={{ display: "flex", alignItems: "center", p: "3px 8px", bgcolor: "#D1FAE5", borderRadius: "8px" }}>
-                        <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#059669", lineHeight: "13px" }}>{target.score}</Typography>
-                      </Box>
-                    </Box>
-                  ))}
-                </Box>
+              {/* Item 19: only the meta-paths are shown here. The left column
+                  was a duplicate "Target Prediction Scores" list — the same
+                  ranked targets already rendered in the results table above,
+                  which made the panel read as two different scores for the
+                  same target. */}
                 <Box sx={{ flex: 1, display: "flex", flexDirection: "column", gap: "6px" }}>
                   <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#111827", lineHeight: "16px" }}>Meta-Path Traversals</Typography>
                   <Box sx={{ display: "flex", flexDirection: "column", p: "10px 12px", gap: "6px", bgcolor: "#F9FAFB", borderRadius: "8px" }}>
@@ -628,11 +636,7 @@ const TXKGPhase = ({
                   ))}
                 </Box>
               </Box>
-              <Box sx={{ display: "flex", gap: "10px", pt: "4px" }}>
-                {["Branch", "Rerun", "Export"].map(label => (
-                  <Button key={label} sx={{ textTransform: "none", fontFamily: FONT, fontSize: "14px", fontWeight: 500, color: "#1E293B", bgcolor: "#FFFFFF", border: `1px solid ${BORDER}`, borderRadius: "8px", p: "10px 16px", "&:hover": { bgcolor: GRAY_BG } }}>{label}</Button>
-                ))}
-              </Box>
+              <PhaseActions {...actions} />
             </AccordionDetails>
           </Accordion>
           </div>
@@ -683,7 +687,7 @@ const TXKGPhase = ({
       <Box sx={{ p: "24px 40px 0 40px", bgcolor: GRAY_BG }}>
         <Box sx={{ display: "flex", justifyContent: "flex-end", p: "8px 0" }}>
           <Box sx={{ bgcolor: USER_MSG_BG, border: `1px solid ${BORDER}`, borderRadius: "12px", p: "16px", maxWidth: "680px" }}>
-            <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEAL, textTransform: "uppercase", letterSpacing: "0.5px", mb: "12px" }}>DR. PRIYA (YOU)</Typography>
+            <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEAL, textTransform: "uppercase", letterSpacing: "0.5px", mb: "12px" }}>{userLabel}</Typography>
             <Typography sx={{ fontFamily: FONT, fontSize: "15px", fontWeight: 400, color: TEXT_DARK, lineHeight: "22px" }}>{query}</Typography>
           </Box>
         </Box>
@@ -716,7 +720,7 @@ const TXKGPhase = ({
                     </Box>
                     {mockTargets.map((t, i) => (
                       <Box key={t.id} sx={{ display: "flex", p: "10px 12px", borderBottom: i < mockTargets.length - 1 ? `1px solid ${BORDER}` : "none" }}>
-                        <Typography sx={{ flex: "0 0 100px", fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: TEAL }}>{t.id}</Typography>
+                        <Typography component="a" href={uniprotUrl(t.id)} target="_blank" rel="noopener noreferrer" sx={{ flex: "0 0 100px", fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: TEAL, textDecoration: "none", "&:hover": { textDecoration: "underline" } }}>{t.id}</Typography>
                         <Typography sx={{ flex: 1, fontFamily: FONT, fontSize: "13px", color: TEXT_DARK }}>{t.name}</Typography>
                         <Typography sx={{ flex: "0 0 100px", fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: TEXT_DARK, textAlign: "right" }}>{t.score}</Typography>
                       </Box>
@@ -726,7 +730,7 @@ const TXKGPhase = ({
                 <Box sx={{ flex: 1, border: `1px solid ${BORDER}`, borderRadius: "8px", overflow: "hidden" }}>
                   <Box sx={{ bgcolor: GRAY_BG, p: "10px 12px", borderBottom: `1px solid ${BORDER}` }}>
                     <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 700, color: INSIGHTS_HEADER }}>Insights</Typography>
-                    <Typography sx={{ fontFamily: FONT, fontSize: "10px", color: TEXT_MUTED, mt: "2px" }}>AI-powered target recommendations and Q&A</Typography>
+                    
                   </Box>
                   <Box sx={{ borderBottom: `1px solid ${BORDER}`, px: "4px" }}>
                     <Tabs value={insightTab} onChange={(_, v) => setInsightTab(v)} TabIndicatorProps={{ style: { display: "none" } }}
@@ -759,7 +763,7 @@ const TXKGPhase = ({
                 </Box>
               </Box>
               <Box sx={{ display: "flex", gap: "12px", mt: "12px" }}>
-                {["Branch", "Rerun", "Export"].map(l => <Button key={l} sx={{ textTransform: "none", fontFamily: FONT, fontSize: "13px", color: TEXT_DARK, bgcolor: "#FFFFFF", border: `1px solid ${BORDER}`, borderRadius: "8px", px: "16px", py: "6px" }}>{l}</Button>)}
+                <PhaseActions {...actions} />
               </Box>
             </AccordionDetails>
           </Accordion>
@@ -782,38 +786,21 @@ const TXKGPhase = ({
               </Box>
             </AccordionSummary>
             <AccordionDetails sx={{ p: "16px" }}>
-              <Typography sx={{ fontFamily: FONT, fontSize: "15px", color: TEXT_DARK, lineHeight: "22px", mb: "12px" }}>
-                {`Here is the generated knowledge graph for ${hasLiveData ? diseaseLabel : "Type 2 Diabetes"}:`}
-              </Typography>
-              <Box sx={{ borderRadius: "12px", overflow: "hidden", lineHeight: 0 }}>
-                <svg viewBox="0 0 840 360" width="100%" style={{ maxWidth: 840 }} xmlns="http://www.w3.org/2000/svg">
-                  <rect width="840" height="360" fill="#0F172A" rx="12" />
-                  {[[400,165,240,75],[400,165,500,60],[400,165,620,125],[400,165,140,175],[400,165,440,105],[400,165,220,265],[400,165,340,280],[400,165,110,255],[400,165,610,245],[400,165,500,275],[400,165,700,155],[400,165,680,295],[240,75,110,255],[240,75,610,245],[440,105,500,275],[140,175,220,265]].map(([x1,y1,x2,y2],i)=>(<line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke="rgba(102,115,140,0.4)" strokeWidth="1.2"/>))}
-                  <circle cx="400" cy="165" r="26" fill="#1F2433"/><text x="400" y="200" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Inter,sans-serif">Type 2 Diabetes</text>
-                  <circle cx="240" cy="75" r="17" fill="#F28C33"/><text x="240" y="102" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Inter,sans-serif">JAK2</text>
-                  <circle cx="500" cy="60" r="15" fill="#F28C33"/><text x="500" y="86" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Inter,sans-serif">DPP4</text>
-                  <circle cx="620" cy="125" r="14" fill="#F28C33"/><text x="620" y="150" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Inter,sans-serif">GLP1R</text>
-                  <circle cx="140" cy="175" r="14" fill="#F28C33"/><text x="140" y="200" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Inter,sans-serif">SGLT2</text>
-                  <circle cx="220" cy="265" r="15" fill="#8C4DBF"/><text x="220" y="291" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Inter,sans-serif">Metformin</text>
-                  <circle cx="610" cy="245" r="15" fill="#149E99"/><text x="610" y="271" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Inter,sans-serif">JAK-STAT</text>
-                  <circle cx="700" cy="155" r="11" fill="#F25966"/><text x="700" y="177" textAnchor="middle" fill="#D1D9E6" fontSize="9" fontFamily="Inter,sans-serif">Obesity</text>
-                </svg>
-              </Box>
-              <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", p: "16px", bgcolor: GRAY_BG, border: `1px solid ${BORDER}`, borderRadius: "8px", mt: "12px" }}>
-                {[{ label: "RELATIONSHIPS FOUND", value: "52", unit: "relations" }, { label: "DRUG CANDIDATES", value: "15", unit: "candidates" }, { label: "PATHWAY CONNECTIONS", value: "10", unit: "connections" }].map((stat, i, arr) => (
-                  <React.Fragment key={i}>
-                    <Box>
-                      <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#475569", textTransform: "uppercase" }}>{stat.label}</Typography>
-                      <Typography sx={{ fontFamily: FONT, fontSize: "20px", fontWeight: 700, color: TEXT_DARK }}>
-                        {stat.value} <Typography component="span" sx={{ fontSize: "13px", fontWeight: 400 }}>{stat.unit}</Typography>
-                      </Typography>
-                    </Box>
-                    {i < arr.length - 1 && <Box sx={{ width: "1px", height: "40px", bgcolor: BORDER }} />}
-                  </React.Fragment>
-                ))}
-              </Box>
+              {/* Item 18: the subgraph is live now. This was a hand-drawn SVG
+                  with Type 2 Diabetes at the centre and JAK2 / DPP4 / GLP1R /
+                  Metformin at fixed coordinates, plus fixed footer counts of
+                  52 / 15 / 10 — the same picture for every disease. */}
+              <SubgraphView
+                graph={subgraph?.graph}
+                stats={subgraph?.stats}
+                loading={subgraph?.loading}
+                error={subgraph?.error}
+                onGenerate={onGenerateSubgraph}
+                onNodeClick={subgraph?.onNodeClick}
+                diseaseLabel={hasLiveData ? diseaseLabel : null}
+              />
               <Box sx={{ display: "flex", gap: "12px", mt: "12px" }}>
-                {["Branch", "Rerun", "Export"].map(l => <Button key={l} sx={{ textTransform: "none", fontFamily: FONT, fontSize: "13px", color: TEXT_DARK, bgcolor: "#FFFFFF", border: `1px solid ${BORDER}`, borderRadius: "8px", px: "16px", py: "6px" }}>{l}</Button>)}
+                <PhaseActions {...actions} />
               </Box>
             </AccordionDetails>
           </Accordion>
@@ -846,16 +833,11 @@ const TXKGPhase = ({
                 ))}
               </Box>
               <Box sx={{ display: "flex", gap: "16px" }}>
-                <Box sx={{ flex: 1 }}>
-                  <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#111827", mb: "8px" }}>Target Prediction Scores</Typography>
-                  {topTargets.map((t, i) => (
-                    <Box key={i} sx={{ display: "flex", alignItems: "center", p: "8px 10px", gap: "8px", borderBottom: `1px solid ${BORDER}` }}>
-                      <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#111827", minWidth: 48 }}>{t.name}</Typography>
-                      <Typography sx={{ flex: 1, fontFamily: FONT, fontSize: "11px", color: "#6B7280" }}>{t.desc}</Typography>
-                      <Box sx={{ p: "3px 8px", bgcolor: "#D1FAE5", borderRadius: "8px" }}><Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#059669" }}>{t.score}</Typography></Box>
-                    </Box>
-                  ))}
-                </Box>
+              {/* Item 19: only the meta-paths are shown here. The left column
+                  was a duplicate "Target Prediction Scores" list — the same
+                  ranked targets already rendered in the results table above,
+                  which made the panel read as two different scores for the
+                  same target. */}
                 <Box sx={{ flex: 1 }}>
                   <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#111827", mb: "8px" }}>Meta-Path Traversals</Typography>
                   {(hasLiveData
@@ -884,7 +866,7 @@ const TXKGPhase = ({
                 </Box>
               </Box>
               <Box sx={{ display: "flex", gap: "12px", mt: "12px" }}>
-                {["Branch", "Export"].map(l => <Button key={l} sx={{ textTransform: "none", fontFamily: FONT, fontSize: "13px", color: TEXT_DARK, bgcolor: "#FFFFFF", border: `1px solid ${BORDER}`, borderRadius: "8px", px: "16px", py: "6px" }}>{l}</Button>)}
+                <PhaseActions {...actions} />
               </Box>
             </AccordionDetails>
           </Accordion>
