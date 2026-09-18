@@ -537,9 +537,9 @@ const Login = () => {
             ===================================================== */}
 
         <div className="login-footer">
-          <p className="footer-copy">
+          {/* <p className="footer-copy">
             © 2026 iNovaPath Powered by Gen AI.
-          </p>
+          </p> */}
 
           <div className="footer-links">
             <button type="button">
