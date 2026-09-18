@@ -194,7 +194,7 @@ const SplashScreen = () => {
           <div className="status-subtitle">
             {isReady
               ? "Launching your research workspace..."
-              : "Initializing intelligence, knowledge and research services"}
+              : ""}
           </div>
         </div>
 
