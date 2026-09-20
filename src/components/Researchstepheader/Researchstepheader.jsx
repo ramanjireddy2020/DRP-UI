@@ -5,6 +5,7 @@ import {
 import {
   AccountTreeOutlined, IosShareOutlined, CheckOutlined, EditOutlined, CloseOutlined,
 } from "@mui/icons-material";
+import { useCurrentUser } from "../../context/CurrentUserContext";
 
 // ── Design tokens ────────────────────────────────────────────────────────
 const TEAL      = "#0ABFBC";
@@ -271,11 +272,18 @@ const ResearchStepHeader = ({
   activeBranchId = "main",
   onSelectBranch = () => {},
   onRenameBranch = () => {},
-  owner = { name: "DR. Priya", email: "researcher@novapath.ai" },
+  owner,
   reviewers = [],
   onInvite = () => {},
 }) => {
   const [shareOpen, setShareOpen] = useState(false);
+
+  // Review point 6: the owner chip read "DR. Priya" for everyone.
+  const currentUser = useCurrentUser();
+  const resolvedOwner = owner || {
+    name: currentUser.displayName,
+    email: currentUser.email || "",
+  };
 
   return (
     <Box sx={{ bgcolor: "#fff" }}>
@@ -324,7 +332,7 @@ const ResearchStepHeader = ({
       <ShareDialog
         open={shareOpen}
         onClose={() => setShareOpen(false)}
-        owner={owner}
+        owner={resolvedOwner}
         reviewers={reviewers}
         onInvite={onInvite}
       />

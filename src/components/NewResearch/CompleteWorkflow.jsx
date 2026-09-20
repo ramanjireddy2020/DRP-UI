@@ -34,6 +34,7 @@ import {
 import PhaseError from "../workflow/PhaseError";
 import ChatInputBar from "../workflow/ChatInputBar";
 import PipelinePhase from "../workflow/PipelinePhase";
+import { useCurrentUser } from "../../context/CurrentUserContext";
 import './WorkflowStyles.css';
 
 // Design tokens matching Figma
@@ -56,6 +57,7 @@ const WORKFLOW_STEPS = [
 const CompleteWorkflow = () => {
   const location = useLocation();
   const navigate = useNavigate();
+  const currentUser = useCurrentUser();
   const query = location.state?.query || "Find protein targets associated with Type 2 Diabetes for drug repurposing";
   
   // ---------------------------------------------------------------------------
@@ -128,11 +130,25 @@ const CompleteWorkflow = () => {
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareEmail, setShareEmail] = useState("");
   const [sharePermission, setSharePermission] = useState("can view");
-  const [sharePeople, setSharePeople] = useState([
-    { initials: "PS", name: "Dr. Priya Sharma", email: "priya@inovapath.com", role: "Owner", color: "#00BCD4" },
-    { initials: "RM", name: "Dr. Rahul Menon", email: "rahul.m@inovapath.com", role: "Editor", color: "#00C2B5" },
-    { initials: "SC", name: "Sarah Chen", email: "sarah.c@inovapath.com", role: "Viewer", color: "#8C4DBF" },
-  ]);
+  // Review point 6: the access list was three invented researchers. The owner
+  // row is the signed-in user; anyone actually invited is appended to it.
+  const [sharePeople, setSharePeople] = useState([]);
+
+  useEffect(() => {
+    setSharePeople((people) => {
+      const invited = people.filter((person) => person.role !== "Owner");
+      return [
+        {
+          initials: currentUser.initials || "—",
+          name: currentUser.displayName,
+          email: currentUser.email || "",
+          role: "Owner",
+          color: "#00BCD4",
+        },
+        ...invited,
+      ];
+    });
+  }, [currentUser.initials, currentUser.displayName, currentUser.email]);
 
   /**
    * The target product profile.

@@ -320,9 +320,8 @@ const Login = () => {
             </h1>
 
             <p>
-              The advanced iNovaPath designed for researchers
-              to identify, validate, and simulate novel
-              therapeutic candidates.
+              An agentic AI platform to discover and validate
+              existing drugs for new therapeutic indications.
             </p>
           </div>
 
@@ -331,19 +330,17 @@ const Login = () => {
             <Feature
               icon="⌬"
               title="AI-Powered Analysis"
-              text="Intelligent research"
-            />
-
-            <Feature
-              icon="◉"
-              title="10k+ Compounds"
-              text="Extensive knowledge"
+              text="Gen AI powered Reasoning"
             />
 
             <Feature
               icon="〽"
               title="Real-time Insights"
-              text="Faster decisions"
+            />
+
+            <Feature
+              icon="◉"
+              title="Biomedical Knowledge"
             />
           </div>
         </div>
@@ -537,10 +534,6 @@ const Login = () => {
             ===================================================== */}
 
         <div className="login-footer">
-          {/* <p className="footer-copy">
-            © 2026 iNovaPath Powered by Gen AI.
-          </p> */}
-
           <div className="footer-links">
             <button type="button">
               Help Center
@@ -578,7 +571,9 @@ const Feature = ({
       <div className="feature-content">
         <strong>{title}</strong>
 
-        <span>{text}</span>
+        {/* Only the first tab carries a subtitle in the approved copy, so an
+            absent `text` renders nothing rather than an empty line. */}
+        {text ? <span>{text}</span> : null}
       </div>
     </div>
   );

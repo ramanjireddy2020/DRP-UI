@@ -768,11 +768,11 @@ const ComparisonScreen = ({ actions = {} }) => (
    COMPILING SCREEN
 ============================================================================ */
 
-const DecisionScreen = ({ onContinue, onEndTask, actions = {} }) => (
+const DecisionScreen = ({ onContinue, onEndTask, actions = {}, diseaseLabel }) => (
   <>
     <UserMessage>
       Complete this research task. Generate a final summary report for the
-      Type 2 Diabetes drug repurposing project.
+      {diseaseLabel ? ` ${diseaseLabel} ` : " "}drug repurposing project.
     </UserMessage>
 
     <Box
@@ -913,7 +913,7 @@ const CompilingScreen = ({ progressMessage }) => (
    SUMMARY SCREEN
 ============================================================================ */
 
-const SummaryScreen = ({ actions = {} }) => (
+const SummaryScreen = ({ actions = {}, diseaseLabel, researcherName, sessionCount }) => (
   <>
     <UserMessage>End Task</UserMessage>
 
@@ -949,9 +949,14 @@ const SummaryScreen = ({ actions = {} }) => (
           whiteSpace: "pre-line",
         }}
       >
-        {"Research Summary - Type 2 Diabetes Drug Repurposing\n"}
-        {"Project: Novel Target Drug Repurposing for T2D\n"}
-        {"Researcher: Dr. Priya • Duration: 3 sessions\n"}
+        {/* Review points 6 and 20: the disease and the researcher were
+            hardcoded to Type 2 Diabetes and Dr. Priya, so every finished
+            session reported someone else's diabetes project. */}
+        {`Research Summary - ${diseaseLabel || "Drug Repurposing"}\n`}
+        {`Project: Novel Target Drug Repurposing${diseaseLabel ? ` for ${diseaseLabel}` : ""}\n`}
+        {`Researcher: ${researcherName}`}
+        {sessionCount ? ` • Duration: ${sessionCount} sessions` : ""}
+        {"\n"}
         {"Status: COMPLETED ✓"}
       </Typography>
 
@@ -1218,6 +1223,11 @@ const NoveltySearchPhase = ({
 
   const [inputValue, setInputValue] = useState("");
 
+  // Review points 6 and 20: the closing screens named Type 2 Diabetes and
+  // Dr. Priya whatever the session was about. Both come from the run now.
+  const { displayName: researcherName } = useCurrentUser();
+  const diseaseLabel = report?.disease || "";
+
   /**
    * "Compiling" is a local presentation step — the final report is assembled
    * from data already fetched, not by another agent run — so it advances as
@@ -1343,6 +1353,7 @@ const NoveltySearchPhase = ({
         {stage === "decision" && (
           <DecisionScreen
             actions={actions}
+            diseaseLabel={diseaseLabel}
             onContinue={() => setStage("results")}
             onEndTask={() => setStage("compiling")}
           />
@@ -1354,7 +1365,13 @@ const NoveltySearchPhase = ({
             FINAL SUMMARY
         ================================================================= */}
 
-        {stage === "summary" && <SummaryScreen actions={actions} />}
+        {stage === "summary" && (
+          <SummaryScreen
+            actions={actions}
+            diseaseLabel={diseaseLabel}
+            researcherName={researcherName}
+          />
+        )}
 
       </Box>
 

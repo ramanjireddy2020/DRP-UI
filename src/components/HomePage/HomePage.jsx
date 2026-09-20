@@ -319,7 +319,7 @@ const HomePage = () => {
               textTransform: "uppercase",
             }}
           >
-            AI RESEARCH COWORKER
+            AI RESEARCH ASSISTANT
           </Typography>
 
           {/* hero-heading */}

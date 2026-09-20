@@ -48,14 +48,9 @@ const ORBITS = [
 const SplashScreen = () => {
   const navigate = useNavigate();
 
-  const [stage, setStage] = useState("loading");
   const [fading, setFading] = useState(false);
 
   useEffect(() => {
-    const readyTimer = setTimeout(() => {
-      setStage("ready");
-    }, SPLASH_DURATION - 850);
-
     const fadeTimer = setTimeout(() => {
       setFading(true);
     }, SPLASH_DURATION);
@@ -65,13 +60,10 @@ const SplashScreen = () => {
     }, SPLASH_DURATION + 850);
 
     return () => {
-      clearTimeout(readyTimer);
       clearTimeout(fadeTimer);
       clearTimeout(navigationTimer);
     };
   }, [navigate]);
-
-  const isReady = stage === "ready";
 
   return (
     <main
@@ -167,75 +159,19 @@ const SplashScreen = () => {
         </div>
 
         {/* ===================================================
-            BRAND TITLE
-            =================================================== */}
-
-        <div className="brand-block">
-          <h1>iNovaPath</h1>
-
-          <div className="brand-line">
-            <span className="brand-line-dot" />
-            AI DRUG DISCOVERY PLATFORM
-            <span className="brand-line-dot" />
-          </div>
-        </div>
-
-        {/* ===================================================
             STATUS
+
+            Review point 5: this single line is the only copy
+            the splash screen carries. The brand title, the
+            "research environment ready" state, the progress
+            bar and the thinking dots were all removed.
             =================================================== */}
 
         <div className="status-block">
           <div className="status-title">
-            {isReady
-              ? "Research environment ready"
-              : "Preparing your research workspace..."}
-          </div>
-
-          <div className="status-subtitle">
-            {isReady
-              ? "Launching your research workspace..."
-              : ""}
+            Preparing your research workspace...
           </div>
         </div>
-
-        {/* ===================================================
-            PROGRESS
-            =================================================== */}
-
-        <div className="progress-section">
-          <div className="progress-meta">
-            <span>
-              {isReady ? "READY" : "INITIALIZING"}
-            </span>
-
-            <span className="progress-percentage">
-              {isReady ? "100%" : ""}
-            </span>
-          </div>
-
-          <div
-            className={`progress-track ${
-              isReady ? "progress-ready" : ""
-            }`}
-          >
-            <div className="progress-fill">
-              <span className="progress-shimmer" />
-            </div>
-          </div>
-        </div>
-
-        {/* ===================================================
-            THINKING INDICATOR
-            =================================================== */}
-
-        {!isReady && (
-          <div className="activity-indicator">
-            <span />
-            <span />
-            <span />
-            <span />
-          </div>
-        )}
       </section>
     </main>
   );

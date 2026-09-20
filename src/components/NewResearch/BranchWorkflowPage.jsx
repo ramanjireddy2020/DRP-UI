@@ -394,11 +394,8 @@ const BranchWorkflowPage = () => {
                         {/* Insights Panel */}
                         <Box sx={{ width: "300px", border: `1px solid ${BORDER}`, borderRadius: "8px", overflow: "hidden", bgcolor: "#FFFFFF" }}>
                           <Box sx={{ px: "16px", py: "12px", borderBottom: `1px solid ${BORDER}` }}>
-                            <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 700, color: TEXT_DARK, mb: "4px" }}>
+                            <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 700, color: TEXT_DARK }}>
                               Insights
-                            </Typography>
-                            <Typography sx={{ fontFamily: FONT, fontSize: "11px", color: TEXT_MUTED }}>
-                              AI-powered target recommendations and Q&A
                             </Typography>
                           </Box>
                           <Box sx={{ display: "flex", borderBottom: `1px solid ${BORDER}` }}>

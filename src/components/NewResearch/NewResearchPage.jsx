@@ -546,7 +546,7 @@ const NewResearchPage = () => {
               textTransform: "uppercase",
             }}
           >
-            AI RESEARCH COWORKER
+            AI RESEARCH ASSISTANT
           </Typography>
 
           {/* Heading */}

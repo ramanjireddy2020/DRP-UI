@@ -16,6 +16,8 @@ import {
   MenuOutlined,
 } from "@mui/icons-material";
 
+import { useCurrentUser } from "../../context/CurrentUserContext";
+
 /* =========================================================
    DESIGN TOKENS
    ========================================================= */
@@ -157,14 +159,21 @@ function NavItem({
 const SideBar = ({
   onNewResearch,
   onLogout = () => {},
-  user = {
-    name: "DR. Priya",
-    email: "researcher@novapath.ai",
-    initials: "PR",
-  },
+  user,
   activePath,
 }) => {
   const navigate = useNavigate();
+
+  // Review point 6: the footer card showed "DR. Priya" for every account.
+  // It now reads the signed-in researcher from GET /users/me, falling back to
+  // the neutral "Researcher" the context supplies while the profile loads.
+  const currentUser = useCurrentUser();
+
+  const sidebarUser = user || {
+    name: currentUser.displayName,
+    email: currentUser.email || "",
+    initials: currentUser.initials,
+  };
 
   /* =======================================================
      RESPONSIVE BREAKPOINTS
@@ -569,7 +578,7 @@ const SideBar = ({
               color: SIDEBAR_BG,
             }}
           >
-            {user.initials}
+            {sidebarUser.initials}
           </Typography>
         </Box>
 
@@ -591,7 +600,7 @@ const SideBar = ({
                   lineHeight: 1.3,
                 }}
               >
-                {user.name}
+                {sidebarUser.name}
               </Typography>
 
               <Typography
@@ -606,7 +615,7 @@ const SideBar = ({
                   whiteSpace: "nowrap",
                 }}
               >
-                {user.email}
+                {sidebarUser.email}
               </Typography>
             </Box>
 

@@ -10,6 +10,7 @@ import {
   MenuOutlined, NotificationsNoneOutlined,
 } from "@mui/icons-material";
 import NewProjectModal from "../NewProjectModal";
+import { useCurrentUser } from "../../context/CurrentUserContext";
 
 // Design tokens (Figma: sidebar #1A2332, 240px, 20px padding)
 const SIDEBAR_BG = "#1A2332";
@@ -64,6 +65,8 @@ const NavItem = ({ to, icon: Icon, label, end = false, collapsed }) => (
 
 // Sidebar inner content (shared between permanent and Drawer)
 const SidebarInner = ({ collapsed, onToggle, onNewResearch, navigate }) => {
+  // Review point 6: was a hardcoded "Dr. Priya / Chief Researcher" card.
+  const { displayName, role } = useCurrentUser();
   const location = useLocation();
   const onModulePage = MODULE_PATHS.some((p) => location.pathname.startsWith(p));
 
@@ -197,11 +200,13 @@ const SidebarInner = ({ collapsed, onToggle, onNewResearch, navigate }) => {
           {!collapsed && (
             <Box>
               <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#F1F5F9", lineHeight: 1.3 }}>
-                Dr. Priya
+                {displayName}
               </Typography>
-              <Typography sx={{ fontFamily: FONT, fontSize: "11px", color: MUTED, lineHeight: 1.3 }}>
-                Chief Researcher
-              </Typography>
+              {role && (
+                <Typography sx={{ fontFamily: FONT, fontSize: "11px", color: MUTED, lineHeight: 1.3 }}>
+                  {role}
+                </Typography>
+              )}
             </Box>
           )}
         </Box>

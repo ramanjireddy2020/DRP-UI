@@ -1,14 +1,24 @@
 import React from 'react';
 import { Dialog, DialogTitle, DialogContent, DialogActions, Box, Typography, TextField, Button, Avatar, IconButton } from '@mui/material';
 import { CloseOutlined } from '@mui/icons-material';
-
-const people = [
-  { id: 1, initials: 'PS', name: 'Dr. Priya Sharma', email: 'priya@inovapath.com', role: 'Owner' },
-  { id: 2, initials: 'RM', name: 'Dr. Rahul Menon', email: 'rahul.m@inovapath.com', role: 'Editor' },
-  { id: 3, initials: 'SC', name: 'Sarah Chen', email: 'sarah.c@inovapath.com', role: 'Viewer' },
-];
+import { useCurrentUser } from '../../context/CurrentUserContext';
 
 export default function ShareModal({ open, onClose }) {
+  // Review point 6: the access list was three invented researchers with
+  // "Dr. Priya Sharma" as the owner. The owner row is now the signed-in user.
+  // There is no collaborators endpoint yet, so the list is just the owner.
+  const { displayName, initials, email } = useCurrentUser();
+
+  const people = [
+    {
+      id: 'owner',
+      initials: initials || '—',
+      name: displayName,
+      email: email || '',
+      role: 'Owner',
+    },
+  ];
+
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', pr: 1 }}>

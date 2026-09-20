@@ -1,4 +1,4 @@
-﻿import { useState } from "react";
+﻿import { useEffect, useState } from "react";
 import {
   X,
   Plus,
@@ -7,6 +7,11 @@ import {
   FlaskConical,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { useCurrentUser } from "../context/CurrentUserContext";
+import {
+  getResearchFocus,
+  saveResearchFocus,
+} from "../services/researchApi";
 import "./WelcomeScreen.css";
 
 /**
@@ -106,7 +111,7 @@ function StepCard({
   iconType,
   title,
   description,
-  tags,
+  tags = [],
 }) {
   return (
     <article className="ws-step-card">
@@ -158,20 +163,22 @@ function StepCard({
       </p>
 
 
-      {/* Tags */}
+      {/* Tags — step 1 carries none since review point 8 trimmed it. */}
 
-      <div className="ws-tag-row">
+      {tags.length > 0 && (
+        <div className="ws-tag-row">
 
-        {tags.map((tag) => (
-          <span
-            className="ws-tag-pill"
-            key={tag}
-          >
-            {tag}
-          </span>
-        ))}
+          {tags.map((tag) => (
+            <span
+              className="ws-tag-pill"
+              key={tag}
+            >
+              {tag}
+            </span>
+          ))}
 
-      </div>
+        </div>
+      )}
 
     </article>
   );
@@ -212,11 +219,17 @@ function SearchTag({
    ============================================================ */
 
 export default function WelcomeScreen({
-  userName = "Priya",
+  userName,
   onSave,
   onSkip,
 }) {
   const navigate = useNavigate();
+
+  // Review point 6: the greeting was hardcoded to "Priya". It now comes from
+  // GET /users/me via the context, with an explicit prop still winning so the
+  // screen stays usable in isolation.
+  const { displayName } = useCurrentUser();
+  const greetingName = userName || displayName;
 
 
   /* ============================================================
@@ -244,6 +257,63 @@ export default function WelcomeScreen({
 
   const [draft, setDraft] =
     useState("");
+
+
+  /* ============================================================
+     Saving state
+
+     Review point 10: the picker was pure local state — "Save Focus
+     & Get Started" called an optional prop and navigated away, so
+     nothing was ever written. It now reads GET and writes POST
+     /users/me/research-focus.
+     ============================================================ */
+
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+
+
+  /* ============================================================
+     Pre-select whatever was saved before
+     ============================================================ */
+
+  useEffect(() => {
+    let mounted = true;
+
+    getResearchFocus()
+      .then((focus) => {
+        const areas = Array.isArray(focus)
+          ? focus
+          : focus?.therapeuticAreas;
+
+        if (!mounted || !Array.isArray(areas) || !areas.length) return;
+
+        setSelected((previous) => {
+          const next = { ...previous };
+          Object.keys(next).forEach((label) => {
+            next[label] = areas.includes(label);
+          });
+          return next;
+        });
+
+        // Anything saved that is not one of the six built-in chips is
+        // still the user's focus, so it shows as a removable tag.
+        setSearchTags((previous) => [
+          ...previous,
+          ...areas.filter(
+            (area) =>
+              !SPECIALTIES.some((s) => s.label === area) &&
+              !previous.includes(area)
+          ),
+        ]);
+      })
+      .catch(() => {
+        // Onboarding must not be blocked by a missing saved focus.
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
 
   /* ============================================================
@@ -302,10 +372,41 @@ export default function WelcomeScreen({
      Save
      ============================================================ */
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    if (saving) return;
+
+    // The chips the user ticked plus any free-text disease area they added:
+    // both are "therapeutic areas of interest" as far as the endpoint goes.
+    const therapeuticAreas = [
+      ...Object.entries(selected)
+        .filter(([, on]) => on)
+        .map(([label]) => label),
+      ...searchTags,
+    ];
+
+    setSaving(true);
+    setSaveError(null);
+
+    try {
+      await saveResearchFocus(therapeuticAreas);
+    } catch (error) {
+      // Surfaced rather than swallowed — the whole point of this screen is
+      // that the choice is persisted, so a silent failure is worse than a
+      // blocked button.
+      setSaveError(
+        error?.userMessage ||
+          "Could not save your research focus. Please try again."
+      );
+      setSaving(false);
+      return;
+    }
+
+    setSaving(false);
+
     onSave?.({
       selected,
       searchTags,
+      therapeuticAreas,
     });
 
     navigate("/dashboard/new-research");
@@ -387,16 +488,14 @@ export default function WelcomeScreen({
             {/* Heading */}
 
             <h1>
-              Welcome to iNovaPath, {userName}!
+              Welcome to iNovaPath, {greetingName}!
             </h1>
 
 
             {/* Description */}
 
             <p>
-              Your AI-powered research assistant.
-              Let&apos;s get you set up to accelerate
-              therapeutic discoveries in under 2 minutes.
+              Your Gen AI powered research assistant.
             </p>
 
           </header>
@@ -436,12 +535,7 @@ export default function WelcomeScreen({
                 step={1}
                 iconType="target"
                 title="Set Research Focus"
-                description="Identify therapeutic focus areas to customize recommendations for target protein and drug repurposing algorithms."
-                tags={[
-                  "Oncology",
-                  "Rare Diseases",
-                  "Neurology",
-                ]}
+                description="Identify therapeutic areas of focus for your research"
               />
 
 
@@ -452,12 +546,14 @@ export default function WelcomeScreen({
               <StepCard
                 step={2}
                 iconType="flask"
-                title="Run First Analysis"
-                description="Pose natural language questions to the TxKG engine or start high-throughput screening on approved drug structures."
+                title="Complete the Workflow"
+                description="Post natural language questions to the agent to complete the research workflow and identify repurposing hit"
                 tags={[
-                  "TxKG Query",
-                  "Target Mapping",
-                  "SaaS Pipeline",
+                  "Target ID",
+                  "Literature",
+                  "Repurposing hit",
+                  "Docking",
+                  "Novelty search",
                 ]}
               />
 
@@ -473,7 +569,7 @@ export default function WelcomeScreen({
           <section className="ws-quick-card">
 
             <h2>
-              Quick Start: Select Therapeutic Targets of Interest
+              Quick Start: Select Therapeutic Areas of Interest
             </h2>
 
 
@@ -578,9 +674,22 @@ export default function WelcomeScreen({
               type="button"
               className="ws-primary"
               onClick={handleSave}
+              disabled={saving}
             >
-              Save Focus &amp; Get Started
+              {saving
+                ? "Saving..."
+                : "Save Focus & Get Started"}
             </button>
+
+
+            {saveError && (
+              <p
+                className="ws-save-error"
+                role="alert"
+              >
+                {saveError}
+              </p>
+            )}
 
 
             <div className="ws-skip">
