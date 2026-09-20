@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { fetchAuthSession } from "@aws-amplify/auth";
 import { getCurrentUser as getUserProfile } from "../services/researchApi";
 
 /**
@@ -53,20 +54,45 @@ export const CurrentUserProvider = ({ children }) => {
     setLoading(true);
     setError(null);
 
-    getUserProfile()
-      .then((profile) => {
+    const load = async () => {
+      // This provider wraps the router, so it also mounts on /login, where
+      // there is no session yet. Asking for the profile there is a guaranteed
+      // 401, and the client's 401 handler signs out and navigates — so the
+      // check has to happen before the request, not after it.
+      let signedIn = false;
+      try {
+        const { tokens } = await fetchAuthSession();
+        signedIn = Boolean(tokens?.idToken);
+      } catch (sessionError) {
+        signedIn = false;
+      }
+
+      if (!mounted) return;
+
+      if (!signedIn) {
+        // Not an error state: the screens fall back to "Researcher" until the
+        // user signs in, at which point this provider remounts and retries.
+        setUser(null);
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const profile = await getUserProfile();
         if (!mounted) return;
         setUser(profile);
         setLoading(false);
-      })
-      .catch((err) => {
+      } catch (err) {
         if (!mounted) return;
         // A 401 is already handled globally by the response interceptor, so
         // reaching here means the profile is unavailable for another reason.
         // The app keeps working on the fallback name.
         setError(err?.userMessage || err?.message || "Could not load your profile.");
         setLoading(false);
-      });
+      }
+    };
+
+    load();
 
     return () => {
       mounted = false;

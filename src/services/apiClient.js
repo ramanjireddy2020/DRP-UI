@@ -30,15 +30,24 @@ apiClient.interceptors.request.use(async (config) => {
   return config;
 });
 
+/** Routes that are already the destination of a 401, so must never redirect. */
+const AUTH_ROUTES = ["/login"];
+
 /**
  * Where to send the user when their session is gone. Kept as a module-level
  * assignment rather than a router import so this file stays free of React
  * dependencies and can be unit-tested.
  */
 let onUnauthorized = () => {
-  if (typeof window !== "undefined") {
-    window.location.assign("/login");
-  }
+  if (typeof window === "undefined") return;
+
+  // Redirecting to /login from /login is a full page reload, which remounts
+  // every provider, fires the same unauthenticated request, and lands back
+  // here — an endless refresh. The `redirecting` latch below cannot stop it,
+  // because a page load resets module state.
+  if (AUTH_ROUTES.includes(window.location.pathname)) return;
+
+  window.location.assign("/login");
 };
 
 export const setUnauthorizedHandler = (handler) => {
