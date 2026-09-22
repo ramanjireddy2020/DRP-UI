@@ -6,6 +6,9 @@ import ProjectsPage from "./components/Projects/ProjectsPage";
 import ProjectDetails from "./components/ProjectDetails/ProjectDetails";
 
 import Login from "./components/Login/Login";
+import SignUp from "./components/Login/SignUp";
+import ForgotPassword from "./components/Login/ForgotPassword";
+import ResetPassword from "./components/Login/ResetPassword";
 import SplashScreen from "./components/SplashScreen";
 import WelcomeScreen from "./components/WelcomeScreen";
 
@@ -44,6 +47,23 @@ const router = createBrowserRouter([
   {
     path: "/login",
     element: <Login />,
+  },
+
+  {
+    path: "/signup",
+    element: <SignUp />,
+  },
+
+  {
+    path: "/forgot-password",
+    element: <ForgotPassword />,
+  },
+
+  // Its own route, not a stage of /forgot-password, so a reset link in the
+  // email can land straight on it with ?email=&code=.
+  {
+    path: "/reset-password",
+    element: <ResetPassword />,
   },
 
   {

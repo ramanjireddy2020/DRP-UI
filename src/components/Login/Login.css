@@ -1383,3 +1383,218 @@ body {
     transform: none !important;
   }
 }
+
+/* =========================================================
+   SIGN UP / PASSWORD RESET
+   ---------------------------------------------------------
+   Review point 4. These screens reuse the card, fields and
+   button above so the signed-out flow stays one design; only
+   what the new screens genuinely add is defined here.
+   ========================================================= */
+
+
+/* Confirmation rather than failure — "we emailed you a code",
+   "a new code is on its way". Same shape as .form-error. */
+.form-notice {
+  margin: -8px 0 0;
+
+  padding: 10px 14px;
+
+  border:
+    1px solid
+    rgba(0, 194, 181, 0.35);
+
+  border-radius: 8px;
+
+  background:
+    rgba(0, 194, 181, 0.08);
+
+  color: #0f766e;
+
+  font-size: 13px;
+
+  line-height: 1.4;
+}
+
+
+/* "Already have an account? Sign in" — the link between the
+   three signed-out screens. */
+.auth-switch {
+  display: flex;
+
+  align-items: center;
+
+  justify-content: center;
+
+  flex-wrap: wrap;
+
+  gap: 6px;
+
+  font-size: 14px;
+
+  color: #475569;
+}
+
+
+.auth-switch button {
+  padding: 0;
+
+  border: 0;
+
+  background: none;
+
+  color: #00c2b5;
+
+  font-family: inherit;
+
+  font-size: 14px;
+
+  font-weight: 600;
+
+  cursor: pointer;
+}
+
+
+.auth-switch button:hover {
+  text-decoration: underline;
+}
+
+
+.auth-switch button:disabled {
+  opacity: 0.55;
+
+  cursor: default;
+
+  text-decoration: none;
+}
+
+
+/* =========================================================
+   TERMS ROW (sign up)
+   ========================================================= */
+
+.terms-row {
+  display: flex;
+
+  align-items: flex-start;
+
+  gap: 10px;
+
+  color: #475569;
+
+  font-size: 14px;
+
+  line-height: 20px;
+}
+
+
+.terms-row .custom-checkbox {
+  margin-top: 1px;
+}
+
+
+/* Rendered in the link colour to match the design. They are
+   NOT anchors yet: the Terms and Privacy pages are still
+   pending the point-4 content decision, and a link that goes
+   nowhere is the defect this screen set out to remove. */
+.terms-link {
+  color: #00c2b5;
+
+  font-weight: 600;
+}
+
+
+/* =========================================================
+   PASSWORD RULES CHECKLIST
+   ========================================================= */
+
+.password-rules {
+  display: flex;
+
+  flex-direction: column;
+
+  gap: 10px;
+
+  margin: 0;
+
+  padding: 0;
+
+  list-style: none;
+}
+
+
+.password-rule {
+  display: flex;
+
+  align-items: center;
+
+  gap: 12px;
+
+  color: #64748b;
+
+  font-size: 14px;
+
+  line-height: 18px;
+}
+
+
+.password-rule .rule-dot {
+  width: 9px;
+  height: 9px;
+
+  flex-shrink: 0;
+
+  border-radius: 50%;
+
+  background: #e2e8f0;
+
+  transition:
+    background 0.18s ease;
+}
+
+
+.password-rule.is-met {
+  color: #0f172a;
+}
+
+
+.password-rule.is-met .rule-dot {
+  background: #00c2b5;
+}
+
+
+/* =========================================================
+   CHECK YOUR EMAIL
+   ========================================================= */
+
+.check-email-art {
+  display: grid;
+
+  place-items: center;
+
+  width: 84px;
+  height: 84px;
+
+  margin: 8px auto;
+
+  border-radius: 50%;
+
+  background:
+    rgba(0, 194, 181, 0.12);
+}
+
+
+.check-email-art svg {
+  width: 34px;
+  height: 34px;
+
+  stroke: #00c2b5;
+
+  stroke-width: 1.7;
+
+  fill: none;
+
+  stroke-linecap: round;
+
+  stroke-linejoin: round;
+}

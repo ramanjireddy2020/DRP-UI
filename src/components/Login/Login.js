@@ -1,5 +1,5 @@
 ﻿import React, { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   confirmSignIn,
   getCurrentUser,
@@ -13,6 +13,15 @@ import inovapathLogo from "../assets/inovapath-logo.png";
 
 const Login = () => {
   const navigate = useNavigate();
+  const location = useLocation();
+
+  /**
+   * "Your password has been reset. Sign in to continue." — handed over by the
+   * reset and signup screens, which both finish here rather than signing the
+   * user in themselves. Held in state so it clears the moment a sign-in is
+   * attempted, instead of sitting there contradicting a later error.
+   */
+  const [notice, setNotice] = useState(location.state?.notice || "");
 
   const [showPassword, setShowPassword] = useState(false);
   const [username, setUsername] = useState("");
@@ -85,6 +94,7 @@ const Login = () => {
     }
 
     setError("");
+    setNotice("");
     setIsLoading(true);
 
     try {
@@ -265,12 +275,11 @@ const Login = () => {
   /**
    * Forgot password.
    *
-   * Replace this with your actual forgot-password route
-   * when that screen is implemented.
+   * Review point 4: this was an empty function, so the button was visible and
+   * inert and a locked-out user had no way back into their account.
    */
   const handleForgotPassword = () => {
-    // Example:
-    // navigate("/forgot-password");
+    navigate("/forgot-password");
   };
 
   return (
@@ -373,6 +382,11 @@ const Login = () => {
                   Enter your research credentials
                 </p>
               </div>
+
+              {/* Handed over by the reset and signup screens. */}
+              {notice && (
+                <p className="form-notice">{notice}</p>
+              )}
 
               {/* Login Form */}
               <form
@@ -524,6 +538,19 @@ const Login = () => {
                     "Sign In"
                   )}
                 </button>
+
+                {/* The way to the new signup screen — its own "Sign in" link
+                    points back here. */}
+                <div className="auth-switch">
+                  <span>Don&apos;t have an account?</span>
+
+                  <button
+                    type="button"
+                    onClick={() => navigate("/signup")}
+                  >
+                    Sign up
+                  </button>
+                </div>
               </form>
             </>
           )}
