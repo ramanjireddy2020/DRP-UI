@@ -34,6 +34,8 @@ import {
 import PhaseError from "../workflow/PhaseError";
 import ChatInputBar from "../workflow/ChatInputBar";
 import PipelinePhase from "../workflow/PipelinePhase";
+import ConversationTimeline from "../workflow/ConversationTimeline";
+import ModuleResultCard from "../workflow/ModuleResultCard";
 import { useCurrentUser } from "../../context/CurrentUserContext";
 import './WorkflowStyles.css';
 
@@ -172,13 +174,6 @@ const CompleteWorkflow = () => {
    */
   const [litminexPage, setLitminexPage] = useState(1);
   const [curatexPage, setCuratexPage] = useState(1);
-  /**
-   * The conversation is owned by the session store and is append-only, so
-   * moving between steps never drops a message. What is rendered is the slice
-   * up to and including the step being viewed.
-   */
-  const chatMessages = session.visibleConversation;
-
   // The composer's draft lives inside ChatInputBar now. Held here, every polled
   // job status re-rendered this component and disturbed what was being typed.
 
@@ -349,6 +344,18 @@ const CompleteWorkflow = () => {
   const pipeline = usePhaseResults("pipeline", pipelineStep?.jobId, {
     enabled: pipelineStep?.phase === "pipeline-results",
   });
+
+  /**
+   * What the LitMineX request bubble says.
+   *
+   * LiteminexPhase has always accepted `requestText`, but nothing passed it,
+   * so every run fell back to the generic line. The disease comes from the
+   * TxKG result, so a thrombocytosis session no longer has to borrow the
+   * fixture's wording.
+   */
+  const litminexRequestText = txkgResult.disease
+    ? `Mine literature for ${txkgResult.disease} drug targets with confidence scoring`
+    : undefined;
 
   /**
    * Branch / Rerun / Export for whichever step is on screen.
@@ -556,11 +563,14 @@ const CompleteWorkflow = () => {
         const isFailed = Boolean(railStep?.isFailed) && !isActive;
         const canNavigate = Boolean(railStep?.isNavigable);
 
-        // Requirement: the user can move between steps from this panel. Only
-        // steps that have actually run are reachable — clicking one restores
-        // that step's own view, and nothing it holds is discarded.
+        // W8: the rail is a progress indicator, not a router. Every module
+        // that has run is already on the page, so clicking one scrolls its
+        // card into view instead of tearing down and remounting a screen.
+        // `scrollToModule` still calls goToModule, so the session's own idea
+        // of the active step — which drives Branch / Rerun / Export — stays
+        // correct.
         const goToStep = canNavigate
-          ? () => session.goToModule(step.key)
+          ? () => scrollToModule(step.key)
           : undefined;
 
         return (
@@ -1937,89 +1947,113 @@ const CompleteWorkflow = () => {
     [selectedArticle]
   );
 
-  /** Which module the error screen belongs to, and what to say about it. */
-  const activeErrorInfo = useMemo(() => {
-    const owner = moduleForPhase(workflowPhase);
-    if (!owner) return null;
+  /**
+   * What to say about a module that failed.
+   *
+   * This took no argument before, because only the active module had a screen
+   * and therefore only the active module could show an error. Every module now
+   * has a card of its own, so a failure has to be describable per module.
+   */
+  const errorInfoFor = useCallback(
+    (moduleKey) => {
+      const owner = MODULE_BY_KEY[moduleKey];
+      if (!owner) return null;
 
-    const label = owner.label;
+      const stepError = session.steps[moduleKey]?.error ?? null;
 
-    // Docking cannot succeed on this deployment, so its failure is a known
-    // limitation rather than a fault and is presented as one.
-    if (owner.key === "screensuite" && SCREENSUITE_UNAVAILABLE) {
+      // Docking cannot succeed on this deployment, so its failure is a known
+      // limitation rather than a fault and is presented as one.
+      if (owner.key === "screensuite" && SCREENSUITE_UNAVAILABLE) {
+        return {
+          title: `${owner.label} cannot run on this deployment`,
+          message: SCREENSUITE_UNAVAILABLE_MESSAGE,
+          detail: stepError,
+          expected: true,
+        };
+      }
+
       return {
-        title: `${label} cannot run on this deployment`,
-        message: SCREENSUITE_UNAVAILABLE_MESSAGE,
-        detail: session.activeError || null,
-        expected: true,
+        title: `${owner.label} could not finish`,
+        message: stepError || "The agent run failed without a reason.",
+        detail: null,
+        expected: false,
       };
-    }
+    },
+    [session.steps]
+  );
 
-    return {
-      title: `${label} could not finish`,
-      message: session.activeError || "The agent run failed without a reason.",
-      detail: null,
-      expected: false,
-    };
-  }, [workflowPhase, session.activeError]);
+  /**
+   * Scroll a module's card into view.
+   *
+   * W8: the left rail used to swap which screen was mounted. Now every module
+   * is already on the page, so "go to TxKG" means moving the viewport, not
+   * tearing down and rebuilding a view. `goToModule` is still called so the
+   * session's own notion of the active step stays correct.
+   */
+  const moduleAnchors = useRef({});
 
-  // Render Content Based on Phase
-  const renderContent = () => {
-    if (viewMode === "lineage") {
-      return (
-        <Box sx={{ flex: 1, p: "24px" }}>
-          <LineagePage />
-        </Box>
-      );
-    }
-    if (viewMode === "artifacts") {
-      return (
-        <Box sx={{ flex: 1, p: "24px" }}>
-          <ArtifactsPage />
-        </Box>
-      );
-    }
+  const scrollToModule = useCallback(
+    (moduleKey) => {
+      session.goToModule(moduleKey);
+      const node = moduleAnchors.current[moduleKey];
+      if (node?.scrollIntoView) {
+        node.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [session.goToModule]
+  );
 
-    /**
-     * The session itself failed — no module ever started, so there is no phase
-     * screen to fall back to.
-     */
-    if (session.status === "error" && !session.activeKey) {
+  /**
+   * One module's own output.
+   *
+   * These are the same five phase components with the same props they always
+   * had. Two things changed:
+   *
+   *  - Each is driven by ITS OWN phase, read from `session.steps[key].phase`,
+   *    rather than by the single global `workflowPhase`. That is what lets
+   *    five of them be on the page at once, each showing its own state.
+   *  - None of them is passed `chatMessages` any more. The conversation is
+   *    rendered once, by the timeline, instead of being redrawn privately
+   *    inside two of the five screens (defect B1 — the other three never drew
+   *    it at all, which is why follow-up answers vanished).
+   *
+   * Every result hook is already keyed on its own module's jobId, so a card
+   * has its data whether or not that module is the active one. Nothing about
+   * the API layer changes here.
+   */
+  const renderModuleBody = (moduleKey) => {
+    const step = session.steps[moduleKey];
+    const phase = step?.phase || "";
+
+    if (isErrorPhase(phase) || step?.error) {
+      const info = errorInfoFor(moduleKey);
+      if (!info) return null;
+
+      const idx = session.activationOrder.indexOf(moduleKey);
+      const previous = idx > 0 ? session.activationOrder[idx - 1] : null;
+      const isActive = session.activeKey === moduleKey;
+
       return (
         <PhaseError
-          title="The research session could not be started"
-          message={session.error}
-          detail="The supervisor decides which agent runs, so nothing can proceed until this call succeeds."
-          onRetry={startSession}
-        />
-      );
-    }
-
-    /**
-     * A failed step. Checked before the phase branches below, because an
-     * "-error" phase matches none of their lists — previously a failure had
-     * nowhere to render and the loading screen simply stayed put.
-     */
-    if (isErrorPhase(workflowPhase) && activeErrorInfo) {
-      const previous = session.activationOrder[session.activationOrder.indexOf(session.activeKey) - 1];
-      return (
-        <PhaseError
-          title={activeErrorInfo.title}
-          message={activeErrorInfo.message}
-          detail={activeErrorInfo.detail}
-          onRetry={activeErrorInfo.expected ? undefined : retryActiveStep}
-          onBack={previous ? () => session.goToModule(previous) : undefined}
+          title={info.title}
+          message={info.message}
+          detail={info.detail}
+          /* Retry acts on the active step, so it is only offered on the card
+             the session is actually on — rather than appearing live on an
+             older card and quietly rerunning something else. */
+          onRetry={!info.expected && isActive ? retryActiveStep : undefined}
+          onBack={previous ? () => scrollToModule(previous) : undefined}
           backLabel={previous ? `Back to ${MODULE_BY_KEY[previous]?.label ?? "previous step"}` : undefined}
-          expected={activeErrorInfo.expected}
+          expected={info.expected}
         />
       );
     }
 
-    /** The whole-pipeline run — all five agents as one job. */
-    if (workflowPhase.startsWith("pipeline")) {
+    if (moduleKey === "pipeline") {
       return (
         <PipelinePhase
-          workflowPhase={workflowPhase}
+          workflowPhase={phase}
           pipeline={pipeline.data}
           progressMessage={job.progressMessage}
           query={query}
@@ -2027,10 +2061,10 @@ const CompleteWorkflow = () => {
       );
     }
 
-    if (["txkg-loading", "txkg-results", "target-selection"].includes(workflowPhase)) {
+    if (moduleKey === "txkg") {
       return (
         <TXKGPhase
-          workflowPhase={workflowPhase}
+          workflowPhase={phase}
           query={query}
           txkg={txkgResult}
           progressMessage={job.progressMessage}
@@ -2043,8 +2077,6 @@ const CompleteWorkflow = () => {
           setWorkflowPhase={setWorkflowPhase}
           setActiveStep={setActiveStep}
           setShowBranchDialog={setShowBranchDialog}
-          // Posts the step and starts the next agent, instead of just
-          // switching which screen is shown.
           onContinue={handleContinueToLitMineX}
           continuePending={session.pending}
           jobId={session.steps.txkg?.jobId ?? null}
@@ -2054,11 +2086,11 @@ const CompleteWorkflow = () => {
         />
       );
     }
-    if (["litminex-loading", "litminex-results"].includes(workflowPhase)) {
+
+    if (moduleKey === "litminex") {
       return (
         <LiteminexPhase
-          workflowPhase={workflowPhase}
-          chatMessages={chatMessages}
+          workflowPhase={phase}
           litMinexResults={litMinexResults}
           setSelectedArticle={setSelectedArticle}
           setShowArticleDetail={setShowArticleDetail}
@@ -2071,24 +2103,21 @@ const CompleteWorkflow = () => {
           page={litminex.data?.page ?? 1}
           totalPages={litminex.data?.totalPages ?? 1}
           onPageChange={setLitminexPage}
+          requestText={litminexRequestText}
+          selectedArticles={selectedArticles}
+          onToggleArticle={handleToggleArticle}
+          onContinue={handleContinueToCurateX}
+          continuePending={session.pending}
+          actions={actions}
         />
       );
     }
-    if ([
-      "curatex-loading",
-      "curatex-profile",
-      "curatex-submitted",
-      "curatex-results",
-      "curatex-data-source",
-      "curatex-compound-exploration",
-      "curatex-compound-detail",
-      "curatex-candidate-selection",
-    ].includes(workflowPhase)) {
+
+    if (moduleKey === "curatex") {
       return (
         <CuratexPhase
-          workflowPhase={workflowPhase}
+          workflowPhase={phase}
           setWorkflowPhase={setWorkflowPhase}
-          chatMessages={chatMessages}
           profileData={profileData}
           setProfileData={setProfileData}
           profileEditMode={profileEditMode}
@@ -2107,9 +2136,7 @@ const CompleteWorkflow = () => {
           resultsLoading={curatexResults.loading}
           resultsError={curatexResults.error}
           onRetryResults={curatexResults.reload}
-          // Scores compounds against the edited weights.
           onSubmitProfile={handleSubmitProfile}
-          // Posts the ScreenSuite step.
           onContinue={handleContinueToScreenSuite}
           continuePending={session.pending}
           page={curatexResults.data?.page ?? 1}
@@ -2119,10 +2146,11 @@ const CompleteWorkflow = () => {
         />
       );
     }
-    if (workflowPhase.startsWith("screensuite")) {
+
+    if (moduleKey === "screensuite") {
       return (
         <ScreeningSuitePhase
-          workflowPhase={workflowPhase}
+          workflowPhase={phase}
           progressMessage={job.progressMessage}
           hits={screensuite.data?.hits ?? []}
           loading={screensuite.loading}
@@ -2133,30 +2161,132 @@ const CompleteWorkflow = () => {
         />
       );
     }
-    if (workflowPhase.startsWith("novelty")) {
+
+    if (moduleKey === "novsearch") {
       return (
         <NoveltySearchPhase
-          workflowPhase={workflowPhase}
+          workflowPhase={phase}
           progressMessage={job.progressMessage}
           report={novsearch.data}
           loading={novsearch.loading}
           error={novsearch.error}
           onRetry={novsearch.reload}
+          actions={actions}
         />
       );
     }
 
     /**
-     * A phase with no screen. Reachable when the supervisor names a module this
-     * build has no UI for, which is worth saying plainly rather than showing a
-     * bare phase string.
+     * A module the supervisor named that this build has no view for. Worth
+     * saying plainly rather than rendering an empty card.
      */
     return (
       <PhaseError
-        title="No screen for this step"
-        message={`The workflow reached "${workflowPhase}", which this build has no view for.`}
+        title="No view for this step"
+        message={`The workflow reached "${phase || moduleKey}", which this build has no view for.`}
         detail="This usually means the backend added a module the UI has not caught up with."
         expected
+      />
+    );
+  };
+
+  /**
+   * The conversation, in order, with each module's card where it ran.
+   *
+   * Messages that belong to no module — the opening query, and anything said
+   * before the supervisor picked an agent — lead the thread. After that, each
+   * activated module contributes its own messages followed by its card.
+   *
+   * `activationOrder` is the supervisor's order, not the pipeline's, so a
+   * session that ran NovSearch before CurateX reads in the order it actually
+   * happened.
+   */
+  const timelineBlocks = useMemo(() => {
+    const blocks = [];
+    const conversation = session.conversation;
+
+    const order = [];
+    session.activationOrder.forEach((key) => {
+      if (!order.includes(key)) order.push(key);
+    });
+
+    conversation
+      .filter((m) => !m.moduleKey || !order.includes(m.moduleKey))
+      .forEach((m) => blocks.push({ kind: "message", id: `msg-${m.id}`, message: m }));
+
+    order.forEach((key) => {
+      conversation
+        .filter((m) => m.moduleKey === key)
+        .forEach((m) => blocks.push({ kind: "message", id: `msg-${m.id}`, message: m }));
+
+      blocks.push({ kind: "module", id: `mod-${key}`, moduleKey: key });
+    });
+
+    return blocks;
+  }, [session.conversation, session.activationOrder]);
+
+  /** Status chip for one module's card, from the rail the session already builds. */
+  const cardStatusFor = (moduleKey) => {
+    const railStep = session.rail.find((r) => r.key === moduleKey);
+    if (!railStep) return "idle";
+    if (railStep.isFailed) return "failed";
+    if (railStep.isRunning) return "running";
+    if (railStep.isCompleted) return "done";
+    return "idle";
+  };
+
+  // Render the workspace: one continuous conversation, not one screen per module.
+  const renderContent = () => {
+    if (viewMode === "lineage") {
+      return (
+        <Box sx={{ flex: 1, p: "24px", overflow: "auto" }}>
+          <LineagePage />
+        </Box>
+      );
+    }
+    if (viewMode === "artifacts") {
+      return (
+        <Box sx={{ flex: 1, p: "24px", overflow: "auto" }}>
+          <ArtifactsPage />
+        </Box>
+      );
+    }
+
+    /**
+     * The session itself failed — no module ever started, so there is no card
+     * to fall back to.
+     */
+    if (session.status === "error" && !session.activeKey) {
+      return (
+        <Box sx={{ flex: 1, overflow: "auto" }}>
+          <PhaseError
+            title="The research session could not be started"
+            message={session.error}
+            detail="The supervisor decides which agent runs, so nothing can proceed until this call succeeds."
+            onRetry={startSession}
+          />
+        </Box>
+      );
+    }
+
+    return (
+      <ConversationTimeline
+        blocks={timelineBlocks}
+        pending={session.pending}
+        scrollAnchors={moduleAnchors}
+        renderModule={(moduleKey) => (
+          <ModuleResultCard
+            moduleKey={moduleKey}
+            status={cardStatusFor(moduleKey)}
+            isActive={session.activeKey === moduleKey}
+            /* Only the module the session is on opens by itself. The subgraph
+               and the docking views are heavy, and mounting all five at once
+               in a long session is what would make this slow. */
+            defaultExpanded={session.activeKey === moduleKey}
+          >
+            {renderModuleBody(moduleKey)}
+          </ModuleResultCard>
+        )}
       />
     );
   };
@@ -2196,10 +2326,18 @@ const CompleteWorkflow = () => {
           <WorkflowStepper />
 
           <Box sx={{ display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
-            <Box sx={{ flex: 1, overflow: "auto" }}>
+            {/* The timeline owns its own scrolling, so this wrapper must not
+                add a second scroll container around it — nested scrollers are
+                what made "scroll to a module" unreliable. */}
+            <Box sx={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
               {renderContent()}
             </Box>
-            {viewMode === "chat" && !workflowPhase.startsWith("novelty") && (
+
+            {/* W5 / defect B2: the composer used to be hidden on every
+                NovSearch phase, so the conversation dead-ended at the last
+                module with no way to ask anything further. It is part of the
+                workspace now, not part of a screen. */}
+            {viewMode === "chat" && (
               /* ChatInputBar is imported rather than declared here on purpose —
                  see the note in its own file. Declared inline, it was rebuilt
                  on every parent render, and the parent re-renders roughly once

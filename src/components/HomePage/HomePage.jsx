@@ -336,9 +336,9 @@ const HomePage = () => {
               overflowWrap: "break-word",
             }}
           >
-            What new drug you are going to{" "}
+            What drug are you going to{" "}
             <Box component="span" sx={{ color: "#00CC8C" }}>
-              Rediscover today?
+              repurpose today?
             </Box>
           </Typography>
 
@@ -531,20 +531,6 @@ const HomePage = () => {
             </Box>
           </Box>
 
-          {/* helper-text */}
-          <Typography
-            sx={{
-              fontFamily: FONT,
-              fontWeight: 400,
-              fontSize: "12px",
-              lineHeight: "15px",
-              color: "#8C99A6",
-              zIndex: 3,
-              flexShrink: 0,
-            }}
-          >
-            Describe a disease or research intent
-          </Typography>
         </Box>
 
         {/* quick-start — RECENT SESSIONS */}

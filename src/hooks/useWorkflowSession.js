@@ -594,6 +594,18 @@ const useWorkflowSession = () => {
       const parsed = parseMessageResponse(raw);
       dispatch({ type: "SET_PENDING", pending: false });
 
+      /**
+       * W7 / defect B3: a reply is never dropped.
+       *
+       * This used to append only `if (parsed.content)`. When the backend
+       * answered in a shape the parser did not recognise — which is what
+       * happens when the answer is about a different disease and comes back
+       * wrapped differently — the user saw nothing at all: no message, no
+       * error, no spinner. The reply had arrived and been thrown away.
+       *
+       * A response that carries no readable text but did start a job is a
+       * legitimate silent case: the job's own progress takes over from here.
+       */
       if (parsed.content) {
         dispatch({
           type: "APPEND_MESSAGES",
@@ -604,6 +616,27 @@ const useWorkflowSession = () => {
               text: parsed.content,
               agentName: parsed.agentName,
               stepId: parsed.stepId,
+            },
+          ],
+        });
+      } else if (!parsed.jobId) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[session] message response carried no readable content",
+          parsed.raw
+        );
+
+        dispatch({
+          type: "APPEND_MESSAGES",
+          key: originKey,
+          messages: [
+            {
+              role: "agent",
+              isError: true,
+              text:
+                "The agent replied, but the answer could not be read. " +
+                "This is a display problem rather than a failed run — the " +
+                "raw response is in the browser console.",
             },
           ],
         });
@@ -680,18 +713,18 @@ const useWorkflowSession = () => {
   );
 
   /**
-   * The thread as the active step should see it: everything up to and including
-   * this step. Navigating back shows the history that existed at that point,
-   * while the full thread stays in `conversation`.
+   * The whole thread, always.
    *
-   * A pipeline run spans every module, so it sees the whole thread.
+   * W3 / defect B4: this used to slice the conversation to
+   * `stepIndex <= activeModule.index`, so stepping back to an earlier module
+   * hid everything discussed after it. In a single continuous conversation
+   * that is exactly wrong — the thread is the record of the session, and
+   * looking at an earlier result must not erase later turns.
+   *
+   * Per-module slicing has not gone away; `messagesForModule(key)` below still
+   * provides it for anything that genuinely wants one module's messages.
    */
-  const visibleConversation = useMemo(() => {
-    if (!activeModule || activeModule.isPipeline) return state.conversation;
-    return state.conversation.filter(
-      (m) => m.stepIndex == null || m.stepIndex <= activeModule.index
-    );
-  }, [state.conversation, activeModule]);
+  const visibleConversation = state.conversation;
 
   const messagesForModule = useCallback(
     (key) => state.conversation.filter((m) => m.moduleKey === key),

@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Box, Typography, Button } from "@mui/material";
 import { FONT, TEAL, GRAY_BG } from "../workflowConstants";
 import PhaseActions from "../PhaseActions";
-import { agentHeadingFor } from "../../../workflow/moduleMap";
+import SharedAgentHeader from "../AgentHeader";
 import { useCurrentUser } from "../../../context/CurrentUserContext";
 
 /* ============================================================================
@@ -187,56 +187,6 @@ const baseText = {
    SCREEN SUITE ICON
 ============================================================================ */
 
-const ScreenSuiteIcon = () => (
-  <svg
-    width="18"
-    height="18"
-    viewBox="0 0 24 24"
-    fill="none"
-    xmlns="http://www.w3.org/2000/svg"
-  >
-    <path
-      d="
-        M11.9 3.25
-        L13.55 9.1
-        C13.67 9.52 14 9.85 14.42 9.97
-        L20.27 11.62
-        C20.75 11.76 20.75 12.44 20.27 12.58
-        L14.42 14.23
-        C14 14.35 13.67 14.68 13.55 15.1
-        L11.9 20.95
-        C11.76 21.43 11.08 21.43 10.94 20.95
-        L9.29 15.1
-        C9.17 14.68 8.84 14.35 8.42 14.23
-        L2.57 12.58
-        C2.09 12.44 2.09 11.76 2.57 11.62
-        L8.42 9.97
-        C8.84 9.85 9.17 9.52 9.29 9.1
-        L10.94 3.25
-        C11.08 2.77 11.76 2.77 11.9 3.25Z
-      "
-      stroke="#00BCD4"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-
-    <circle
-      cx="5.25"
-      cy="18.45"
-      r="1.65"
-      stroke="#00BCD4"
-      strokeWidth="1.5"
-    />
-
-    <path
-      d="M18.45 3.25V7.05M16.55 5.15H20.35"
-      stroke="#00BCD4"
-      strokeWidth="1.45"
-      strokeLinecap="round"
-    />
-  </svg>
-);
 
 /* ============================================================================
    USER MESSAGE
@@ -299,45 +249,11 @@ const UserMessage = ({ subject }) => {
    AGENT HEADER
 ============================================================================ */
 
-const AgentHeader = () => (
-  <Box
-    sx={{
-      display: "flex",
-      alignItems: "center",
-      gap: "10px",
-      mb: "12px",
-    }}
-  >
-    <Box
-      sx={{
-        width: "34px",
-        height: "34px",
-        border: "1px solid #00BCD4",
-        borderRadius: "8px",
-        background: "#F0FDFF",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        flexShrink: 0,
-      }}
-    >
-      <ScreenSuiteIcon />
-    </Box>
-
-    <Typography
-      sx={{
-        ...baseText,
-        fontSize: "13px",
-        lineHeight: "16px",
-        fontWeight: 700,
-        color: TEAL,
-        textTransform: "uppercase",
-      }}
-    >
-      {agentHeadingFor("screensuite")}
-    </Typography>
-  </Box>
-);
+/**
+ * Item T5: the local header is gone. The shared AgentHeader renders the one
+ * agreed form for every module — name as written, full agent name beneath.
+ */
+const AgentHeader = () => <SharedAgentHeader moduleKey="screensuite" />;
 
 /* ============================================================================
    DOCKING TABLE

@@ -6,7 +6,7 @@ import {
   Checkbox,
   IconButton,
 } from '@mui/material';
-import { agentHeadingFor } from '../../../workflow/moduleMap';
+import { moduleDisplayFor } from '../../../workflow/moduleMap';
 import PhaseActions from '../PhaseActions';
 import { useCurrentUser } from '../../../context/CurrentUserContext';
 import {
@@ -93,9 +93,15 @@ const LitMineXSparkleIcon = ({ size = 16 }) => (
    LITMINEX AGENT HEADER
    ========================================================================== */
 
+const LITMINEX_DISPLAY = moduleDisplayFor('litminex') ?? {
+  label: 'LitMineX',
+  role: null,
+};
+
 const LitMineXAgentHeader = ({
-  // One naming scheme for all five modules, from moduleMap.
-  label = agentHeadingFor('litminex'),
+  // One naming scheme for all five modules, from moduleMap. Item T5: the
+  // module name keeps its own casing, with the full agent name beneath it.
+  display = LITMINEX_DISPLAY,
 }) => (
   <Box
     sx={{
@@ -123,20 +129,33 @@ const LitMineXAgentHeader = ({
       <LitMineXSparkleIcon size={16} />
     </Box>
 
-    <Typography
-      sx={{
-        flex: 1,
-        fontFamily: FONT,
-        fontSize: '11px',
-        lineHeight: '13px',
-        fontWeight: 700,
-        color: '#334155',
-        textTransform: 'uppercase',
-        letterSpacing: '0.05em',
-      }}
-    >
-      {label}
-    </Typography>
+    <Box sx={{ flex: 1, minWidth: 0 }}>
+      <Typography
+        sx={{
+          fontFamily: FONT,
+          fontSize: '13px',
+          lineHeight: 1.25,
+          fontWeight: 700,
+          color: '#334155',
+        }}
+      >
+        {display.label}
+      </Typography>
+
+      {display.role && (
+        <Typography
+          sx={{
+            fontFamily: FONT,
+            fontSize: '11px',
+            lineHeight: 1.3,
+            fontWeight: 400,
+            color: '#94A3B8',
+          }}
+        >
+          ({display.role})
+        </Typography>
+      )}
+    </Box>
   </Box>
 );
 
@@ -215,7 +234,12 @@ const confidenceColor = (conf) => {
 
 const LiteminexPhase = ({
   workflowPhase,
-  chatMessages,
+  /**
+   * Kept for compatibility. The conversation is rendered once by
+   * ConversationTimeline now, so the parent no longer passes this and the
+   * follow-up block below draws nothing.
+   */
+  chatMessages = [],
   litMinexResults,
   setSelectedArticle,
   setShowArticleDetail,
@@ -248,7 +272,6 @@ const LiteminexPhase = ({
   actions = {},
 }) => {
   const { chatLabel: userLabel } = useCurrentUser();
-  const agentHeading = agentHeadingFor('litminex');
 
   // Falls back only when the parent supplied nothing.
   const requestLabel = requestText || 'Mine literature for the selected drug targets';
@@ -351,13 +374,25 @@ const LiteminexPhase = ({
                   fontSize: '13px',
                   fontWeight: 700,
                   color: TEXT_DARK,
-                  mb: '12px',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.5px',
+                  mb: '2px',
                 }}
               >
-                {agentHeading}
+                {LITMINEX_DISPLAY.label}
               </Typography>
+
+              {LITMINEX_DISPLAY.role && (
+                <Typography
+                  sx={{
+                    fontFamily: FONT,
+                    fontSize: '11px',
+                    fontWeight: 400,
+                    color: '#94A3B8',
+                    mb: '12px',
+                  }}
+                >
+                  ({LITMINEX_DISPLAY.role})
+                </Typography>
+              )}
 
 
               <Box

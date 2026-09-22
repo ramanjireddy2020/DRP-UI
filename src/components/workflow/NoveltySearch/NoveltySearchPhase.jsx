@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Box, Button, Typography } from "@mui/material";
 import { TEAL, GRAY_BG } from "../workflowConstants";
 
-import { agentHeadingFor } from "../../../workflow/moduleMap";
+import SharedAgentHeader from "../AgentHeader";
 import { useCurrentUser } from "../../../context/CurrentUserContext";
 
 const NOVSEARCH_FONT = "'Inter', sans-serif";
@@ -59,34 +59,6 @@ const primaryButton = {
    SVG ICONS
 ============================================================================ */
 
-const AgentIcon = () => (
-  <svg
-    width="18"
-    height="18"
-    viewBox="0 0 24 24"
-    fill="none"
-  >
-    <path
-      d="M12 3.5L13.7 9.3L19.5 11L13.7 12.7L12 18.5L10.3 12.7L4.5 11L10.3 9.3L12 3.5Z"
-      stroke="#00BCD4"
-      strokeWidth="1.7"
-      strokeLinejoin="round"
-    />
-    <path
-      d="M18.5 3.5V7.5M16.5 5.5H20.5"
-      stroke="#00BCD4"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-    />
-    <circle
-      cx="5"
-      cy="18.5"
-      r="1.5"
-      stroke="#00BCD4"
-      strokeWidth="1.5"
-    />
-  </svg>
-);
 
 const LinkIcon = ({ color = TEAL }) => (
   <svg
@@ -183,44 +155,11 @@ const MicIcon = () => (
    AGENT HEADER
 ============================================================================ */
 
-const AgentHeader = () => (
-  <Box
-    sx={{
-      display: "flex",
-      alignItems: "center",
-      gap: "10px",
-      mb: "14px",
-    }}
-  >
-    <Box
-      sx={{
-        width: "34px",
-        height: "34px",
-        border: "1px solid #00BCD4",
-        borderRadius: "7px",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "#F0FDFF",
-        flexShrink: 0,
-      }}
-    >
-      <AgentIcon />
-    </Box>
-
-    <Typography
-      sx={{
-        ...text,
-        fontSize: "12px",
-        lineHeight: "15px",
-        fontWeight: 700,
-        color: TEAL,
-      }}
-    >
-      {agentHeadingFor("novsearch")}
-    </Typography>
-  </Box>
-);
+/**
+ * Item T5: the local header is gone. The shared AgentHeader renders the one
+ * agreed form for every module — name as written, full agent name beneath.
+ */
+const AgentHeader = () => <SharedAgentHeader moduleKey="novsearch" />;
 
 /* ============================================================================
    USER MESSAGE

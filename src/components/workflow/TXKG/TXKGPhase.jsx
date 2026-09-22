@@ -5,7 +5,7 @@ import {
   TextField, Accordion, AccordionSummary, AccordionDetails, Chip, IconButton
 } from '@mui/material';
 import litminexApi from '../../../services/api/litminex';
-import { agentHeadingFor } from '../../../workflow/moduleMap';
+import { moduleDisplayFor } from '../../../workflow/moduleMap';
 import { linksForSource, uniprotUrl } from '../../../workflow/sourceLinks';
 import PhaseActions from '../PhaseActions';
 import SubgraphView from '../SubgraphView';
@@ -85,7 +85,7 @@ const TXKGPhase = ({
    * "INOVAPATH TXKG AGENT".
    */
   const { chatLabel: userLabel } = useCurrentUser();
-  const agentHeading = agentHeadingFor('txkg');
+  const agentDisplay = moduleDisplayFor('txkg') ?? { label: 'TxKG', role: null };
   // Real TxKG results when the job has returned; the original fixture until
   // then, so the screen is never empty. `mockTargets` keeps its name because
   // three separate tables below render from it.
@@ -279,7 +279,13 @@ const TXKGPhase = ({
               <div className="agent-avatar">
                 <SparkleIcon size={11.67} />
               </div>
-              <span className="agent-name">{agentHeading}</span>
+              {/* Item T5: module name as written, full agent name beneath. */}
+              <span className="agent-name">
+                {agentDisplay.label}
+                {agentDisplay.role && (
+                  <span className="agent-role">({agentDisplay.role})</span>
+                )}
+              </span>
             </div>
             <div className="status-processing">
               <div className="spinner-container">

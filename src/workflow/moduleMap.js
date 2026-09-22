@@ -225,14 +225,32 @@ export const apiModuleKey = (key) => MODULE_BY_KEY[resolveModuleKey(key)]?.apiKe
 export const agentNameFor = (key) => {
   const module = MODULE_BY_KEY[resolveModuleKey(key)];
   if (!module) return null;
-  return module.agentRole ? `${module.label} — ${module.agentRole}` : module.label;
+  return module.agentRole ? `${module.label} (${module.agentRole})` : module.label;
 };
 
-/** Uppercase form, for the phase screens that render the name as a heading. */
-export const agentHeadingFor = (key) => {
-  const name = agentNameFor(key);
-  return name ? name.toUpperCase() : null;
+/**
+ * The two halves of a module's name, for the headers that render them as two
+ * lines — the module name as written, with the full agent name beneath it.
+ *
+ * Item T5: the name used to be flattened into one uppercased string
+ * ("TXKG — TARGET IDENTIFICATION AGENT"). The agreed form keeps each module's
+ * own casing — TxKG, LitMineX, CurateX, ScreenSuite, NovSearch — so a single
+ * uppercase string can no longer carry it. `label` and `agentRole` already
+ * hold the two halves correctly cased; this just exposes them as a pair.
+ *
+ * @returns {{label: string, role: string|null}|null}
+ */
+export const moduleDisplayFor = (key) => {
+  const module = MODULE_BY_KEY[resolveModuleKey(key)];
+  if (!module) return null;
+  return { label: module.label, role: module.agentRole ?? null };
 };
+
+/**
+ * @deprecated Use moduleDisplayFor. Kept only so a caller that has not been
+ * converted still renders a correctly-cased name rather than shouting.
+ */
+export const agentHeadingFor = (key) => agentNameFor(key);
 
 /**
  * Phases whose names do not carry their module's prefix. Currently only
@@ -407,6 +425,7 @@ const moduleMap = {
   apiModuleKey,
   agentNameFor,
   agentHeadingFor,
+  moduleDisplayFor,
   moduleForPhase,
   isErrorPhase,
   isLoadingPhase,

@@ -531,11 +531,20 @@ export default function WelcomeScreen({
                   STEP 1
                   ================================================== */}
 
+              {/* Item T3: step 1 carries therapeutic-area boxes again, to
+                  match step 2's row. Review point 8 had removed the previous
+                  three; these are the four the testing team named. */}
               <StepCard
                 step={1}
                 iconType="target"
                 title="Set Research Focus"
                 description="Identify therapeutic areas of focus for your research"
+                tags={[
+                  "Oncology",
+                  "Rare Diseases",
+                  "Inflammation",
+                  "Neurodegenerative",
+                ]}
               />
 
 

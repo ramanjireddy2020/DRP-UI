@@ -21,7 +21,6 @@ import {
 } from "../workflowConstants";
 import AgentHeader from "../AgentHeader";
 import PhaseActions from "../PhaseActions";
-import { agentHeadingFor } from "../../../workflow/moduleMap";
 import { useCurrentUser } from "../../../context/CurrentUserContext";
 import "./CuratexPhase.css";
 
@@ -174,7 +173,6 @@ const CuratexPhase = ({
   actions = {},
 }) => {
   const { chatLabel: userLabel } = useCurrentUser();
-  const agentHeading = agentHeadingFor("curatex");
   const activeCompound = selectedCompound || curateXResults?.[0];
 
   // Local state — weights per property, and the "Adding new parameter"
@@ -333,7 +331,7 @@ const CuratexPhase = ({
         </div>
 
         <div className="curatex-agent-card">
-          <AgentHeader label={agentHeading} />
+          <AgentHeader moduleKey="curatex" />
 
           <Typography className="curatex-body-text curatex-loading-description">
             {progressMessage ||
@@ -405,7 +403,7 @@ const CuratexPhase = ({
         </div>
 
         <div className="curatex-agent-card">
-          <AgentHeader label={agentHeading} />
+          <AgentHeader moduleKey="curatex" />
 
           <Typography className="curatex-body-text curatex-profile-intro">
             {profileError
@@ -621,7 +619,7 @@ const CuratexPhase = ({
     return (
       <Box className="curatex-page curatex-submitted-page">
         <div className="curatex-agent-card curatex-submitted-card">
-          <AgentHeader label={agentHeading} />
+          <AgentHeader moduleKey="curatex" />
           <Typography className="curatex-body-text curatex-results-intro">
             Profile submitted. Scoring compounds against your {targetLabel} target product
             profile...
@@ -656,7 +654,7 @@ const CuratexPhase = ({
         </div>
 
         <div className="curatex-agent-card curatex-results-card">
-          <AgentHeader label={agentHeading} />
+          <AgentHeader moduleKey="curatex" />
 
           <Typography className="curatex-body-text curatex-results-intro">
             {/* Was "Scoring 124 compounds against your JAK2 target product
@@ -1080,7 +1078,7 @@ const CuratexPhase = ({
         </div>
 
         <div className="curatex-agent-card curatex-exploration-card">
-          <AgentHeader label={agentHeading} />
+          <AgentHeader moduleKey="curatex" />
 
           <Typography className="curatex-body-text curatex-exploration-intro">
             Here is the detailed compound profile for{" "}
@@ -1151,7 +1149,7 @@ const CuratexPhase = ({
     return (
       <Box className="curatex-page curatex-candidate-page">
         <div className="curatex-agent-card curatex-candidate-question-card">
-          <AgentHeader label={agentHeading} />
+          <AgentHeader moduleKey="curatex" />
 
           <Typography className="curatex-body-text curatex-candidate-question">
             Would you like to select specific candidates for screening, or
@@ -1174,7 +1172,7 @@ const CuratexPhase = ({
         </div>
 
         <div className="curatex-agent-card curatex-candidate-card">
-          <AgentHeader label={agentHeading} />
+          <AgentHeader moduleKey="curatex" />
 
           <Typography className="curatex-body-text curatex-candidate-intro">
             Selected candidates forwarded to ScreenSuite for molecular
