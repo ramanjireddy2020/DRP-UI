@@ -33,6 +33,11 @@ const styleFor = (status) =>
 const PipelinePhase = ({ workflowPhase, pipeline, progressMessage, query }) => {
   const isLoading = workflowPhase === "pipeline-loading";
 
+  // The job can report "completed" while a stage failed; the stage list is
+  // what decides whether this reads as a clean finish.
+  const hasFailures =
+    pipeline?.hasFailures ?? Boolean(pipeline?.stages?.some((s) => s.failed));
+
   return (
     <Box sx={{ p: "24px 16px", bgcolor: GRAY_BG }}>
       <Box sx={{ maxWidth: "820px", display: "flex", flexDirection: "column", gap: "16px" }}>
@@ -56,8 +61,35 @@ const PipelinePhase = ({ workflowPhase, pipeline, progressMessage, query }) => {
           <Box sx={{ display: "flex", alignItems: "center", gap: "10px" }}>
             {isLoading && <CircularProgress size={16} sx={{ color: TEAL }} />}
             <Typography sx={{ fontFamily: FONT, fontSize: "15px", fontWeight: 700, color: TEXT_DARK }}>
-              {isLoading ? "Running the full repurposing pipeline" : "Pipeline finished"}
+              {isLoading
+                ? "Running the full repurposing pipeline"
+                : hasFailures
+                ? "Pipeline finished with failures"
+                : "Pipeline finished"}
             </Typography>
+
+            {!isLoading && pipeline?.hasData && (
+              <Box
+                sx={{
+                  ml: "auto",
+                  bgcolor: hasFailures ? "#FEF3C7" : "#D1FAE5",
+                  borderRadius: "6px",
+                  px: "8px",
+                  py: "3px",
+                }}
+              >
+                <Typography
+                  sx={{
+                    fontFamily: FONT,
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    color: hasFailures ? "#B45309" : "#059669",
+                  }}
+                >
+                  {hasFailures ? "Partial" : "Completed"}
+                </Typography>
+              </Box>
+            )}
           </Box>
 
           {/* The runner's own progress line — the only feedback a multi-minute
@@ -186,7 +218,7 @@ const PipelinePhase = ({ workflowPhase, pipeline, progressMessage, query }) => {
         {/* Docking cannot run on this deployment, so a 4-of-5 pipeline is the
             expected outcome rather than a fault. Saying so here stops it
             reading as a bug. */}
-        {!isLoading && pipeline?.stages?.some((s) => s.failed) && (
+        {!isLoading && hasFailures && (
           <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: TEXT_MUTED, lineHeight: 1.6 }}>
             A failing stage does not stop the run. ScreenSuite is expected to fail on this
             deployment — PyMOL and Vina cannot be installed on Databricks Apps.

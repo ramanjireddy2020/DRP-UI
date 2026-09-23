@@ -193,6 +193,86 @@ export const normalizeTxkgResult = (payload) => {
   };
 };
 
+/**
+ * Meta-path analysis, read from the three GET /agents/metapath/{jobId}*
+ * endpoints.
+ *
+ * The collection documents these routes but carries no example response, so
+ * nothing here assumes field names beyond the obvious ones: the stats row is
+ * whatever numeric fields the analysis returns (nothing is invented when it
+ * returns none), and scores / traversals accept a bare array or one wrapped in
+ * a list field.
+ */
+const listFrom = (payload, keys) => {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") return [];
+  for (const key of keys) {
+    if (Array.isArray(payload[key])) return payload[key];
+  }
+  return [];
+};
+
+const humanise = (key) =>
+  String(key)
+    .replace(/_/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/^./, (c) => c.toUpperCase());
+
+const pathText = (value) => {
+  if (Array.isArray(value)) {
+    return value
+      .map((step) => (step && typeof step === "object" ? step.label ?? step.name ?? step.id : step))
+      .filter((step) => step != null && step !== "")
+      .join(" → ");
+  }
+  return value == null ? "" : String(value);
+};
+
+export const normalizeMetapath = ({ analysis, scores, traversals } = {}) => {
+  const statsSource =
+    analysis && typeof analysis === "object" && !Array.isArray(analysis)
+      ? analysis.stats && typeof analysis.stats === "object"
+        ? analysis.stats
+        : analysis.summary && typeof analysis.summary === "object"
+        ? analysis.summary
+        : analysis
+      : {};
+
+  const stats = Object.entries(statsSource)
+    .filter(([key, value]) => typeof value === "number" && Number.isFinite(value) && !/id$/i.test(key))
+    .map(([key, value]) => ({
+      label: humanise(key),
+      value: Number.isInteger(value) ? String(value) : value.toFixed(2),
+    }));
+
+  const scoreRows = listFrom(scores, ["scores", "items", "results", "metapaths"])
+    .map((row) => {
+      if (!row || typeof row !== "object") return null;
+      const name = pathText(row.metapath ?? row.path ?? row.name ?? row.target ?? row.id);
+      const score = Number(row.score ?? row.value ?? row.weight);
+      if (!name) return null;
+      return { name, score: Number.isFinite(score) ? formatScore(score) : "—" };
+    })
+    .filter(Boolean);
+
+  const traversalRows = listFrom(traversals, ["traversals", "items", "paths", "results"])
+    .map((row) => {
+      if (typeof row === "string") return { name: null, path: row };
+      if (!row || typeof row !== "object") return null;
+      const path = pathText(row.path ?? row.nodes ?? row.traversal ?? row.metapath);
+      if (!path) return null;
+      return { name: row.target ?? row.name ?? null, path };
+    })
+    .filter(Boolean);
+
+  return {
+    hasData: Boolean(stats.length || scoreRows.length || traversalRows.length),
+    stats,
+    scores: scoreRows,
+    traversals: traversalRows,
+  };
+};
+
 export const EMPTY_TXKG_RESULT = EMPTY;
 
 export default normalizeTxkgResult;

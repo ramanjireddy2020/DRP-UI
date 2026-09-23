@@ -1,4 +1,4 @@
-﻿import React, { useState } from "react";
+import React, { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   confirmSignIn,
@@ -6,6 +6,7 @@ import {
   signIn,
   signOut,
 } from "@aws-amplify/auth";
+import { useCurrentUser } from "../../context/CurrentUserContext";
 import "./Login.css";
 
 import molecularBg from "../assets/inovapath-loginbg.webp";
@@ -14,6 +15,10 @@ import inovapathLogo from "../assets/inovapath-logo.png";
 const Login = () => {
   const navigate = useNavigate();
   const location = useLocation();
+
+  // CurrentUserProvider sits above the router and does not remount on
+  // sign-in, so the profile (GET /users/me) is re-fetched explicitly here.
+  const { refresh: refreshCurrentUser } = useCurrentUser();
 
   /**
    * "Your password has been reset. Sign in to continue." — handed over by the
@@ -54,6 +59,7 @@ const Login = () => {
     });
 
     if (isSignedIn) {
+      refreshCurrentUser();
       navigate("/splash", { replace: true });
       return;
     }
@@ -252,6 +258,7 @@ const Login = () => {
         setConfirmPassword("");
         setPassword("");
 
+        refreshCurrentUser();
         navigate("/splash", { replace: true });
       } else {
         setError(

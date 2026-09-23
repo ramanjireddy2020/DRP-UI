@@ -1,6 +1,9 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { Box, Button, Typography } from "@mui/material";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { Box, Button, Checkbox, Typography } from "@mui/material";
 import { TEAL, GRAY_BG } from "../workflowConstants";
+import PhaseActions from "../PhaseActions";
+import novsearchApi from "../../../services/api/novsearch";
 
 import SharedAgentHeader from "../AgentHeader";
 import { useCurrentUser } from "../../../context/CurrentUserContext";
@@ -223,84 +226,109 @@ const UserMessage = ({ children }) => {
 /**
  * @param {object[]} rows - normalised patents from
  *   GET /agents/novsearch/{jobId}/report — { id, title, relevance }.
+ * @param {boolean} selectable - adds the checkbox column Compare reads from.
  */
-const PatentTable = ({ rows = [] }) => (
-  <Box
-    sx={{
-      width: "100%",
-      border: "1px solid #E2E8F0",
-      borderRadius: "8px",
-      overflow: "hidden",
-      background: "#FFFFFF",
-    }}
-  >
-    {/* Header */}
+const PatentTable = ({ rows = [], selectable = false, selectedIds = [], onToggle, emptyText }) => {
+  const columns = selectable
+    ? "32px 120px minmax(0, 1fr) 94px"
+    : "120px minmax(0, 1fr) 94px";
+
+  return (
     <Box
       sx={{
-        display: "grid",
-        gridTemplateColumns: "94px minmax(0, 1fr) 94px",
-        alignItems: "center",
-        minHeight: "50px",
-        padding: "0 14px",
-        boxSizing: "border-box",
-        background: "#F8FAFC",
+        width: "100%",
+        border: "1px solid #E2E8F0",
+        borderRadius: "8px",
+        overflow: "hidden",
+        background: "#FFFFFF",
       }}
     >
-      <Typography sx={tableHeader}>PATENT ID</Typography>
-      <Typography sx={tableHeader}>TITLE</Typography>
-      <Typography sx={tableHeader}>RELEVANCE</Typography>
-    </Box>
-
-    {/* Rows. The module-level `patents` fixture is no longer read — these come
-        from the novelty report. */}
-    {rows.map((patent) => (
+      {/* Header */}
       <Box
-        key={patent.id}
         sx={{
           display: "grid",
-          gridTemplateColumns: "94px minmax(0, 1fr) 94px",
+          gridTemplateColumns: columns,
           alignItems: "center",
-          minHeight: "46px",
+          minHeight: "50px",
           padding: "0 14px",
           boxSizing: "border-box",
-          borderTop: "1px solid #E2E8F0",
+          background: "#F8FAFC",
         }}
       >
-        <Typography
-          sx={{
-            ...tableCell,
-            fontWeight: 600,
-            color: "#374151",
-          }}
-        >
-          {patent.id}
-        </Typography>
-
-        <Typography
-          sx={{
-            ...tableCell,
-            color: "#64748B",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {patent.title}
-        </Typography>
-
-        <Typography
-          sx={{
-            ...tableCell,
-            fontWeight: 600,
-            color: "#374151",
-          }}
-        >
-          {patent.relevance}
-        </Typography>
+        {selectable && <Box />}
+        <Typography sx={tableHeader}>PATENT ID</Typography>
+        <Typography sx={tableHeader}>TITLE</Typography>
+        <Typography sx={tableHeader}>RELEVANCE</Typography>
       </Box>
-    ))}
-  </Box>
-);
+
+      {rows.length === 0 && emptyText && (
+        <Typography sx={{ ...tableCell, color: "#64748B", padding: "14px", borderTop: "1px solid #E2E8F0" }}>
+          {emptyText}
+        </Typography>
+      )}
+
+      {rows.map((patent) => (
+        <Box
+          key={patent.id}
+          sx={{
+            display: "grid",
+            gridTemplateColumns: columns,
+            alignItems: "center",
+            minHeight: "46px",
+            padding: "0 14px",
+            boxSizing: "border-box",
+            borderTop: "1px solid #E2E8F0",
+          }}
+        >
+          {selectable && (
+            <Checkbox
+              size="small"
+              checked={selectedIds.includes(patent.id)}
+              onChange={() => onToggle?.(patent.id)}
+              inputProps={{ "aria-label": `Select patent ${patent.id}` }}
+              sx={{ p: 0, color: "#CBD5E1", "&.Mui-checked": { color: TEAL } }}
+            />
+          )}
+
+          <Typography
+            sx={{
+              ...tableCell,
+              fontWeight: 600,
+              color: "#374151",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {patent.id}
+          </Typography>
+
+          <Typography
+            sx={{
+              ...tableCell,
+              color: "#64748B",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {patent.title}
+          </Typography>
+
+          <Typography
+            sx={{
+              ...tableCell,
+              fontWeight: 600,
+              color: "#374151",
+            }}
+          >
+            {patent.relevance}
+          </Typography>
+        </Box>
+      ))}
+    </Box>
+  );
+};
 
 const tableHeader = {
   ...text,
@@ -321,23 +349,24 @@ const tableCell = {
 ============================================================================ */
 
 /**
- * The novelty verdict.
+ * An ESTIMATED viability, labelled as such.
  *
- * `assessment` and `recommendations` are the report's own fields. The
- * "HIGH VIABILITY" badge used to be hardcoded green, so every candidate — even
- * one blocked by a direct patent hit — was presented as clear to file. It is
- * derived from the top relevance score instead: the API returns no verdict
- * enum, and relevance is the only signal in the payload that speaks to
- * overlap.
+ * The report has no verdict field. The badge used to be read off
+ * `patents[0]` (assuming the list was sorted) and presented as if it were the
+ * backend's own conclusion, so it could contradict the assessment text. It is
+ * now taken from the highest relevance in the list and says it is an estimate;
+ * with no scored patents there is no badge at all.
  */
 const viabilityFor = (report) => {
-  const top = report?.patents?.[0]?.rawRelevance;
-  if (!Number.isFinite(top)) {
-    return { label: "NOT ASSESSED", bg: "#F1F5F9", color: "#64748B" };
-  }
-  if (top >= 0.9) return { label: "LOW VIABILITY", bg: "#FEE2E2", color: "#DC2626" };
-  if (top >= 0.75) return { label: "MODERATE VIABILITY", bg: "#FEF3C7", color: "#B45309" };
-  return { label: "HIGH VIABILITY", bg: "#DCFCE7", color: "#16A34A" };
+  const scores = (report?.patents ?? [])
+    .map((p) => p?.rawRelevance)
+    .filter((n) => Number.isFinite(n));
+  if (!scores.length) return null;
+
+  const top = Math.max(...scores);
+  if (top >= 0.9) return { top, label: "EST. LOW VIABILITY", bg: "#FEE2E2", color: "#DC2626" };
+  if (top >= 0.75) return { top, label: "EST. MODERATE VIABILITY", bg: "#FEF3C7", color: "#B45309" };
+  return { top, label: "EST. HIGH VIABILITY", bg: "#DCFCE7", color: "#16A34A" };
 };
 
 const InsightsCard = ({ report }) => {
@@ -407,26 +436,29 @@ const InsightsCard = ({ report }) => {
           Novelty Assessment
         </Typography>
 
-        <Box
-          sx={{
-            px: "8px",
-            py: "2px",
-            borderRadius: "10px",
-            background: viability.bg,
-          }}
-        >
-          <Typography
+        {viability && (
+          <Box
+            title={`Estimated from the highest patent relevance (${viability.top.toFixed(2)}). The API returns no verdict.`}
             sx={{
-              ...text,
-              fontSize: "9px",
-              lineHeight: "11px",
-              fontWeight: 600,
-              color: viability.color,
+              px: "8px",
+              py: "2px",
+              borderRadius: "10px",
+              background: viability.bg,
             }}
           >
-            {viability.label}
-          </Typography>
-        </Box>
+            <Typography
+              sx={{
+                ...text,
+                fontSize: "9px",
+                lineHeight: "11px",
+                fontWeight: 600,
+                color: viability.color,
+              }}
+            >
+              {viability.label}
+            </Typography>
+          </Box>
+        )}
       </Box>
 
       <Typography
@@ -462,53 +494,211 @@ const InsightsCard = ({ report }) => {
           ))}
         </Box>
       )}
+
+      {viability && (
+        <Typography
+          sx={{ ...text, fontSize: "10px", lineHeight: "14px", color: "#94A3B8", mt: "10px" }}
+        >
+          The viability badge is an estimate from the highest patent relevance
+          ({viability.top.toFixed(2)}), not a verdict from the API.
+        </Typography>
+      )}
     </Box>
   </Box>
   );
 };
 
 /* ============================================================================
+   ASK ANSWERS (Compare + follow-up)
+============================================================================ */
+
+const LoadingDots = () => (
+  <Box sx={{ display: "flex", gap: "4px" }}>
+    {[0, 1, 2].map((item) => (
+      <Box
+        key={item}
+        sx={{
+          width: "8px",
+          height: "8px",
+          borderRadius: "50%",
+          background: item === 0 ? TEAL : item === 1 ? "#65D9E5" : "#C4EEF2",
+        }}
+      />
+    ))}
+  </Box>
+);
+
+/**
+ * One POST /agents/novsearch/ask exchange — { answer, patentIdsUsed,
+ * chunksUsed } — with its loading and error states.
+ */
+const AnswerCard = ({ entry, onRetry }) => (
+  <Box
+    sx={{
+      width: "100%",
+      boxSizing: "border-box",
+      border: "1px solid #E2E8F0",
+      borderRadius: "12px",
+      background: "#FFFFFF",
+      padding: "16px",
+      mb: "34px",
+    }}
+  >
+    <AgentHeader />
+
+    {entry.pending && (
+      <Box sx={{ display: "flex", alignItems: "center", gap: "8px" }}>
+        <LoadingDots />
+        <Typography sx={{ ...text, fontSize: "14px", lineHeight: "22px" }}>
+          Searching the indexed patents…
+        </Typography>
+      </Box>
+    )}
+
+    {!entry.pending && entry.error && (
+      <Box role="alert">
+        <Typography sx={{ ...text, fontSize: "13px", lineHeight: "20px", color: "#DC2626" }}>
+          {entry.error}
+        </Typography>
+        {onRetry && (
+          <Button
+            onClick={onRetry}
+            sx={{ ...text, textTransform: "none", fontSize: "13px", color: TEAL, px: 0, mt: "4px" }}
+          >
+            Try again
+          </Button>
+        )}
+      </Box>
+    )}
+
+    {!entry.pending && !entry.error && (
+      <>
+        <Typography
+          sx={{
+            ...text,
+            fontSize: "15px",
+            lineHeight: "23px",
+            fontWeight: 400,
+            whiteSpace: "pre-line",
+          }}
+        >
+          {entry.answer || "NovSearch returned no answer to this question."}
+        </Typography>
+
+        {(entry.chunksUsed != null || entry.patentIdsUsed?.length > 0) && (
+          <Box sx={{ mt: "10px", borderTop: "1px solid #E2E8F0", pt: "10px" }}>
+            <Typography sx={{ ...text, fontSize: "12px", lineHeight: "18px", color: "#64748B" }}>
+              {entry.chunksUsed != null
+                ? `Based on ${entry.chunksUsed} passage${entry.chunksUsed === 1 ? "" : "s"}`
+                : "Based on"}
+              {entry.patentIdsUsed?.length > 0
+                ? ` from ${entry.patentIdsUsed.join(", ")}`
+                : " from the indexed patents"}
+              .
+            </Typography>
+          </Box>
+        )}
+      </>
+    )}
+  </Box>
+);
+
+/* ============================================================================
    RESULTS ACTIONS
 ============================================================================ */
 
-const ResultsActions = ({ onCompare, actions = {} }) => (
-  <Box
-    sx={{
-      display: "flex",
-      alignItems: "center",
-      gap: "12px",
-      flexWrap: "wrap",
-      mt: "24px",
-    }}
-  >
-    <Button
-      onClick={onCompare}
+const ResultsActions = ({ onCompare, selectedCount = 0, onFinish, actions = {} }) => (
+  <Box sx={{ display: "flex", flexDirection: "column", gap: "12px", mt: "24px" }}>
+    <Box
       sx={{
-        ...buttonBase,
-        color: TEAL,
-        borderColor: "#DCE3EA",
         display: "flex",
         alignItems: "center",
-        gap: "8px",
+        gap: "12px",
+        flexWrap: "wrap",
       }}
     >
-      <LinkIcon />
-      View Patent Details
-    </Button>
+      {/* Was "View Patent Details", which opened a hardcoded comparison of
+          three patents that were never in the report. */}
+      <Button
+        onClick={onCompare}
+        disabled={selectedCount < 2}
+        title={selectedCount < 2 ? "Select at least two patents to compare" : undefined}
+        sx={{
+          ...buttonBase,
+          color: TEAL,
+          borderColor: "#DCE3EA",
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          "&.Mui-disabled": { color: "#94A3B8" },
+        }}
+      >
+        <LinkIcon color={selectedCount < 2 ? "#94A3B8" : TEAL} />
+        Compare Selected{selectedCount ? ` (${selectedCount})` : ""}
+      </Button>
 
-    <Button sx={buttonBase} onClick={actions.onBranch} disabled={!actions.onBranch || Boolean(actions.busy)}>{actions.busy === "branch" ? "Branching…" : "Branch"}</Button>
+      {onFinish && (
+        <Button sx={buttonBase} onClick={onFinish}>
+          Finish Research
+        </Button>
+      )}
+    </Box>
 
-    <Button sx={buttonBase} onClick={actions.onRerun} disabled={!actions.onRerun || Boolean(actions.busy)}>{actions.busy === "rerun" ? "Rerunning…" : "Rerun"}</Button>
-
-    <Button sx={buttonBase}>Share Insights</Button>
+    {/* Branch / Rerun / Export. "Share Insights" is gone: there is no
+        endpoint behind it. */}
+    <PhaseActions {...actions} />
   </Box>
+);
+
+/* ============================================================================
+   LOADING SCREEN
+============================================================================ */
+
+/**
+ * While the assessment runs. The results screen used to render with no data
+ * at this point, reading "No patents were returned" and "NOT ASSESSED".
+ */
+const LoadingScreen = ({ progressMessage }) => (
+  <>
+    <UserMessage>Search patents for this candidate</UserMessage>
+
+    <Box
+      sx={{
+        width: "100%",
+        boxSizing: "border-box",
+        border: "1px solid #E2E8F0",
+        borderRadius: "12px",
+        background: "#FFFFFF",
+        padding: "16px",
+      }}
+    >
+      <AgentHeader />
+
+      <Box sx={{ display: "flex", alignItems: "center", gap: "8px" }}>
+        <LoadingDots />
+        <Typography sx={{ ...text, fontSize: "15px", lineHeight: "22px" }}>
+          {progressMessage || "Searching patent databases for prior art…"}
+        </Typography>
+      </Box>
+    </Box>
+  </>
 );
 
 /* ============================================================================
    RESULTS SCREEN
 ============================================================================ */
 
-const ResultsScreen = ({ onCompare, report, loading, error, onRetry, actions = {} }) => {
+const ResultsScreen = ({
+  report,
+  loading,
+  error,
+  onRetry,
+  actions = {},
+  selectedIds = [],
+  onToggle,
+  onCompare,
+  onFinish,
+}) => {
   const patentRows = report?.patents ?? [];
   const subject = [report?.drug, report?.target, report?.disease]
     .filter(Boolean)
@@ -531,6 +721,7 @@ const ResultsScreen = ({ onCompare, report, loading, error, onRetry, actions = {
           borderRadius: "12px",
           background: "#FFFFFF",
           padding: "16px",
+          mb: "34px",
         }}
       >
         <AgentHeader />
@@ -551,7 +742,7 @@ const ResultsScreen = ({ onCompare, report, loading, error, onRetry, actions = {
             : loading
             ? "Loading the novelty report…"
             : patentRows.length
-            ? `Novelty search complete. Analysed ${report.total} patent${report.total === 1 ? "" : "s"}${subject ? ` for ${subject}` : ""}. Results ranked by relevance:`
+            ? `Novelty search complete. Analysed ${report.total} patent${report.total === 1 ? "" : "s"}${subject ? ` for ${subject}` : ""}. Select patents to compare them:`
             : "No patents were returned for this candidate."}
         </Typography>
 
@@ -575,12 +766,22 @@ const ResultsScreen = ({ onCompare, report, loading, error, onRetry, actions = {
             },
           }}
         >
-          <PatentTable rows={patentRows} />
+          <PatentTable
+            rows={patentRows}
+            selectable
+            selectedIds={selectedIds}
+            onToggle={onToggle}
+          />
 
           <InsightsCard report={report} />
         </Box>
 
-        <ResultsActions onCompare={onCompare} actions={actions} />
+        <ResultsActions
+          onCompare={onCompare}
+          selectedCount={selectedIds.length}
+          onFinish={onFinish}
+          actions={actions}
+        />
       </Box>
     </>
   );
@@ -590,7 +791,14 @@ const ResultsScreen = ({ onCompare, report, loading, error, onRetry, actions = {
    COMPARISON SCREEN
 ============================================================================ */
 
-const ComparisonScreen = ({ actions = {} }) => (
+/**
+ * Compare → POST /agents/novsearch/ask with the selected patentIds.
+ *
+ * This screen used to be an empty table under a hardcoded question about
+ * US10234567, EP3456789 and US10294021 and a hardcoded answer; the ask
+ * endpoint was never called.
+ */
+const ComparisonScreen = ({ rows = [], comparison, onBack, onRetry, actions = {} }) => (
   <>
     <Box
       sx={{
@@ -603,111 +811,40 @@ const ComparisonScreen = ({ actions = {} }) => (
         mb: "40px",
       }}
     >
-      <PatentTable />
+      <PatentTable rows={rows} emptyText="The selected patents are no longer in the report." />
 
       <Box
         sx={{
           display: "flex",
-          alignItems: "center",
+          flexDirection: "column",
           gap: "12px",
-          flexWrap: "wrap",
           mt: "24px",
         }}
       >
-        <Button
-          sx={{
-            ...buttonBase,
-            color: TEAL,
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-          }}
-        >
-          <LinkIcon />
-          View Patent Details
-        </Button>
+        <Box>
+          <Button sx={buttonBase} onClick={onBack}>
+            Back to Results
+          </Button>
+        </Box>
 
-        <Button sx={buttonBase} onClick={actions.onBranch} disabled={!actions.onBranch || Boolean(actions.busy)}>{actions.busy === "branch" ? "Branching…" : "Branch"}</Button>
-
-        <Button sx={buttonBase} onClick={actions.onRerun} disabled={!actions.onRerun || Boolean(actions.busy)}>{actions.busy === "rerun" ? "Rerunning…" : "Rerun"}</Button>
-
-        <Button sx={buttonBase}>Share Insights</Button>
+        <PhaseActions {...actions} />
       </Box>
     </Box>
 
-    <UserMessage>
-      Compare patents US10234567, EP3456789, and US10294021. What are the
-      common mechanisms and how do they differ in their approach?
-    </UserMessage>
-
-    <Box
-      sx={{
-        width: "100%",
-        boxSizing: "border-box",
-        border: "1px solid #E2E8F0",
-        borderRadius: "12px",
-        background: "#FFFFFF",
-        padding: "16px",
-      }}
-    >
-      <AgentHeader />
-
-      <Typography
-        sx={{
-          ...text,
-          fontSize: "15px",
-          lineHeight: "23px",
-          fontWeight: 400,
-          whiteSpace: "pre-line",
-        }}
-      >
-        Comparing 3 patents on JAK inhibition:
-        {"\n\n"}
-        • US10234567: Selective JAK2 with IC50 &lt; 10nM, oral delivery
-        {"\n"}
-        • EP3456789: Combination therapy approach (Imatinib + JAK inhibitor)
-        {"\n"}
-        • US10294021: Dual BCR-ABL/JAK targeting, broader kinase coverage
-      </Typography>
-
-      <Box
-        sx={{
-          mt: "10px",
-          borderTop: "1px solid #E2E8F0",
-          pt: "10px",
-        }}
-      >
-        <Typography
-          sx={{
-            ...text,
-            fontSize: "13px",
-            lineHeight: "20px",
-            color: "#64748B",
-          }}
-        >
-          All three share the JAK2 pathway but differ in selectivity and
-          combination strategy.
-        </Typography>
-      </Box>
-
-      <Box
-        sx={{
-          mt: "18px",
-          display: "flex",
-          gap: "10px",
-          flexWrap: "wrap",
-        }}
-      >
-      </Box>
-    </Box>
+    {comparison && (
+      <>
+        <UserMessage>{comparison.question}</UserMessage>
+        <AnswerCard entry={comparison} onRetry={onRetry} />
+      </>
+    )}
   </>
 );
 
 /* ============================================================================
-   COMPILING SCREEN
+   END TASK
 ============================================================================ */
 
-const DecisionScreen = ({ onContinue, onEndTask, actions = {}, diseaseLabel }) => (
+const DecisionScreen = ({ onContinue, onEndTask, pending = false, error = null, diseaseLabel }) => (
   <>
     <UserMessage>
       Complete this research task. Generate a final summary report for the
@@ -723,22 +860,10 @@ const DecisionScreen = ({ onContinue, onEndTask, actions = {}, diseaseLabel }) =
         borderRadius: "12px",
         background: "#FFFFFF",
         padding: "16px",
+        mb: "34px",
       }}
     >
       <AgentHeader />
-
-      <Typography
-        sx={{
-          ...text,
-          fontSize: "15px",
-          lineHeight: "22px",
-          fontWeight: 400,
-          mb: "16px",
-        }}
-      >
-        Research task completed successfully! Your findings have been
-        compiled.
-      </Typography>
 
       <Typography
         sx={{
@@ -750,100 +875,42 @@ const DecisionScreen = ({ onContinue, onEndTask, actions = {}, diseaseLabel }) =
         }}
       >
         Would you like to continue exploring or conclude this research
-        session?
+        session? Ending the task saves the session.
       </Typography>
 
       <Box
         sx={{
           display: "flex",
+          alignItems: "center",
           gap: "10px",
           flexWrap: "wrap",
         }}
       >
         <Button
           onClick={onContinue}
+          disabled={pending}
           sx={primaryButton}
         >
           Continue Research
         </Button>
 
-        <Button onClick={onEndTask} sx={buttonBase}>End Task</Button>
+        <Button
+          onClick={onEndTask}
+          disabled={!onEndTask || pending}
+          title={onEndTask ? undefined : "Saving the session is not available here"}
+          sx={buttonBase}
+        >
+          {pending ? "Saving the session…" : "End Task"}
+        </Button>
+
+        {pending && <LoadingDots />}
       </Box>
-    </Box>
-  </>
-);
 
-const CompilingScreen = ({ progressMessage }) => (
-  <>
-
-    <UserMessage>End Task</UserMessage>
-
-    <Box
-      sx={{
-        width: "100%",
-        maxWidth: "760px",
-        boxSizing: "border-box",
-        border: "1px solid #E2E8F0",
-        borderRadius: "12px",
-        background: "#FFFFFF",
-        padding: "16px",
-      }}
-    >
-      <AgentHeader />
-
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          gap: "8px",
-          mb: "12px",
-        }}
-      >
-        <Box
-          sx={{
-            display: "flex",
-            gap: "4px",
-          }}
-        >
-          {[0, 1, 2].map((item) => (
-            <Box
-              key={item}
-              sx={{
-                width: "8px",
-                height: "8px",
-                borderRadius: "50%",
-                background:
-                  item === 0
-                    ? TEAL
-                    : item === 1
-                    ? "#65D9E5"
-                    : "#C4EEF2",
-              }}
-            />
-          ))}
-        </Box>
-
-        <Typography
-          sx={{
-            ...text,
-            fontSize: "15px",
-            lineHeight: "22px",
-          }}
-        >
-          {progressMessage || "Compiling your research report... This will be completed shortly."}
+      {error && (
+        <Typography role="alert" sx={{ ...text, fontSize: "13px", lineHeight: "20px", color: "#DC2626", mt: "12px" }}>
+          {error}
         </Typography>
-      </Box>
-
-      <Typography
-        sx={{
-          ...text,
-          fontSize: "13px",
-          lineHeight: "20px",
-          color: "#7B8491",
-        }}
-      >
-        You will be notified when the report is ready for review.
-      </Typography>
+      )}
     </Box>
   </>
 );
@@ -852,7 +919,40 @@ const CompilingScreen = ({ progressMessage }) => (
    SUMMARY SCREEN
 ============================================================================ */
 
-const SummaryScreen = ({ actions = {}, diseaseLabel, researcherName, sessionCount }) => (
+const Divider = () => (
+  <Box
+    sx={{
+      width: "176px",
+      borderTop: "1px solid #7B8491",
+      mt: "12px",
+      mb: "10px",
+    }}
+  />
+);
+
+const summaryText = {
+  ...text,
+  fontSize: "13px",
+  lineHeight: "22px",
+  whiteSpace: "pre-line",
+};
+
+/**
+ * The closing summary, from the novelty report this component actually holds.
+ *
+ * This was fixed text — "124 articles", "17 patents, HIGH novelty confirmed",
+ * five Type 2 Diabetes candidates with binding scores, and a Metformin
+ * recommendation — on every session. Anything the report does not carry is
+ * left out rather than filled in.
+ */
+const SummaryScreen = ({ report, researcherName, actions = {}, onNewResearch }) => {
+  const diseaseLabel = report?.disease || "";
+  const topPatents = [...(report?.patents ?? [])]
+    .filter((p) => Number.isFinite(p.rawRelevance))
+    .sort((a, b) => b.rawRelevance - a.rawRelevance)
+    .slice(0, 3);
+
+  return (
   <>
     <UserMessage>End Task</UserMessage>
 
@@ -877,97 +977,56 @@ const SummaryScreen = ({ actions = {}, diseaseLabel, researcherName, sessionCoun
           mb: "14px",
         }}
       >
-        Research task completed successfully! Here is your final summary:
+        Research task completed and the session is saved. Here is your final summary:
       </Typography>
 
-      <Typography
-        sx={{
-          ...text,
-          fontSize: "13px",
-          lineHeight: "21px",
-          whiteSpace: "pre-line",
-        }}
-      >
-        {/* Review points 6 and 20: the disease and the researcher were
-            hardcoded to Type 2 Diabetes and Dr. Priya, so every finished
-            session reported someone else's diabetes project. */}
+      <Typography sx={{ ...summaryText, lineHeight: "21px" }}>
         {`Research Summary - ${diseaseLabel || "Drug Repurposing"}\n`}
-        {`Project: Novel Target Drug Repurposing${diseaseLabel ? ` for ${diseaseLabel}` : ""}\n`}
-        {`Researcher: ${researcherName}`}
-        {sessionCount ? ` • Duration: ${sessionCount} sessions` : ""}
-        {"\n"}
-        {"Status: COMPLETED ✓"}
+        {report?.target ? `Target: ${report.target}\n` : ""}
+        {diseaseLabel ? `Disease: ${diseaseLabel}\n` : ""}
+        {researcherName ? `Researcher: ${researcherName}\n` : ""}
+        {"Status: SAVED ✓"}
       </Typography>
 
-      <Box
-        sx={{
-          width: "176px",
-          borderTop: "1px solid #7B8491",
-          mt: "12px",
-          mb: "10px",
-        }}
-      />
+      <Divider />
 
-      <Typography
-        sx={{
-          ...text,
-          fontSize: "13px",
-          lineHeight: "22px",
-          whiteSpace: "pre-line",
-        }}
-      >
-        {"Modules Executed:\n"}
-        {"✓ TxKG - 5 protein targets identified (JAK2, EGFR, VEGFR2, PI3K, mTOR)\n"}
-        {"✓ LitMinEx - 124 articles analyzed across PubMed & clinical databases\n"}
-        {"✓ CuraTex - 5 compounds curated (Metformin, Pioglitazone, Canagliflozin, Empagliflozin, Liraglutide)\n"}
-        {"✓ NovSearch - 17 patents analyzed, HIGH novelty confirmed\n"}
-        {"✓ ScreenSuite - PLP docking reports generated for all targets"}
+      <Typography sx={summaryText}>
+        {"Novelty Search:\n"}
+        {report
+          ? `✓ ${report.total} patent${report.total === 1 ? "" : "s"} analysed`
+          : "The novelty report is not available."}
       </Typography>
 
-      <Box
-        sx={{
-          width: "176px",
-          borderTop: "1px solid #7B8491",
-          mt: "12px",
-          mb: "10px",
-        }}
-      />
+      {report?.assessment && (
+        <Typography sx={{ ...summaryText, mt: "6px" }}>
+          {`Assessment: ${report.assessment}`}
+        </Typography>
+      )}
 
-      <Typography
-        sx={{
-          ...text,
-          fontSize: "13px",
-          lineHeight: "22px",
-          whiteSpace: "pre-line",
-        }}
-      >
-        {"Top Drug Candidates:\n"}
-        {"1. Metformin → JAK2 - Binding: -9.2 kcal/mol - Confidence: High\n"}
-        {"2. Pioglitazone → EGFR - Binding: -8.7 kcal/mol - Confidence: High\n"}
-        {"3. Canagliflozin → VEGFR2 - Binding: -7.8 kcal/mol - Confidence: Moderate\n"}
-        {"4. Empagliflozin → PI3K - Binding: -7.4 kcal/mol - Confidence: Moderate\n"}
-        {"5. Liraglutide → mTOR - Binding: -6.9 kcal/mol - Confidence: Low"}
-      </Typography>
+      {topPatents.length > 0 && (
+        <>
+          <Divider />
+          <Typography sx={summaryText}>
+            {"Most relevant patents:\n"}
+            {topPatents
+              .map((p, i) => `${i + 1}. ${p.id} - ${p.title} - Relevance: ${p.relevance}`)
+              .join("\n")}
+          </Typography>
+        </>
+      )}
 
-      <Box
-        sx={{
-          width: "176px",
-          borderTop: "1px solid #7B8491",
-          mt: "12px",
-          mb: "10px",
-        }}
-      />
+      {report?.recommendations?.length > 0 && (
+        <>
+          <Divider />
+          <Typography sx={summaryText}>
+            {"Recommendations:\n"}
+            {report.recommendations.map((rec) => `• ${rec}`).join("\n")}
+          </Typography>
+        </>
+      )}
 
-      <Typography
-        sx={{
-          ...text,
-          fontSize: "13px",
-          lineHeight: "22px",
-          whiteSpace: "pre-line",
-        }}
-      >
-        {"Recommendation:\n"}
-        {"Metformin and Pioglitazone show the strongest binding affinity and confidence scores. Recommend proceeding to in-vitro validation phase."}
+      <Typography sx={{ ...text, fontSize: "12px", lineHeight: "18px", color: "#7B8491", mt: "12px" }}>
+        Results from the other modules are in their cards earlier in this session.
       </Typography>
 
       <Typography
@@ -993,12 +1052,19 @@ const SummaryScreen = ({ actions = {}, diseaseLabel, researcherName, sessionCoun
       >
         <Button sx={primaryButton} onClick={() => actions.onExport?.("pdf")} disabled={!actions.onExport || Boolean(actions.busy)}>{actions.busy === "export" ? "Exporting…" : "Export Report"}</Button>
         <Button sx={buttonBase} onClick={actions.onBranch} disabled={!actions.onBranch || Boolean(actions.busy)}>{actions.busy === "branch" ? "Branching…" : "Branch"}</Button>
-        <Button sx={buttonBase}>+ New Research</Button>
-        <Button sx={buttonBase}>Share Results</Button>
+        <Button sx={buttonBase} onClick={onNewResearch}>+ New Research</Button>
+        {/* "Share Results" is gone: there is no sharing endpoint. */}
       </Box>
+
+      {actions.error && (
+        <Typography role="alert" sx={{ ...text, fontSize: "12px", color: "#DC2626", mt: "8px" }}>
+          {actions.error}
+        </Typography>
+      )}
     </Box>
   </>
-);
+  );
+};
 
 /* ============================================================================
    CHAT INPUT
@@ -1031,7 +1097,7 @@ const ChatInput = ({ value, onChange, onSubmit, disabled = false }) => (
           onSubmit();
         }
       }}
-      placeholder="Type @ for modules or ask a research question..."
+      placeholder="Ask a question about the indexed patents..."
       sx={{
         width: "100%",
         border: "none",
@@ -1110,20 +1176,12 @@ const getInitialStage = (workflowPhase) => {
     .toLowerCase()
     .replace(/\s+/g, "");
 
-  if (
-    value.includes("summary") ||
-    value.includes("completed") ||
-    value.includes("complete")
-  ) {
-    return "summary";
+  if (value.includes("loading")) {
+    return "loading";
   }
 
-  if (
-    value.includes("compiling") ||
-    value.includes("report") ||
-    value.includes("researchreport")
-  ) {
-    return "compiling";
+  if (value.includes("summary")) {
+    return "summary";
   }
 
   if (value.includes("decision") || value.includes("endtask")) {
@@ -1140,6 +1198,20 @@ const getInitialStage = (workflowPhase) => {
   return "results";
 };
 
+/** POST /agents/novsearch/ask → { answer, mode, patentIdsUsed, chunksUsed }. */
+const askNovSearch = async (payload) => {
+  const res = await novsearchApi.ask(payload);
+  const chunks = Number(res?.chunksUsed);
+  return {
+    answer: res?.answer ?? null,
+    mode: res?.mode ?? null,
+    patentIdsUsed: Array.isArray(res?.patentIdsUsed) ? res.patentIdsUsed : [],
+    chunksUsed: res?.chunksUsed != null && Number.isFinite(chunks) ? chunks : null,
+  };
+};
+
+const askError = (err, fallback) => err?.userMessage || err?.message || fallback;
+
 /* ============================================================================
    MAIN COMPONENT
 ============================================================================ */
@@ -1153,54 +1225,115 @@ const NoveltySearchPhase = ({
   loading = false,
   error = null,
   onRetry,
-  /** Branch / Rerun / Export handlers from usePhaseActions. */
+  /** Branch / Rerun / Export handlers from usePhaseActions (this module's job). */
   actions = {},
+  /** The assessment job is still running — shows the loading stage. */
+  isLoading = false,
+  /**
+   * End Task → marks the session Saved (PATCH /sessions/{id}). Awaited; the
+   * summary only appears once it succeeds.
+   */
+  onEndTask,
 }) => {
+  const navigate = useNavigate();
+
   const [stage, setStage] = useState(() =>
     getInitialStage(workflowPhase)
   );
 
   const [inputValue, setInputValue] = useState("");
 
+  /** Patents ticked in the results table, for Compare. */
+  const [selectedIds, setSelectedIds] = useState([]);
+
+  /** The Compare exchange: { question, ids, pending, error, answer, … }. */
+  const [comparison, setComparison] = useState(null);
+  const comparisonRequestRef = useRef(0);
+
+  /** Follow-up questions and their answers, in order. */
+  const [thread, setThread] = useState([]);
+
+  const [endTaskState, setEndTaskState] = useState({ pending: false, error: null });
+
   // Review points 6 and 20: the closing screens named Type 2 Diabetes and
   // Dr. Priya whatever the session was about. Both come from the run now.
   const { displayName: researcherName } = useCurrentUser();
   const diseaseLabel = report?.disease || "";
 
-  /**
-   * "Compiling" is a local presentation step — the final report is assembled
-   * from data already fetched, not by another agent run — so it advances as
-   * soon as the report is in hand rather than after a fixed 2.5s.
-   *
-   * The timer that remains is only a ceiling: without it, a compile with no
-   * report to wait for would sit on this screen indefinitely.
-   */
+  /** Follow the parent's phase when it changes (e.g. loading → results). */
   useEffect(() => {
-    if (stage !== "compiling") {
-      return undefined;
-    }
-
-    if (report?.hasData || error) {
-      setStage("summary");
-      return undefined;
-    }
-
-    const timer = setTimeout(() => setStage("summary"), 2500);
-    return () => clearTimeout(timer);
-  }, [stage, report, error]);
-
-  /*
-   * Keep externally supplied workflowPhase useful if the parent changes it.
-   * Local stage changes are used for the interactive Figma prototype flow.
-   */
-  useMemo(() => {
-    const externalStage = getInitialStage(workflowPhase);
-
     if (workflowPhase !== undefined && workflowPhase !== null) {
-      setStage(externalStage);
+      setStage(getInitialStage(workflowPhase));
     }
   }, [workflowPhase]);
 
+  const running = isLoading || stage === "loading";
+  const patents = useMemo(() => report?.patents ?? [], [report]);
+
+  const toggleSelected = (id) =>
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+
+  /** Compare → ask({ question, patentIds: selected, topK: null }). */
+  const runComparison = async (ids) => {
+    if (!ids.length) return;
+
+    const question = `Compare patents ${ids.join(", ")}. What are the common mechanisms and how do they differ in their approach?`;
+    const requestId = ++comparisonRequestRef.current;
+
+    setComparison({ question, ids, pending: true, error: null });
+    setStage("comparison");
+
+    try {
+      const result = await askNovSearch({ question, patentIds: ids, topK: null });
+      if (requestId !== comparisonRequestRef.current) return;
+      setComparison({ question, ids, pending: false, error: null, ...result });
+    } catch (err) {
+      if (requestId !== comparisonRequestRef.current) return;
+      setComparison({
+        question,
+        ids,
+        pending: false,
+        error: askError(err, "The comparison could not be run."),
+      });
+    }
+  };
+
+  const handleCompare = () => {
+    // Only patents still in the report — a rerun can replace the list.
+    const ids = selectedIds.filter((id) => patents.some((p) => p.id === id));
+    runComparison(ids);
+  };
+
+  /** Follow-up box → ask({ question, patentIds: null, topK: null }) over every indexed patent. */
+  const askFollowUp = async (question, existingId = null) => {
+    const id = existingId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    setThread((prev) =>
+      existingId
+        ? prev.map((e) => (e.id === id ? { id, question, pending: true, error: null } : e))
+        : [...prev, { id, question, pending: true, error: null }]
+    );
+
+    try {
+      const result = await askNovSearch({ question, patentIds: null, topK: null });
+      setThread((prev) =>
+        prev.map((e) => (e.id === id ? { id, question, pending: false, error: null, ...result } : e))
+      );
+    } catch (err) {
+      setThread((prev) =>
+        prev.map((e) =>
+          e.id === id
+            ? { id, question, pending: false, error: askError(err, "The question could not be answered.") }
+            : e
+        )
+      );
+    }
+  };
+
+  /**
+   * The follow-up text used to be keyword-matched ("compare", "summary") to
+   * switch screens and then thrown away, so no question was ever answered.
+   */
   const handleSubmit = () => {
     const value = inputValue.trim();
 
@@ -1208,23 +1341,27 @@ const NoveltySearchPhase = ({
       return;
     }
 
-    const normalized = value.toLowerCase();
-
-    if (
-      normalized.includes("compare") ||
-      normalized.includes("comparison")
-    ) {
-      setStage("comparison");
-    } else if (
-      normalized.includes("summary") ||
-      normalized.includes("final report") ||
-      normalized.includes("complete")
-    ) {
-      setStage("decision");
-    }
-
     setInputValue("");
+    askFollowUp(value);
   };
+
+  const handleEndTask = async () => {
+    if (!onEndTask) return;
+
+    setEndTaskState({ pending: true, error: null });
+    try {
+      await onEndTask();
+      setEndTaskState({ pending: false, error: null });
+      setStage("summary");
+    } catch (err) {
+      setEndTaskState({
+        pending: false,
+        error: askError(err, "The session could not be saved. Please try again."),
+      });
+    }
+  };
+
+  const comparisonRows = patents.filter((p) => comparison?.ids?.includes(p.id));
 
   return (
     <Box
@@ -1263,17 +1400,26 @@ const NoveltySearchPhase = ({
         }}
       >
         {/* ================================================================
+            LOADING
+        ================================================================= */}
+
+        {running && <LoadingScreen progressMessage={progressMessage} />}
+
+        {/* ================================================================
             RESULTS
         ================================================================= */}
 
-        {stage === "results" && (
+        {!running && stage === "results" && (
           <ResultsScreen
             actions={actions}
-            onCompare={() => setStage("comparison")}
             report={report}
             loading={loading}
             error={error}
             onRetry={onRetry}
+            selectedIds={selectedIds}
+            onToggle={toggleSelected}
+            onCompare={handleCompare}
+            onFinish={() => setStage("decision")}
           />
         )}
 
@@ -1281,34 +1427,52 @@ const NoveltySearchPhase = ({
             COMPARISON
         ================================================================= */}
 
-        {stage === "comparison" && (
-          <ComparisonScreen actions={actions} />
-        )}
-
-        {/* ================================================================
-            COMPILING / RESEARCH REPORT
-        ================================================================= */}
-
-        {stage === "decision" && (
-          <DecisionScreen
+        {!running && stage === "comparison" && (
+          <ComparisonScreen
             actions={actions}
-            diseaseLabel={diseaseLabel}
-            onContinue={() => setStage("results")}
-            onEndTask={() => setStage("compiling")}
+            rows={comparisonRows}
+            comparison={comparison}
+            onBack={() => setStage("results")}
+            onRetry={comparison ? () => runComparison(comparison.ids) : undefined}
           />
         )}
 
-        {stage === "compiling" && <CompilingScreen progressMessage={progressMessage} />}
+        {/* ================================================================
+            END TASK
+        ================================================================= */}
+
+        {!running && stage === "decision" && (
+          <DecisionScreen
+            diseaseLabel={diseaseLabel}
+            onContinue={() => setStage("results")}
+            onEndTask={onEndTask ? handleEndTask : undefined}
+            pending={endTaskState.pending}
+            error={endTaskState.error}
+          />
+        )}
+
+        {/* ================================================================
+            FOLLOW-UP THREAD
+        ================================================================= */}
+
+        {!running && stage !== "summary" &&
+          thread.map((entry) => (
+            <React.Fragment key={entry.id}>
+              <UserMessage>{entry.question}</UserMessage>
+              <AnswerCard entry={entry} onRetry={() => askFollowUp(entry.question, entry.id)} />
+            </React.Fragment>
+          ))}
 
         {/* ================================================================
             FINAL SUMMARY
         ================================================================= */}
 
-        {stage === "summary" && (
+        {!running && stage === "summary" && (
           <SummaryScreen
             actions={actions}
-            diseaseLabel={diseaseLabel}
+            report={report}
             researcherName={researcherName}
+            onNewResearch={() => navigate("/dashboard/new-research")}
           />
         )}
 
@@ -1337,7 +1501,7 @@ const NoveltySearchPhase = ({
           value={inputValue}
           onChange={setInputValue}
           onSubmit={handleSubmit}
-          disabled={stage === "summary"}
+          disabled={running || stage === "summary"}
         />
       </Box>
     </Box>

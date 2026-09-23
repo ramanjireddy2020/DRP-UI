@@ -2,22 +2,33 @@ import { useCallback, useState } from "react";
 import exportsApi from "../services/api/exports";
 
 /**
- * Branch, Rerun and Export for the step currently on screen.
+ * Branch, Rerun and Export for ONE module's step.
  *
  * All three were dead buttons in every phase screen. The logic lives here
  * rather than in CompleteWorkflow so the busy/error state is per-action and the
  * five phases share one implementation.
  *
+ * Every module's card is on the page at once, so each card gets its own
+ * instance keyed on its own module: Export on the LitMineX card exports the
+ * LitMineX job even while NovSearch is the step on screen. Without `moduleKey`
+ * it falls back to the active step, as it used to.
+ *
  * @param {object} session - the useWorkflowSession instance
+ * @param {string|null} moduleKey - the module these actions belong to
  * @param {string|null} jobId - the completed job whose results Export sends
  * @param {string} moduleLabel - used for the downloaded filename
  */
-const usePhaseActions = ({ session, jobId, moduleLabel }) => {
+const usePhaseActions = ({ session, moduleKey = null, jobId, moduleLabel }) => {
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
 
-  const stepId = session?.activeStepId ?? null;
+  const key = moduleKey ?? session?.activeKey ?? null;
+  const stepState = key ? session?.steps?.[key] : null;
+  const stepId = stepState?.stepId ?? null;
+  const selections = stepState?.data?.selections;
   const sessionId = session?.sessionId ?? null;
+  const rerunStep = session?.rerunStep;
+  const handOff = session?.handOff;
 
   /**
    * Rerun the step, keeping the original.
@@ -26,18 +37,21 @@ const usePhaseActions = ({ session, jobId, moduleLabel }) => {
    * nothing is overwritten — which is why this is safe to offer without a
    * confirmation.
    */
-  const onRerun = useCallback(async () => {
+  // There is no parameter editor in the UI yet, so a rerun sends {params:{}}
+  // unless a caller passes some.
+  const onRerun = useCallback(async (params) => {
     setBusy("rerun");
     setError(null);
     try {
-      const result = await session.rerunActiveStep({});
+      const plain = params && typeof params === "object" && !params.nativeEvent ? params : {};
+      const result = await rerunStep(key, plain);
       if (!result) setError("The rerun could not be started.");
     } catch (err) {
       setError(err?.userMessage || err?.message || "The rerun could not be started.");
     } finally {
       setBusy(null);
     }
-  }, [session]);
+  }, [rerunStep, key]);
 
   /**
    * Branch from this step.
@@ -48,7 +62,7 @@ const usePhaseActions = ({ session, jobId, moduleLabel }) => {
    * intact.
    */
   const onBranch = useCallback(async () => {
-    if (!session?.activeKey) {
+    if (!key) {
       setError("There is no step to branch from.");
       return;
     }
@@ -56,15 +70,14 @@ const usePhaseActions = ({ session, jobId, moduleLabel }) => {
     setBusy("branch");
     setError(null);
     try {
-      const selections = session.activeStepState?.data?.selections ?? {};
-      const result = await session.handOff(session.activeKey, selections, stepId);
+      const result = await handOff(key, selections ?? {}, stepId);
       if (!result) setError("The branch could not be created.");
     } catch (err) {
       setError(err?.userMessage || err?.message || "The branch could not be created.");
     } finally {
       setBusy(null);
     }
-  }, [session, stepId]);
+  }, [handOff, key, selections, stepId]);
 
   /**
    * Export this step's results.
@@ -111,8 +124,8 @@ const usePhaseActions = ({ session, jobId, moduleLabel }) => {
     clearError: () => setError(null),
     // A handler is only offered when it can actually work, so PhaseActions can
     // disable the button and explain why instead of failing on click.
-    onRerun: sessionId && stepId ? onRerun : undefined,
-    onBranch: sessionId && stepId ? onBranch : undefined,
+    onRerun: sessionId && stepId && rerunStep ? onRerun : undefined,
+    onBranch: sessionId && stepId && handOff ? onBranch : undefined,
     onExport: jobId ? onExport : undefined,
   };
 };

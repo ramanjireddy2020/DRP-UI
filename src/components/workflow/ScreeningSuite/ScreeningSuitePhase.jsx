@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Box, Typography, Button } from "@mui/material";
+import { Box, Typography, Button, LinearProgress } from "@mui/material";
 import { FONT, TEAL, GRAY_BG } from "../workflowConstants";
 import PhaseActions from "../PhaseActions";
 import SharedAgentHeader from "../AgentHeader";
@@ -266,6 +266,26 @@ const AgentHeader = () => <SharedAgentHeader moduleKey="screensuite" />;
  *   none, and is never reached from the workflow.
  */
 const PLPTable = ({ onOpenReport, hits }) => {
+  const rows = Array.isArray(hits) ? hits : [];
+
+  // PROTEIN-LIGAND and PROTEIN only render when some row has a value: the API
+  // has no field for PROTEIN at all, and outputFile (the PROTEIN-LIGAND
+  // source) is "" in the live example, so both columns were always blank.
+  const showProteinLigand = rows.some((r) => String(r?.proteinLigand ?? "").trim());
+  const showProteinValue = rows.some((r) => String(r?.proteinValue ?? "").trim());
+
+  const gridTemplateColumns = [
+    "80px",
+    "40px",
+    "100px",
+    showProteinLigand && "110px",
+    showProteinValue && "80px",
+    "minmax(150px, 1fr)",
+    "76px",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
     <Box
       sx={{
@@ -280,8 +300,7 @@ const PLPTable = ({ onOpenReport, hits }) => {
         <Box
           sx={{
             display: "grid",
-            gridTemplateColumns:
-              "80px 40px 100px 110px 80px minmax(150px, 1fr) 76px",
+            gridTemplateColumns,
             alignItems: "center",
             columnGap: "4px",
             padding: "10px",
@@ -294,20 +313,19 @@ const PLPTable = ({ onOpenReport, hits }) => {
           <Typography sx={tableHeader}>
             BINDING AFFINITY (KCAL/MOL)
           </Typography>
-          <Typography sx={tableHeader}>PROTEIN-LIGAND</Typography>
-          <Typography sx={tableHeader}>PROTEIN</Typography>
+          {showProteinLigand && <Typography sx={tableHeader}>PROTEIN-LIGAND</Typography>}
+          {showProteinValue && <Typography sx={tableHeader}>PROTEIN</Typography>}
           <Typography sx={tableHeader}>LIGAND</Typography>
           <Box />
         </Box>
 
         {/* ROWS */}
-        {(Array.isArray(hits) && hits.length ? hits : []).map((row) => (
+        {rows.map((row) => (
           <Box
             key={row.id}
             sx={{
               display: "grid",
-              gridTemplateColumns:
-                "80px 40px 100px 110px 80px minmax(150px, 1fr) 76px",
+              gridTemplateColumns,
               alignItems: "center",
               columnGap: "4px",
               padding: "10px",
@@ -323,27 +341,31 @@ const PLPTable = ({ onOpenReport, hits }) => {
 
             <Typography sx={tableCell}>{row.affinity}</Typography>
 
-            <Typography
-              sx={{
-                ...tableCell,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {row.proteinLigand}
-            </Typography>
+            {showProteinLigand && (
+              <Typography
+                sx={{
+                  ...tableCell,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {row.proteinLigand}
+              </Typography>
+            )}
 
-            <Typography
-              sx={{
-                ...tableCell,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {row.proteinValue}
-            </Typography>
+            {showProteinValue && (
+              <Typography
+                sx={{
+                  ...tableCell,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {row.proteinValue}
+              </Typography>
+            )}
 
             <Typography
               sx={{
@@ -1153,10 +1175,18 @@ const ScreeningSuitePhase = ({
   unavailableMessage,
   /** Branch / Rerun / Export handlers from usePhaseActions. */
   actions = {},
+  /**
+   * What CurateX handed over — the ScreenSuite step's selections
+   * ({ target, compounds }). Optional: without them the loading screen says
+   * nothing about specific candidates rather than naming fixture ones.
+   */
+  target = null,
+  compounds = [],
 }) => {
   const [selectedReport, setSelectedReport] = useState(null);
 
   const hasHits = Array.isArray(hits) && hits.length > 0;
+  const handedOff = (Array.isArray(compounds) ? compounds : []).filter(Boolean);
 
   /**
    * What is being docked, read off the hits rather than named in the copy.
@@ -1167,7 +1197,9 @@ const ScreeningSuitePhase = ({
     ? `${[...new Set(hits.map((h) => h.ligand).filter((l) => l && l !== "—"))].join(", ")} against ${
         [...new Set(hits.map((h) => h.protein).filter((p) => p && p !== "—"))].join(", ")
       }`
-    : null;
+    : handedOff.length
+    ? `${handedOff.join(", ")}${target ? ` against ${target}` : ""}`
+    : target || null;
 
   if (workflowPhase === "screensuite-loading") {
     return (
@@ -1263,21 +1295,34 @@ const ScreeningSuitePhase = ({
                 ⚡ ScreenSuite - Docking Initialization
               </Typography>
 
-              <Box sx={{ display: "flex", justifyContent: "space-between", ...baseText, fontSize: "11px", color: "#94A3B8", marginBottom: "6px" }}>
+              <Box sx={{ ...baseText, fontSize: "11px", color: "#94A3B8", marginBottom: "6px" }}>
                 <span>Setting up docking environment...</span>
-                <span style={{ color: TEAL, fontWeight: 700 }}>12%</span>
               </Box>
 
-              <Box sx={{ height: "5px", background: "#F1F5F9", borderRadius: "4px", marginBottom: "12px" }}>
-                <Box sx={{ width: "12%", height: "100%", background: TEAL, borderRadius: "4px" }} />
-              </Box>
+              {/* The status payload has no percentage, so the bar is
+                  indeterminate rather than a fixed 12%. */}
+              <LinearProgress
+                sx={{
+                  height: "5px",
+                  borderRadius: "4px",
+                  marginBottom: "12px",
+                  background: "#F1F5F9",
+                  "& .MuiLinearProgress-bar": { background: TEAL },
+                }}
+              />
 
+              {/* Were fixed "Metformin (94%), Pioglitazone (91%)" and
+                  "JAK2 (UniProt: O60674)" lines. Only what was actually handed
+                  over is listed. */}
               {[
-                ["✓", "Candidates received - Metformin (94%), Pioglitazone (91%)", "#00BCD4"],
-                ["✓", "Target validated - JAK2 (UniProt: O60674)", "#00BCD4"],
-                ["◉", "Preparing receptor structure & binding site grid...", "#00BCD4"],
-                ["○", "Run PLP docking simulations", "#CBD5E1"],
-              ].map(([icon, label, color]) => (
+                handedOff.length
+                  ? ["✓", `Candidates received - ${handedOff.join(", ")}`, "#00BCD4"]
+                  : null,
+                target ? ["✓", `Target - ${target}`, "#00BCD4"] : null,
+                ["◉", "Docking in progress", "#00BCD4"],
+              ]
+                .filter(Boolean)
+                .map(([icon, label, color]) => (
                 <Box key={label} sx={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "7px" }}>
                   <span style={{ color, fontSize: "11px", width: "10px" }}>{icon}</span>
                   <Typography sx={{ ...baseText, fontSize: "12px", lineHeight: "15px", fontWeight: 500, color: "#334155" }}>
@@ -1423,7 +1468,7 @@ const ScreeningSuitePhase = ({
             </Box>
           )}
 
-          {!hasHits && !loading && (
+          {!hasHits && !loading && !error && (
             <Box
               role="alert"
               sx={{
@@ -1445,6 +1490,11 @@ const ScreeningSuitePhase = ({
               </Typography>
             </Box>
           )}
+
+          {/* Branch / Rerun / Export — ScreenSuite had none at all. */}
+          <Box sx={{ marginTop: "12px" }}>
+            <PhaseActions {...actions} />
+          </Box>
         </Box>
 
       </Box>

@@ -35,6 +35,42 @@ const styleForType = (type) => {
   return hit ?? { color: "#64748B", radius: 12 };
 };
 
+/**
+ * The API's `legend`. The collection shows it as an object (empty in the
+ * example), so both a { label: colour } map and a [{ label, color }] list are
+ * read. A value that is not a colour is shown as the entry's description.
+ */
+const isColour = (value) =>
+  typeof value === "string" && /^(#[0-9a-f]{3,8}|rgba?\(|hsla?\()/i.test(value.trim());
+
+const readLegend = (legend) => {
+  if (Array.isArray(legend)) {
+    return legend
+      .map((entry) =>
+        entry && typeof entry === "object"
+          ? {
+              label: entry.label ?? entry.type ?? entry.name ?? null,
+              color: entry.color ?? entry.colour ?? null,
+            }
+          : entry
+          ? { label: String(entry), color: null }
+          : null
+      )
+      .filter((entry) => entry?.label);
+  }
+  if (legend && typeof legend === "object") {
+    return Object.entries(legend).map(([label, value]) => {
+      if (value && typeof value === "object") {
+        return { label: value.label ?? label, color: value.color ?? value.colour ?? null };
+      }
+      return isColour(value)
+        ? { label, color: value }
+        : { label: value ? `${label}: ${value}` : label, color: null };
+    });
+  }
+  return [];
+};
+
 const WIDTH = 840;
 const HEIGHT = 360;
 
@@ -105,6 +141,8 @@ const SubgraphView = ({
   onGenerate,
   onNodeClick,
   diseaseLabel,
+  /** Outcome of the last node expansion (failure / no neighbours), if any. */
+  notice = null,
 }) => {
   const positions = useMemo(
     () => layout(graph?.nodes ?? [], graph?.edges ?? []),
@@ -112,6 +150,7 @@ const SubgraphView = ({
   );
 
   const hasGraph = Boolean(graph?.nodes?.length);
+  const legend = useMemo(() => readLegend(graph?.legend), [graph]);
 
   if (loading) {
     return (
@@ -200,16 +239,31 @@ const SubgraphView = ({
             const from = positions.get(edge.source);
             const to = positions.get(edge.target);
             if (!from || !to) return null;
+            const label = typeof edge.label === "string" ? edge.label.trim() : "";
             return (
-              <line
-                key={`e-${i}`}
-                x1={from.x}
-                y1={from.y}
-                x2={to.x}
-                y2={to.y}
-                stroke="rgba(102,115,140,0.4)"
-                strokeWidth="1.2"
-              />
+              <g key={`e-${i}`}>
+                <line
+                  x1={from.x}
+                  y1={from.y}
+                  x2={to.x}
+                  y2={to.y}
+                  stroke="rgba(102,115,140,0.4)"
+                  strokeWidth="1.2"
+                />
+                {/* The relation name, when the API gives one. */}
+                {label && (
+                  <text
+                    x={(from.x + to.x) / 2}
+                    y={(from.y + to.y) / 2 - 3}
+                    textAnchor="middle"
+                    fill="#94A3B8"
+                    fontSize="7"
+                    fontFamily="Inter,sans-serif"
+                  >
+                    {label}
+                  </text>
+                )}
+              </g>
             );
           })}
 
@@ -239,6 +293,35 @@ const SubgraphView = ({
           })}
         </svg>
       </Box>
+
+      {legend.length > 0 && (
+        <Box sx={{ display: "flex", flexWrap: "wrap", gap: "12px", mt: "10px" }}>
+          {legend.map((entry) => (
+            <Box key={entry.label} sx={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <Box
+                sx={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: "50%",
+                  bgcolor: entry.color || styleForType(entry.label).color,
+                }}
+              />
+              <Typography sx={{ fontFamily: FONT, fontSize: "11px", color: TEXT_MUTED }}>
+                {entry.label}
+              </Typography>
+            </Box>
+          ))}
+        </Box>
+      )}
+
+      {notice && (
+        <Typography
+          role="status"
+          sx={{ fontFamily: FONT, fontSize: "12px", color: notice.isError ? "#DC2626" : TEXT_MUTED, mt: "8px" }}
+        >
+          {notice.text}
+        </Typography>
+      )}
 
       {/* Footer counts. These were fixed at 52 / 15 / 10. */}
       <Box

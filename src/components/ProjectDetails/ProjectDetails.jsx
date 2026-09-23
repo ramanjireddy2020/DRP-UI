@@ -1,96 +1,69 @@
-import React from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
-import { Typography } from "@mui/material";
+import {
+  Typography,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Button,
+  TextField,
+  MenuItem,
+  CircularProgress,
+} from "@mui/material";
 
 import {
   ChevronRight,
-  Download,
   EditOutlined,
   Check,
   ArrowForward,
 } from "@mui/icons-material";
 
+import {
+  getProject,
+  getProjectItems,
+  updateProject,
+  PROJECT_STATUSES,
+} from "../../services/api/projects";
+
 import "./ProjectDetails.css";
 
-/* =========================================================
-   PROJECT DATA
-   ========================================================= */
+const WORKFLOW_ROUTE = "/dashboard/new-research/workflow";
 
-const PROJECTS = {
-  "1": {
-    id: "1",
-    name: "Type 2 Diabetes Drug Repurposing",
-    shortName: "JAK2 Repurposing",
-    disease: "Type 2 Diabetes",
-    subtitle: "AMPK and SIRT1 pathway modulation",
+/* Friendly section titles for known resultTypes; anything else is shown as-is. */
+const RESULT_TYPE_LABELS = {
+  targets: "Target Identification",
+  literature: "Literature Review",
+  articles: "Literature Review",
+  candidates: "Candidate Selection",
+  compounds: "Candidate Selection",
+  screening: "Interaction Screening",
+  patents: "Novelty Assessment",
+  novelty: "Novelty Assessment",
+};
 
-    overview:
-      "This project looked at repurposing options for type 2 diabetes, moving through target identification, literature review, candidate curation, interaction screening, and novelty assessment. AMPK and SIRT1 were the two targets carried through the pipeline, and aspirin emerged as the leading repurposing candidate against AMPK, backed by profile fit, docking results, and low patent risk.",
+const labelFor = (resultType) =>
+  RESULT_TYPE_LABELS[String(resultType || "").toLowerCase()] ||
+  (resultType ? String(resultType) : "Other results");
 
-    targetIdentification:
-      "AMPK and SIRT1 surfaced as the two strongest targets connected to type 2 diabetes in the knowledge graph, scoring 88 and 74 respectively. Both sit within the same glucose regulation and insulin sensitivity network, but AMPK shows tighter connectivity and a stronger supporting evidence base, making it the primary target carried forward, with SIRT1 retained as a secondary target given its close pathway relationship to AMPK.",
+const errorText = (err, fallback) => err?.userMessage || err?.message || fallback;
 
-    literatureReview:
-      "AMPK acts as a central energy-sensing enzyme in skeletal muscle and liver, and its activation increases glucose uptake, suppresses hepatic glucose production, and improves overall insulin sensitivity. The same pathway metformin engages clinically. SIRT1 operates alongside AMPK in this same signaling network, deacetylating downstream targets that regulate mitochondrial function and lipid metabolism.",
+/* Group items by resultType, keeping first-seen order. */
+const groupItems = (items) => {
+  const groups = new Map();
+  items.forEach((item) => {
+    const key = item.resultType || "";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  });
+  return [...groups.entries()].map(([resultType, list]) => ({ resultType, items: list }));
+};
 
-    candidateSelection:
-      "Against a profile built from AMPK's known ligands, aspirin aligns closely on molecular weight, bioavailability, and half-life, and carries a documented mild insulin-sensitizing effect at higher doses. Ibuprofen matches on fewer criteria, making aspirin the stronger candidate.",
-
-    interactionScreening:
-      "AMPK paired with aspirin shows the strongest binding affinity (-9.4 kcal/mol) and the most favorable interaction within the target's active pocket. SIRT1 paired with either compound shows weaker affinity, reinforcing AMPK as the more viable target.",
-
-    noveltyAssessment:
-      "Patent claims around AMPK-pathway modulation in metabolic disease are broad but general. No claim currently covers aspirin's use for this indication, leaving clear room to pursue without immediate freedom-to-operate conflict.",
-
-    conclusion:
-      "Aspirin targeting AMPK stands out as the strongest repurposing candidate for type 2 diabetes, holding up across target relevance, literature support, profile fit, docking strength, and patent risk, and is worth moving into preclinical validation next.",
-
-    modules: [
-      "TxKG",
-      "LitMineX",
-      "CurateX",
-      "ScreenSuite",
-      "NovSearch",
-    ],
-  },
-
-  "2": {
-    id: "2",
-    name: "Rapamycin for Neuro",
-    shortName: "Rapamycin Repurposing",
-    disease: "Alzheimer's Disease",
-    subtitle: "Neurodegenerative pathway modulation",
-
-    overview:
-      "This project evaluates potential repurposing opportunities for Alzheimer's Disease through target identification, literature review, candidate curation, interaction screening, and novelty assessment.",
-
-    targetIdentification:
-      "Candidate targets were identified through the knowledge graph and prioritized based on connectivity, supporting evidence, and pathway relevance.",
-
-    literatureReview:
-      "Literature evidence was reviewed to understand target biology, pathway relationships, and potential therapeutic relevance.",
-
-    candidateSelection:
-      "Candidate compounds were evaluated against target profiles and supporting evidence.",
-
-    interactionScreening:
-      "Potential target-compound interactions were evaluated based on binding and interaction strength.",
-
-    noveltyAssessment:
-      "Patent and novelty considerations were evaluated for the shortlisted repurposing opportunities.",
-
-    conclusion:
-      "The strongest candidate can be progressed based on target relevance, literature support, interaction strength, and novelty assessment.",
-
-    modules: [
-      "TxKG",
-      "LitMineX",
-      "CurateX",
-      "ScreenSuite",
-      "NovSearch",
-    ],
-  },
+/* A one-line description for an item, from whatever the payload carries. */
+const describeItem = (item) => {
+  const p = item.payload || {};
+  return p.title || p.summary || p.name || null;
 };
 
 /* =========================================================
@@ -101,7 +74,148 @@ const ProjectDetails = () => {
   const { projectId } = useParams();
   const navigate = useNavigate();
 
-  const project = PROJECTS[projectId] || PROJECTS["1"];
+  const [project, setProject] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [notFound, setNotFound] = useState(false);
+
+  const [items, setItems] = useState([]);
+  const [itemsError, setItemsError] = useState(null);
+
+  const [reloadKey, setReloadKey] = useState(0);
+
+  /* Edit dialog — PATCH /projects/{id} { name, status } */
+  const [editOpen, setEditOpen] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editStatus, setEditStatus] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+
+  useEffect(() => {
+    let active = true;
+
+    const load = async () => {
+      setLoading(true);
+      setError(null);
+      setNotFound(false);
+      setItemsError(null);
+
+      const [projectRes, itemsRes] = await Promise.allSettled([
+        getProject(projectId),
+        getProjectItems(projectId),
+      ]);
+      if (!active) return;
+
+      if (projectRes.status === "fulfilled" && projectRes.value) {
+        setProject(projectRes.value);
+      } else {
+        setProject(null);
+        const err = projectRes.reason;
+        if (projectRes.status === "fulfilled" || err?.status === 404) setNotFound(true);
+        else setError(errorText(err, "Failed to load project"));
+      }
+
+      if (itemsRes.status === "fulfilled") {
+        setItems(Array.isArray(itemsRes.value) ? itemsRes.value : []);
+      } else {
+        setItems([]);
+        setItemsError(errorText(itemsRes.reason, "Failed to load project results"));
+      }
+
+      setLoading(false);
+    };
+
+    load();
+
+    return () => {
+      active = false;
+    };
+  }, [projectId, reloadKey]);
+
+  const openEdit = () => {
+    setEditName(project?.name || "");
+    setEditStatus(PROJECT_STATUSES.includes(project?.status) ? project.status : "");
+    setSaveError(null);
+    setEditOpen(true);
+  };
+
+  const handleSave = useCallback(async () => {
+    const payload = {};
+    if (editName.trim() && editName.trim() !== project?.name) payload.name = editName.trim();
+    if (editStatus && editStatus !== project?.status) payload.status = editStatus;
+    if (!Object.keys(payload).length) {
+      setEditOpen(false);
+      return;
+    }
+
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const updated = await updateProject(projectId, payload);
+      setProject((prev) => ({ ...prev, ...payload, ...(updated || {}) }));
+      setEditOpen(false);
+    } catch (err) {
+      setSaveError(errorText(err, "Failed to update project"));
+    } finally {
+      setSaving(false);
+    }
+  }, [editName, editStatus, project, projectId]);
+
+  const openSession = (sessionId) =>
+    navigate(WORKFLOW_ROUTE, { state: { sessionId } });
+
+  const renderState = (message, { retry = false } = {}) => (
+    <div className="project-details">
+      <div className="project-details__content">
+        <header className="project-details__breadcrumb">
+          <div className="project-details__breadcrumb-left">
+            <button
+              type="button"
+              className="project-details__breadcrumb-text project-details__breadcrumb-button"
+              onClick={() => navigate("/dashboard/active-projects")}
+            >
+              Projects
+            </button>
+          </div>
+        </header>
+        <section className="project-details__section">
+          <div className="project-details__section-content">
+            {message}
+            {retry && (
+              <Button
+                onClick={() => setReloadKey((k) => k + 1)}
+                sx={{ textTransform: "none", mt: 1 }}
+              >
+                Retry
+              </Button>
+            )}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+
+  if (loading) {
+    return renderState(<CircularProgress size={20} />);
+  }
+
+  if (notFound) {
+    return renderState(
+      <p>This project doesn&apos;t exist or was deleted.</p>
+    );
+  }
+
+  if (error || !project) {
+    return renderState(
+      <p role="alert" style={{ color: "#DC2626" }}>
+        Couldn&apos;t load this project: {error || "No data returned"}
+      </p>,
+      { retry: true }
+    );
+  }
+
+  const groups = groupItems(items);
+  const subtitle = [project.disease, project.module].filter(Boolean).join(" · ");
 
   return (
     <div className="project-details">
@@ -132,7 +246,7 @@ const ProjectDetails = () => {
 
           <div className="project-details__breadcrumb-right">
             <span className="project-details__breadcrumb-text">
-              Projects
+              Status
             </span>
 
             <span className="project-details__breadcrumb-separator">
@@ -140,7 +254,7 @@ const ProjectDetails = () => {
             </span>
 
             <span className="project-details__breadcrumb-current">
-              <strong>{project.shortName}</strong>
+              <strong>{project.status || "—"}</strong>
             </span>
           </div>
         </header>
@@ -157,44 +271,32 @@ const ProjectDetails = () => {
               component="h1"
               className="project-details__title"
             >
-              Repurposing Assessment: {project.disease}
+              {project.disease
+                ? `Repurposing Assessment: ${project.disease}`
+                : project.name}
             </Typography>
 
             <Typography
               component="p"
               className="project-details__subtitle"
             >
-              {project.subtitle}
+              {subtitle || project.name}
             </Typography>
 
           </div>
 
           {/* ===================================================
               ACTION BUTTONS
+              "Export Project Data" is hidden: the API has no
+              project-level export endpoint.
           =================================================== */}
 
           <div className="project-details__actions">
 
             <button
               type="button"
-              className="project-details__button project-details__export-button"
-              onClick={() => {
-                console.log("Export project:", project.id);
-              }}
-            >
-              <Download />
-
-              <span>
-                Export Project Data
-              </span>
-            </button>
-
-            <button
-              type="button"
               className="project-details__button project-details__edit-button"
-              onClick={() => {
-                console.log("Edit project:", project.id);
-              }}
+              onClick={openEdit}
             >
               <EditOutlined />
 
@@ -207,264 +309,182 @@ const ProjectDetails = () => {
         </section>
 
         {/* =====================================================
-            PIPELINE
+            PIPELINE — result types filed into this project
         ===================================================== */}
 
-        <section className="project-details__pipeline">
+        {groups.length > 0 && (
+          <section className="project-details__pipeline">
 
-          <div className="project-details__pipeline-header">
-            <h2 className="project-details__pipeline-title">
-              Pipeline Modules Completed
-            </h2>
-          </div>
-
-          <div className="project-details__pipeline-body">
-
-            <div className="project-details__steps">
-
-              {project.modules.map((module) => (
-                <div
-                  className="project-details__step"
-                  key={module}
-                >
-                  <div className="project-details__step-icon">
-                    <Check />
-                  </div>
-
-                  <span className="project-details__step-label">
-                    {module}
-                  </span>
-                </div>
-              ))}
-
+            <div className="project-details__pipeline-header">
+              <h2 className="project-details__pipeline-title">
+                Saved Results
+              </h2>
             </div>
 
-          </div>
-        </section>
+            <div className="project-details__pipeline-body">
+
+              <div className="project-details__steps">
+
+                {groups.map((group) => (
+                  <div
+                    className="project-details__step"
+                    key={group.resultType || "other"}
+                  >
+                    <div className="project-details__step-icon">
+                      <Check />
+                    </div>
+
+                    <span className="project-details__step-label">
+                      {labelFor(group.resultType)} ({group.items.length})
+                    </span>
+                  </div>
+                ))}
+
+              </div>
+
+            </div>
+          </section>
+        )}
 
         {/* =====================================================
-            CONTENT SECTIONS
+            CONTENT SECTIONS — GET /projects/{id}/items by resultType
         ===================================================== */}
 
         <div className="project-details__sections">
 
-          {/* OVERVIEW */}
+          {itemsError && (
+            <section className="project-details__section">
+              <div className="project-details__section-content">
+                <p role="alert" style={{ color: "#DC2626" }}>
+                  Couldn&apos;t load this project&apos;s results: {itemsError}
+                </p>
+              </div>
+            </section>
+          )}
 
-          <section className="project-details__section">
+          {!itemsError && groups.length === 0 && (
+            <section className="project-details__section">
+              <div className="project-details__section-header">
+                <h2 className="project-details__section-title">
+                  No results yet
+                </h2>
+              </div>
+              <div className="project-details__section-content">
+                <p>
+                  Nothing has been filed into this project yet. Use
+                  &ldquo;Add to project&rdquo; on a result in a research
+                  session to save it here.
+                </p>
+              </div>
+            </section>
+          )}
 
-            <div className="project-details__section-header">
-              <h2 className="project-details__section-title">
-                Overview
-              </h2>
-            </div>
+          {groups.map((group) => (
+            <section
+              className="project-details__section"
+              key={group.resultType || "other"}
+            >
 
-            <div className="project-details__section-content">
-              <p>
-                {project.overview}
-              </p>
-            </div>
+              <div className="project-details__section-header">
+                <h2 className="project-details__section-title">
+                  {labelFor(group.resultType)}
+                </h2>
+              </div>
 
-          </section>
+              <div className="project-details__section-content">
+                {group.items.map((item) => (
+                  <div
+                    key={item.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: "12px",
+                      padding: "6px 0",
+                    }}
+                  >
+                    <p>
+                      {describeItem(item) ||
+                        `Saved ${group.resultType || "result"}${
+                          item.sessionId ? ` from session ${item.sessionId}` : ""
+                        }`}
+                    </p>
 
-          {/* TARGET IDENTIFICATION */}
+                    {item.sessionId && (
+                      <button
+                        type="button"
+                        className="project-details__session-link"
+                        onClick={() => openSession(item.sessionId)}
+                      >
+                        <span>
+                          View session
+                        </span>
 
-          <section className="project-details__section">
+                        <ArrowForward />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
 
-            <div className="project-details__section-header">
-
-              <h2 className="project-details__section-title">
-                Target Identification
-              </h2>
-
-              <button
-                type="button"
-                className="project-details__session-link"
-                onClick={() =>
-                  navigate(
-                    `/dashboard/session/txkg/${project.id}`
-                  )
-                }
-              >
-                <span>
-                  View TxKG session
-                </span>
-
-                <ArrowForward />
-              </button>
-
-            </div>
-
-            <div className="project-details__section-content">
-              <p>
-                {project.targetIdentification}
-              </p>
-            </div>
-
-          </section>
-
-          {/* LITERATURE REVIEW */}
-
-          <section className="project-details__section">
-
-            <div className="project-details__section-header">
-
-              <h2 className="project-details__section-title">
-                Literature Review
-              </h2>
-
-              <button
-                type="button"
-                className="project-details__session-link"
-                onClick={() =>
-                  navigate(
-                    `/dashboard/session/litminex/${project.id}`
-                  )
-                }
-              >
-                <span>
-                  View LitMineX session
-                </span>
-
-                <ArrowForward />
-              </button>
-
-            </div>
-
-            <div className="project-details__section-content">
-              <p>
-                {project.literatureReview}
-              </p>
-            </div>
-
-          </section>
-
-          {/* CANDIDATE SELECTION */}
-
-          <section className="project-details__section">
-
-            <div className="project-details__section-header">
-
-              <h2 className="project-details__section-title">
-                Candidate Selection
-              </h2>
-
-              <button
-                type="button"
-                className="project-details__session-link"
-                onClick={() =>
-                  navigate(
-                    `/dashboard/session/curatex/${project.id}`
-                  )
-                }
-              >
-                <span>
-                  View CurateX session
-                </span>
-
-                <ArrowForward />
-              </button>
-
-            </div>
-
-            <div className="project-details__section-content">
-              <p>
-                {project.candidateSelection}
-              </p>
-            </div>
-
-          </section>
-
-          {/* INTERACTION SCREENING */}
-
-          <section className="project-details__section">
-
-            <div className="project-details__section-header">
-
-              <h2 className="project-details__section-title">
-                Interaction Screening
-              </h2>
-
-              <button
-                type="button"
-                className="project-details__session-link"
-                onClick={() =>
-                  navigate(
-                    `/dashboard/session/screensuite/${project.id}`
-                  )
-                }
-              >
-                <span>
-                  View ScreenSuite session
-                </span>
-
-                <ArrowForward />
-              </button>
-
-            </div>
-
-            <div className="project-details__section-content">
-              <p>
-                {project.interactionScreening}
-              </p>
-            </div>
-
-          </section>
-
-          {/* NOVELTY ASSESSMENT */}
-
-          <section className="project-details__section">
-
-            <div className="project-details__section-header">
-
-              <h2 className="project-details__section-title">
-                Novelty Assessment
-              </h2>
-
-              <button
-                type="button"
-                className="project-details__session-link"
-                onClick={() =>
-                  navigate(
-                    `/dashboard/session/novsearch/${project.id}`
-                  )
-                }
-              >
-                <span>
-                  View NovSearch session
-                </span>
-
-                <ArrowForward />
-              </button>
-
-            </div>
-
-            <div className="project-details__section-content">
-              <p>
-                {project.noveltyAssessment}
-              </p>
-            </div>
-
-          </section>
-
-          {/* CONCLUSION */}
-
-          <section className="project-details__section project-details__conclusion">
-
-            <div className="project-details__section-header">
-              <h2 className="project-details__section-title">
-                Conclusion
-              </h2>
-            </div>
-
-            <div className="project-details__section-content">
-              <p>
-                {project.conclusion}
-              </p>
-            </div>
-
-          </section>
+            </section>
+          ))}
 
         </div>
+
+        <Dialog
+          open={editOpen}
+          onClose={() => !saving && setEditOpen(false)}
+          fullWidth
+          maxWidth="xs"
+        >
+          <DialogTitle sx={{ fontFamily: "'Inter', sans-serif", fontWeight: 700 }}>
+            Edit project
+          </DialogTitle>
+          <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, pt: "8px !important" }}>
+            <TextField
+              label="Project Name"
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              fullWidth
+              size="small"
+              autoFocus
+            />
+            <TextField
+              select
+              label="Status"
+              value={editStatus}
+              onChange={(e) => setEditStatus(e.target.value)}
+              fullWidth
+              size="small"
+            >
+              {PROJECT_STATUSES.map((status) => (
+                <MenuItem key={status} value={status}>
+                  {status}
+                </MenuItem>
+              ))}
+            </TextField>
+            {saveError && (
+              <Typography role="alert" sx={{ fontSize: 13, color: "#DC2626" }}>
+                {saveError}
+              </Typography>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setEditOpen(false)} disabled={saving} sx={{ textTransform: "none" }}>
+              Cancel
+            </Button>
+            <Button
+              variant="contained"
+              disableElevation
+              onClick={handleSave}
+              disabled={saving || !editName.trim()}
+              sx={{ textTransform: "none", bgcolor: "#0ABFBC", "&:hover": { bgcolor: "#09ADAB" } }}
+            >
+              {saving ? "Saving..." : "Save"}
+            </Button>
+          </DialogActions>
+        </Dialog>
       </div>
     </div>
   );

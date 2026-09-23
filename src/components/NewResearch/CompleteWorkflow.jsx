@@ -18,8 +18,9 @@ import NoveltySearchPhase from "../workflow/NoveltySearch/NoveltySearchPhase";
 import useWorkflowSession from "../../hooks/useWorkflowSession";
 import useJob from "../../hooks/useJob";
 import usePhaseResults from "../../hooks/usePhaseResults";
-import { moduleForPhase, isErrorPhase, MODULE_BY_KEY } from "../../workflow/moduleMap";
-import { normalizeTxkgResult } from "../../workflow/txkgResult";
+import { moduleForPhase, isErrorPhase, isLoadingPhase, MODULE_BY_KEY } from "../../workflow/moduleMap";
+import { normalizeTxkgResult, normalizeMetapath } from "../../workflow/txkgResult";
+import { getArtifacts } from "../../services/api/sessions";
 import { toGeneNames, buildSelections } from "../../workflow/selections";
 import { toApiWeights } from "../../workflow/phaseResults";
 import curatexApi from "../../services/api/curatex";
@@ -56,11 +57,86 @@ const WORKFLOW_STEPS = [
   { id: 5, number: "05", label: "NovSearch", key: "novsearch" },
 ];
 
+/**
+ * Poll ONE module's job, regardless of which module is on screen.
+ *
+ * Only the on-screen module used to be polled, so clicking back to TxKG in the
+ * rail stopped a LitMineX run mid-flight and left its card spinning. Each
+ * module now has its own poller, keyed on its own step.
+ *
+ * - A job is polled while its step is loading, and — for TxKG only, which
+ *   renders the generic /agents/jobs/{id}/result — once more when a completed
+ *   step has no stored result (a resumed session). The other modules read their
+ *   own results endpoints, so they never fetch /result here.
+ * - A completion is handled once per job id, so re-polling an old job (e.g.
+ *   while a branch waits for its new job id) cannot flip the step to results.
+ */
+const useModuleJob = (
+  moduleKey,
+  step,
+  { fetchResult = false, setPhase, setStepData, setStepError, onCompleted }
+) => {
+  const phase = step?.phase || "";
+  const jobId = step?.jobId ?? null;
+  const storedResult = step?.data?.jobResult ?? null;
+  const needsResult = fetchResult && !storedResult;
+
+  const job = useJob(jobId, {
+    enabled: Boolean(jobId) && (isLoadingPhase(phase) || needsResult),
+    fetchResult,
+  });
+
+  const handledRef = useRef(null);
+  const failedRef = useRef(null);
+  const onCompletedRef = useRef(onCompleted);
+  onCompletedRef.current = onCompleted;
+
+  useEffect(() => {
+    if (!job.isDone || !job.jobId || job.jobId !== jobId) return;
+
+    if (fetchResult && job.result && storedResult !== job.result) {
+      setStepData({ jobResult: job.result }, moduleKey);
+    }
+
+    if (handledRef.current === job.jobId) return;
+    handledRef.current = job.jobId;
+
+    if (isLoadingPhase(phase)) {
+      setPhase(MODULE_BY_KEY[moduleKey].resultsPhase, moduleKey);
+      onCompletedRef.current?.(moduleKey, job.jobId);
+    }
+  }, [job.isDone, job.jobId, job.result, jobId, phase, storedResult, fetchResult, moduleKey, setPhase, setStepData]);
+
+  /**
+   * A failed job moves its module to its own "-error" phase, carrying the
+   * backend's reason, instead of leaving the spinner turning.
+   */
+  useEffect(() => {
+    if (!job.isFailed || !job.jobId || job.jobId !== jobId) return;
+    if (failedRef.current === job.jobId) return;
+    failedRef.current = job.jobId;
+    setStepError(job.error, moduleKey);
+  }, [job.isFailed, job.error, job.jobId, jobId, moduleKey, setStepError]);
+
+  return job;
+};
+
 const CompleteWorkflow = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const currentUser = useCurrentUser();
-  const query = location.state?.query || "Find protein targets associated with Type 2 Diabetes for drug repurposing";
+
+  /**
+   * Router state (see the navigation contract):
+   *   new research → { query, module, projectId, fileIds }
+   *   resume       → { sessionId }
+   * There is no fallback query any more. A hardcoded "Type 2 Diabetes" query
+   * used to start a real backend session whenever this route was opened
+   * without one.
+   */
+  const entryState = location.state || {};
+  const entrySessionId = entryState.sessionId ?? null;
+  const entryQuery = typeof entryState.query === "string" ? entryState.query.trim() : "";
   
   // ---------------------------------------------------------------------------
   // Session state.
@@ -75,6 +151,10 @@ const CompleteWorkflow = () => {
   // continue to work unchanged.
   // ---------------------------------------------------------------------------
   const session = useWorkflowSession();
+
+  // A resumed session has no query in router state; its title is the query it
+  // was started with.
+  const query = entryQuery || session.title || "";
 
   const workflowPhase = session.activePhase ?? "txkg-loading";
   const activeStep = session.activeIndex;
@@ -121,10 +201,6 @@ const CompleteWorkflow = () => {
   const [selectedArticle, setSelectedArticle] = useState(null);
   const [branchOpen, setBranchOpen] = useState(false);
   const [selectedBranch, setSelectedBranch] = useState("main");
-  const [showBranchDialog, setShowBranchDialog] = useState(false);
-  const [branchCreated, setBranchCreated] = useState(false);
-  const [branchName, setBranchName] = useState("JAK2-alternative-targets");
-  const [branchDescription, setBranchDescription] = useState("Saving therapeutic target prediction results for Type 2 Diabetes disease pathway analysis.");
   const [viewMode, setViewMode] = useState("chat"); // 'chat' | 'artifacts'
   const [showShareDialog, setShowShareDialog] = useState(false);
 
@@ -195,23 +271,37 @@ const CompleteWorkflow = () => {
    * Shared with the retry on the session-error screen, so a retry sends exactly
    * what the first attempt did.
    */
+  // POST /sessions takes { query, module, projectId } — nothing else. The
+  // composer's `fileIds` are not sent: the collection has no field for them.
   const startSession = useCallback(
     () =>
       session.startSession({
-        query,
-        module: location.state?.module ?? null,
-        projectId: location.state?.projectId ?? null,
+        query: entryQuery,
+        module: entryState.module ?? null,
+        projectId: entryState.projectId ?? null,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [query, location.state, session.startSession]
+    [entryQuery, entryState.module, entryState.projectId, session.startSession]
+  );
+
+  /** Resume reopens the session; it never creates a new one. */
+  const openSession = useCallback(
+    () => (entrySessionId ? session.resumeSession(entrySessionId) : startSession()),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [entrySessionId, session.resumeSession, startSession]
   );
 
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
 
-    startSession();
-    // Intentionally mount-only: a session is created once per workflow entry.
+    if (entrySessionId || entryQuery) {
+      openSession();
+    } else {
+      // Neither a query nor a session to reopen: nothing to run.
+      navigate("/dashboard/new-research", { replace: true });
+    }
+    // Intentionally mount-only: a session is opened once per workflow entry.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -223,8 +313,43 @@ const CompleteWorkflow = () => {
   // they set. Nothing on these screens is invented any more: a phase either
   // shows what the backend returned or says why it could not.
   // ---------------------------------------------------------------------------
-  const activeJobId = session.activeJobId;
-  const job = useJob(activeJobId, { enabled: Boolean(activeJobId) });
+  const { setStepData, setStepError, refreshSession, updateSession } = session;
+
+  /**
+   * Bumped after each job completes and the session has been re-read, so the
+   * artifacts list and its badge follow.
+   */
+  const [sessionRefreshTick, setSessionRefreshTick] = useState(0);
+
+  /**
+   * After a job completes, re-read GET /sessions/{id}: that is where the
+   * agent's written explanation (messages[] with role "agent") and the step
+   * summary appear. useWorkflowSession merges them without duplicating what is
+   * already in the thread.
+   */
+  const handleJobCompleted = useCallback(async () => {
+    await refreshSession();
+    setSessionRefreshTick((n) => n + 1);
+  }, [refreshSession]);
+
+  const jobOptions = { setPhase, setStepData, setStepError, onCompleted: handleJobCompleted };
+  const txkgJob = useModuleJob("txkg", session.steps.txkg, { ...jobOptions, fetchResult: true });
+  const litminexJob = useModuleJob("litminex", session.steps.litminex, jobOptions);
+  const curatexJob = useModuleJob("curatex", session.steps.curatex, jobOptions);
+  const screensuiteJob = useModuleJob("screensuite", session.steps.screensuite, jobOptions);
+  const novsearchJob = useModuleJob("novsearch", session.steps.novsearch, jobOptions);
+  // The pipeline's stage list is read from /result by usePhaseResults below.
+  const pipelineJob = useModuleJob("pipeline", session.steps.pipeline, jobOptions);
+
+  const moduleJobs = {
+    txkg: txkgJob,
+    litminex: litminexJob,
+    curatex: curatexJob,
+    screensuite: screensuiteJob,
+    novsearch: novsearchJob,
+    pipeline: pipelineJob,
+  };
+  const activeJob = moduleJobs[session.activeKey] ?? txkgJob;
 
   /**
    * CurateX runs TWO jobs. The first builds the target profile; the second
@@ -240,52 +365,19 @@ const CompleteWorkflow = () => {
     fetchResult: false,
   });
 
-  /**
-   * When the active module's job finishes, move that module from its
-   * "-loading" phase to its results phase and keep the payload.
-   *
-   * `resultsPhase` carries CurateX's exception — its first job resolves to the
-   * editable profile screen, not to results — so there is no special case here.
-   */
-  useEffect(() => {
-    if (!job.isDone) return;
-
-    const owner = moduleForPhase(workflowPhase);
-    if (!owner) return;
-    if (!workflowPhase.endsWith("-loading")) return;
-
-    if (job.result) {
-      session.setStepData({ jobResult: job.result }, owner.key);
-    }
-
-    setWorkflowPhase(owner.resultsPhase);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [job.isDone, job.result]);
-
-  /**
-   * A failed job moves its module to its own "-error" phase, carrying the
-   * backend's reason. Previously there was no path out of "-loading" at all on
-   * failure, so a crashed agent left the spinner turning.
-   */
-  useEffect(() => {
-    if (!job.isFailed) return;
-    const owner = moduleForPhase(workflowPhase);
-    if (!owner) return;
-    session.setStepError(job.error, owner.key);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [job.isFailed, job.error]);
-
   /** The compounds job drives the second half of CurateX. */
   useEffect(() => {
+    if (!compoundsJob.jobId || compoundsJob.jobId !== compoundsJobId) return;
     if (compoundsJob.isDone) {
-      setWorkflowPhase("curatex-results");
+      // Set on CurateX itself, so a background completion does not pull the
+      // view away from whatever module is on screen.
+      setPhase("curatex-results", "curatex");
       return;
     }
     if (compoundsJob.isFailed) {
-      session.setStepError(compoundsJob.error, "curatex");
+      setStepError(compoundsJob.error, "curatex");
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compoundsJob.isDone, compoundsJob.isFailed, compoundsJob.error]);
+  }, [compoundsJob.jobId, compoundsJobId, compoundsJob.isDone, compoundsJob.isFailed, compoundsJob.error, setPhase, setStepError]);
 
   /**
    * TxKG results, normalised from whatever the job stored.
@@ -358,20 +450,93 @@ const CompleteWorkflow = () => {
     : undefined;
 
   /**
-   * Branch / Rerun / Export for whichever step is on screen.
+   * Branch / Rerun / Export, one set per module.
    *
-   * All three were dead buttons in every phase. Export needs a completed job,
-   * so it is keyed on the active step's jobId — or CurateX's compounds job,
-   * whose results are what the CurateX table actually shows.
+   * These used to be a single object tied to the module on screen and shared
+   * by every card, so Export on the LitMineX card while NovSearch was active
+   * exported the NovSearch job. Each card now gets actions for its own step and
+   * job. Export needs a completed job; for CurateX that is the compounds job,
+   * whose results are what the CurateX table shows.
    */
-  const exportableJobId =
-    session.activeKey === "curatex" && compoundsJobId ? compoundsJobId : activeJobId;
+  const completedJobId = (key) => {
+    const step = session.steps[key];
+    if (!step?.jobId || step.error) return null;
+    if (isLoadingPhase(step.phase) || isErrorPhase(step.phase)) return null;
+    return step.jobId;
+  };
 
-  const actions = usePhaseActions({
+  const txkgActions = usePhaseActions({
     session,
-    jobId: exportableJobId,
-    moduleLabel: session.activeModule?.label,
+    moduleKey: "txkg",
+    jobId: completedJobId("txkg"),
+    moduleLabel: MODULE_BY_KEY.txkg?.label,
   });
+  const litminexActions = usePhaseActions({
+    session,
+    moduleKey: "litminex",
+    jobId: completedJobId("litminex"),
+    moduleLabel: MODULE_BY_KEY.litminex?.label,
+  });
+  const curatexActions = usePhaseActions({
+    session,
+    moduleKey: "curatex",
+    jobId: compoundsJobId && compoundsJob.isDone ? compoundsJobId : completedJobId("curatex"),
+    moduleLabel: MODULE_BY_KEY.curatex?.label,
+  });
+  const screensuiteActions = usePhaseActions({
+    session,
+    moduleKey: "screensuite",
+    jobId: completedJobId("screensuite"),
+    moduleLabel: MODULE_BY_KEY.screensuite?.label,
+  });
+  const novsearchActions = usePhaseActions({
+    session,
+    moduleKey: "novsearch",
+    jobId: completedJobId("novsearch"),
+    moduleLabel: MODULE_BY_KEY.novsearch?.label,
+  });
+
+  /**
+   * End Task → PATCH /sessions/{id} { status: "Saved" }.
+   *
+   * It used to switch to a local "compiling" screen on a timer and never tell
+   * the backend, so the session's status in Recent Sessions was wrong. The
+   * promise rejects with the reason on failure so the caller can show it; the
+   * top bar shows it too.
+   */
+  const [saveState, setSaveState] = useState({ status: "idle", error: null });
+  const handleEndTask = useCallback(async () => {
+    setSaveState({ status: "saving", error: null });
+    try {
+      await updateSession({ status: "Saved" });
+      setSaveState({ status: "saved", error: null });
+    } catch (err) {
+      const message = err?.userMessage || err?.message || "The session could not be saved.";
+      setSaveState({ status: "error", error: message });
+      throw new Error(message);
+    }
+  }, [updateSession]);
+
+  /**
+   * The Artifacts tab badge: how many artifacts the session really has. It
+   * was fixed at "2". Unknown (null) hides the badge.
+   */
+  const [artifactCount, setArtifactCount] = useState(null);
+  useEffect(() => {
+    if (!session.sessionId) return undefined;
+    let cancelled = false;
+    getArtifacts(session.sessionId)
+      .then((list) => {
+        if (!cancelled) setArtifactCount(Array.isArray(list) ? list.length : null);
+      })
+      .catch(() => {
+        // The badge is a convenience; the Artifacts tab shows the error.
+        if (!cancelled) setArtifactCount(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session.sessionId, sessionRefreshTick]);
 
   /**
    * Item 23: which articles the researcher has ticked.
@@ -395,13 +560,26 @@ const CompleteWorkflow = () => {
    * /stats. Nothing built it before — the picture on screen was a static SVG.
    */
   const [graphJobId, setGraphJobId] = useState(null);
-  const [graphState, setGraphState] = useState({ graph: null, stats: null, error: null });
+  const [graphState, setGraphState] = useState({ graph: null, stats: null, error: null, notice: null });
   const graphJob = useJob(graphJobId, { enabled: Boolean(graphJobId), fetchResult: false });
+
+  /**
+   * Meta-path analysis — POST /agents/metapath/analyze over the generated
+   * graph, poll the job it returns, then read the analysis, scores and
+   * traversals. The stats row this feeds was fixed at 12 / 8 / 5 / 1.5 / 24 /
+   * 38 / 4 for every disease.
+   */
+  const [metapathJobId, setMetapathJobId] = useState(null);
+  const [metapathState, setMetapathState] = useState({ data: null, error: null, starting: false });
+  const metapathJob = useJob(metapathJobId, { enabled: Boolean(metapathJobId), fetchResult: false });
 
   const handleGenerateSubgraph = useCallback(async () => {
     if (!txkgResult.hasData) return;
 
-    setGraphState({ graph: null, stats: null, error: null });
+    setGraphState({ graph: null, stats: null, error: null, notice: null });
+    // A new graph invalidates any analysis of the old one.
+    setMetapathJobId(null);
+    setMetapathState({ data: null, error: null, starting: false });
     try {
       const response = await txkgApi.generateSubgraph({
         disease: txkgResult.disease,
@@ -422,7 +600,7 @@ const CompleteWorkflow = () => {
 
   // Once the graph job finishes, read its nodes/edges and its counts.
   useEffect(() => {
-    if (!graphJob.isDone || !graphJobId) return;
+    if (!graphJob.isDone || !graphJobId || graphJob.jobId !== graphJobId) return;
 
     let mounted = true;
     Promise.all([
@@ -445,7 +623,7 @@ const CompleteWorkflow = () => {
     return () => {
       mounted = false;
     };
-  }, [graphJob.isDone, graphJobId]);
+  }, [graphJob.isDone, graphJob.jobId, graphJobId]);
 
   useEffect(() => {
     if (graphJob.isFailed) {
@@ -453,30 +631,137 @@ const CompleteWorkflow = () => {
     }
   }, [graphJob.isFailed, graphJob.error]);
 
-  /** One node's neighbours, appended to the graph on click. */
+  /**
+   * One node's neighbours, appended to the graph on click.
+   *
+   * New nodes and edges are de-duplicated against what is already drawn, and
+   * the outcome is said out loud: a failure or an empty expansion used to be
+   * silent, so a click looked like it did nothing. The node's own id is sent
+   * (a UniProt accession for targets); the collection's example sends a gene
+   * symbol, which is still to be confirmed with the backend.
+   */
   const handleExploreNode = useCallback(
     async (nodeId) => {
       if (!graphJobId) return;
+      setGraphState((prev) => ({ ...prev, notice: null }));
       try {
         const extra = await txkgApi.exploreNode(graphJobId, nodeId);
         setGraphState((prev) => {
           if (!prev.graph) return prev;
-          const seen = new Set(prev.graph.nodes.map((n) => n.id));
+          const edgeKey = (e) => `${e?.source}|${e?.target}|${e?.label ?? ""}`;
+          const seenNodes = new Set(prev.graph.nodes.map((n) => n.id));
+          const seenEdges = new Set((prev.graph.edges ?? []).map(edgeKey));
+
+          const nodes = [];
+          (extra?.nodes ?? []).forEach((n) => {
+            if (n?.id == null || seenNodes.has(n.id)) return;
+            seenNodes.add(n.id);
+            nodes.push(n);
+          });
+          const edges = [];
+          (extra?.edges ?? []).forEach((e) => {
+            if (!e) return;
+            const key = edgeKey(e);
+            if (seenEdges.has(key)) return;
+            seenEdges.add(key);
+            edges.push(e);
+          });
+
           return {
             ...prev,
             graph: {
               ...prev.graph,
-              nodes: [...prev.graph.nodes, ...(extra?.nodes ?? []).filter((n) => !seen.has(n.id))],
-              edges: [...(prev.graph.edges ?? []), ...(extra?.edges ?? [])],
+              nodes: [...prev.graph.nodes, ...nodes],
+              edges: [...(prev.graph.edges ?? []), ...edges],
             },
+            notice:
+              nodes.length || edges.length
+                ? null
+                : { text: `No further neighbours were found for ${nodeId}.`, isError: false },
           };
         });
-      } catch {
-        // A failed expansion leaves the existing graph alone; the node simply
-        // does not open. Worth no banner of its own.
+      } catch (err) {
+        setGraphState((prev) => ({
+          ...prev,
+          notice: {
+            text: err?.userMessage || err?.message || `${nodeId} could not be expanded.`,
+            isError: true,
+          },
+        }));
       }
     },
     [graphJobId]
+  );
+
+  const handleAnalyzeMetapath = useCallback(async () => {
+    if (!graphJobId) return;
+    setMetapathJobId(null);
+    setMetapathState({ data: null, error: null, starting: true });
+    try {
+      const response = await txkgApi.analyzeMetapath(graphJobId);
+      const jobId = response?.jobId ?? response?.job_id ?? null;
+      if (!jobId) throw new Error("The meta-path analysis did not return a job id.");
+      setMetapathJobId(jobId);
+      setMetapathState({ data: null, error: null, starting: false });
+    } catch (err) {
+      setMetapathState({
+        data: null,
+        error: err?.userMessage || err?.message || "The meta-path analysis could not be started.",
+        starting: false,
+      });
+    }
+  }, [graphJobId]);
+
+  useEffect(() => {
+    if (!metapathJob.isDone || !metapathJobId || metapathJob.jobId !== metapathJobId) return undefined;
+
+    let mounted = true;
+    Promise.all([
+      txkgApi.getMetapath(metapathJobId),
+      txkgApi.getMetapathScores(metapathJobId).catch(() => null),
+      txkgApi.getMetapathTraversals(metapathJobId).catch(() => null),
+    ])
+      .then(([analysis, scores, traversals]) => {
+        if (mounted) {
+          setMetapathState({
+            data: normalizeMetapath({ analysis, scores, traversals }),
+            error: null,
+            starting: false,
+          });
+        }
+      })
+      .catch((err) => {
+        if (mounted) {
+          setMetapathState({
+            data: null,
+            error: err?.userMessage || err?.message || "The meta-path analysis could not be read.",
+            starting: false,
+          });
+        }
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [metapathJob.isDone, metapathJob.jobId, metapathJobId]);
+
+  useEffect(() => {
+    if (metapathJob.isFailed && metapathJob.jobId === metapathJobId) {
+      setMetapathState({ data: null, error: metapathJob.error, starting: false });
+    }
+  }, [metapathJob.isFailed, metapathJob.error, metapathJob.jobId, metapathJobId]);
+
+  const metapath = useMemo(
+    () => ({
+      data: metapathState.data,
+      error: metapathState.error,
+      loading:
+        metapathState.starting ||
+        (Boolean(metapathJobId) && !metapathState.data && !metapathState.error),
+      // Only offered once there is a graph to analyse.
+      onAnalyze: graphJobId && graphState.graph ? handleAnalyzeMetapath : undefined,
+    }),
+    [metapathState, metapathJobId, graphJobId, graphState.graph, handleAnalyzeMetapath]
   );
 
   const subgraph = useMemo(
@@ -486,6 +771,7 @@ const CompleteWorkflow = () => {
       error: graphState.error,
       loading: graphJob.isPolling || (Boolean(graphJobId) && !graphState.graph && !graphState.error),
       onNodeClick: graphJobId ? handleExploreNode : undefined,
+      notice: graphState.notice ?? null,
     }),
     [graphState, graphJob.isPolling, graphJobId, handleExploreNode]
   );
@@ -645,32 +931,64 @@ const CompleteWorkflow = () => {
 
   // TopNavBar — top-nav row (breadcrumb + saved) + app-toolbar row (44px, tab-group, result summary, branch dropdown)
   const TopNavBar = ({ viewMode, setViewMode, setShowShareDialog }) => {
-    const isLoading = workflowPhase.endsWith("-loading");
-    const TOTAL_TARGETS = 10;
+    /**
+     * Counts come from the results each module actually returned. They were
+     * fixed at 10 targets / 124 articles / 6 matches / "/ 2" for every run.
+     * A count that is not known yet is left out rather than guessed.
+     */
+    const txkgCount = txkgResult.hasData ? txkgResult.count : null;
+    const targetTotal = txkgResult.targets.length;
+    const articleCount = litminex.data ? litminex.data.total ?? null : null;
+    const compoundCount = curatexResults.data ? curatexResults.data.total ?? null : null;
+    const hitCount = screensuite.data ? (screensuite.data.hits ?? []).length : null;
+    const patentCount = novsearch.data ? novsearch.data.total ?? null : null;
+    const countOf = (n) => (n == null ? "" : `/ ${n}`);
+    const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+    const running = activeJob.progressMessage || null;
+
     const getTabInfo = () => {
       switch (workflowPhase) {
-        case 'txkg-loading':    return { badge: 1, title: "Target identification query", count: "/ 1",   dotColor: "#FFC107", statusText: "Searching databases" };
-        case 'txkg-results':   return { badge: 1, title: "Target identification",       count: `/ ${TOTAL_TARGETS}`, dotColor: "#00BCD4", statusText: `${TOTAL_TARGETS} targets found` };
-        case 'target-selection': return { badge: 1, title: "Target selection",          count: `/ ${TOTAL_TARGETS}`, dotColor: "#00BCD4", statusText: `${selectedTargets.length} selected \u2022 ${TOTAL_TARGETS - selectedTargets.length} available` };
-        case 'litminex-loading': return { badge: 2, title: "Literature mining",         count: "/ ...", dotColor: "#FFC107", statusText: "Searching databases" };
-        case 'litminex-results': return { badge: 2, title: "Literature mining",         count: "/ 124", dotColor: "#00BCD4", statusText: "124 articles found" };
-        case 'curatex-loading':  return { badge: 3, title: "Compound screening",        count: "/ ...", dotColor: "#FFC107", statusText: "Analyzing..." };
+        case 'txkg-loading':    return { badge: 1, title: "Target identification query", count: "", dotColor: "#FFC107", statusText: running || "Searching databases" };
+        case 'txkg-results':   return { badge: 1, title: "Target identification",       count: countOf(txkgCount), dotColor: "#00BCD4", statusText: txkgCount == null ? "No targets returned" : `${plural(txkgCount, "target")} found` };
+        case 'target-selection': return { badge: 1, title: "Target selection",          count: countOf(targetTotal || null), dotColor: "#00BCD4", statusText: `${selectedTargets.length} selected \u2022 ${Math.max(targetTotal - selectedTargets.filter((id) => txkgResult.targets.some((t) => t.id === id)).length, 0)} available` };
+        case 'litminex-loading': return { badge: 2, title: "Literature mining",         count: "", dotColor: "#FFC107", statusText: running || "Searching databases" };
+        case 'litminex-results': return { badge: 2, title: "Literature mining",         count: countOf(articleCount), dotColor: "#00BCD4", statusText: articleCount == null ? (litminex.loading ? "Loading articles…" : "Results ready") : `${plural(articleCount, "article")} found` };
+        case 'curatex-loading':  return { badge: 3, title: "Compound screening",        count: "", dotColor: "#FFC107", statusText: running || "Analyzing..." };
         case 'curatex-profile':  return { badge: 3, title: "Target profile",            count: "",      dotColor: "#00BCD4", statusText: "Profile ready" };
-        case 'curatex-submitted':return { badge: 3, title: "Compound screening",        count: "/ ...", dotColor: "#FFC107", statusText: "Scoring compounds..." };
-        case 'curatex-results':  return { badge: 3, title: "Compound screening",        count: "/ 124", dotColor: "#00BCD4", statusText: "6 matches found" };
-        case 'screensuite-loading': return { badge: 4, title: "Docking initialization", count: "/ 2", dotColor: "#FFC107", statusText: "Pipeline starting" };
-        case 'screensuite-results': return { badge: 4, title: "Docking results", count: "/ 2", dotColor: "#00BCD4", statusText: "Docking complete" };
+        case 'curatex-submitted':return { badge: 3, title: "Compound screening",        count: "", dotColor: "#FFC107", statusText: compoundsJob.progressMessage || "Scoring compounds..." };
+        case 'curatex-results':  return { badge: 3, title: "Compound screening",        count: countOf(compoundCount), dotColor: "#00BCD4", statusText: compoundCount == null ? "Results ready" : `${plural(compoundCount, "compound")} scored` };
+        case 'screensuite-loading': return { badge: 4, title: "Docking initialization", count: "", dotColor: "#FFC107", statusText: running || "Pipeline starting" };
+        case 'screensuite-results': return { badge: 4, title: "Docking results", count: countOf(hitCount), dotColor: "#00BCD4", statusText: hitCount == null ? "Docking complete" : `${plural(hitCount, "docking hit")}` };
+        case 'novelty-results':  return { badge: 5, title: "Novelty search",   count: countOf(patentCount), dotColor: "#00BCD4", statusText: patentCount == null ? "Report ready" : `${plural(patentCount, "patent")} found` };
         default:
-          if (workflowPhase.startsWith('screensuite')) return { badge: 4, title: "Docking initialization", count: "/ 2", dotColor: "#FFC107", statusText: "Pipeline starting" };
-          if (workflowPhase.startsWith('novelty'))     return { badge: 5, title: "Novelty search",   count: "", dotColor: "#FFC107", statusText: "Processing..." };
-          return { badge: activeStep + 1, title: WORKFLOW_STEPS[activeStep]?.label || "", count: "", dotColor: "#00BCD4", statusText: "" };
+          if (workflowPhase.startsWith('screensuite') && !isErrorPhase(workflowPhase)) return { badge: 4, title: "Docking initialization", count: "", dotColor: "#FFC107", statusText: running || "Pipeline starting" };
+          if (workflowPhase.startsWith('novelty') && !isErrorPhase(workflowPhase)) return { badge: 5, title: "Novelty search",   count: "", dotColor: "#FFC107", statusText: running || "Processing..." };
+          return { badge: activeStep + 1, title: WORKFLOW_STEPS[activeStep]?.label || "", count: "", dotColor: isErrorPhase(workflowPhase) ? "#DC2626" : "#00BCD4", statusText: isErrorPhase(workflowPhase) ? "Failed" : "" };
       }
     };
     const tabInfo = getTabInfo();
+    // The second entry here was an invented "Alt · JAK2 + TPOR (MPL)" branch.
+    // Branches are created from each card's Branch button; there is no
+    // endpoint that lists them, so only the main path is shown.
     const BRANCHES = [
       { id: "main", label: "Main", sub: "Main research path" },
-      { id: "alt-jak2", label: "Alt · JAK2 + TPOR (MPL)", sub: "Forked at Target identification" },
     ];
+
+    /**
+     * "All changes saved" was static text. It now reflects the session's real
+     * state: the PATCH in flight, its failure, or the status the server
+     * reports. Hidden when there is no session.
+     */
+    const saveIndicator =
+      saveState.status === "saving"
+        ? { color: "#FFC107", text: "Saving…" }
+        : saveState.status === "error"
+        ? { color: "#DC2626", text: `Not saved: ${saveState.error}` }
+        : session.sessionStatus === "Saved"
+        ? { color: "#22C55E", text: "Session saved" }
+        : session.sessionId && session.sessionStatus
+        ? { color: "#94A3B8", text: `Session ${String(session.sessionStatus).toLowerCase()}` }
+        : null;
     /**
      * The last breadcrumb is just the module's name.
      *
@@ -706,10 +1024,14 @@ const CompleteWorkflow = () => {
               </React.Fragment>
             ))}
           </Box>
-          <Box sx={{ display: "flex", alignItems: "center", gap: "6px" }}>
-            <Box sx={{ width: 8, height: 8, borderRadius: "50%", bgcolor: "#22C55E" }} />
-            <Typography sx={{ fontFamily: "'Geist',sans-serif", fontSize: "12px", color: "#94A3B8" }}>All changes saved</Typography>
-          </Box>
+          {saveIndicator && (
+            <Box sx={{ display: "flex", alignItems: "center", gap: "6px" }} role="status">
+              <Box sx={{ width: 8, height: 8, borderRadius: "50%", bgcolor: saveIndicator.color }} />
+              <Typography sx={{ fontFamily: "'Geist',sans-serif", fontSize: "12px", color: saveState.status === "error" ? "#DC2626" : "#94A3B8" }}>
+                {saveIndicator.text}
+              </Typography>
+            </Box>
+          )}
         </Box>
 
         {/* app-toolbar with proper structure */}
@@ -754,9 +1076,11 @@ const CompleteWorkflow = () => {
                     <line x1="4" y1="10" x2="8" y2="10" stroke={viewMode === "artifacts" ? "#FFFFFF" : "#64748B"} strokeWidth="1"/>
                   </svg>
                   <span className="label">Artifacts</span>
-                  <div className="artifact-badge" style={ viewMode === "artifacts" ? { background: "rgba(255,255,255,0.12)", color: "#FFFFFF", borderRadius: 10, padding: "2px 6px" } : {} }>
-                    <span className="count">2</span>
-                  </div>
+                  {artifactCount != null && (
+                    <div className="artifact-badge" style={ viewMode === "artifacts" ? { background: "rgba(255,255,255,0.12)", color: "#FFFFFF", borderRadius: 10, padding: "2px 6px" } : {} }>
+                      <span className="count">{artifactCount}</span>
+                    </div>
+                  )}
                 </div>
                 
                 {/* tab-lineage */}
@@ -769,10 +1093,8 @@ const CompleteWorkflow = () => {
                           : { background: "transparent", color: TEXT_DARK, padding: "6px 10px", borderRadius: "8px" }
                       }
                 >
+                  {/* The badge here was a fixed "2"; nothing supplies a count. */}
                   <span className="label">Lineage</span>
-                  <div className="artifact-badge" style={ viewMode === 'lineage' ? { background: 'rgba(255,255,255,0.12)', color: '#FFFFFF', borderRadius: 10, padding: '2px 6px' } : {} }>
-                    <span className="count">2</span>
-                  </div>
                 </div>
               </div>
 
@@ -1354,70 +1676,10 @@ const CompleteWorkflow = () => {
     );
   };
 
-  const BranchDialog = () => (
-    <Dialog
-      open={showBranchDialog}
-      onClose={() => { setShowBranchDialog(false); setBranchCreated(false); }}
-      maxWidth={false}
-      PaperProps={{
-        sx: {
-          width: "640px",
-          height: "524px",
-          maxWidth: "calc(100vw - 32px)",
-          borderRadius: "16px",
-          boxShadow: "0px 4px 12px rgba(0, 0, 0, 0.03)",
-        },
-      }}
-    >
-      <DialogTitle sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", px: "24px", py: "24px", borderBottom: "1px solid #E3E8F0" }}>
-        <Box sx={{ display: "flex", alignItems: "center", gap: "12px" }}>
-          <Box sx={{ width: "40px", height: "40px", display: "flex", alignItems: "center", justifyContent: "center", bgcolor: TEAL, borderRadius: "8px", color: "#FFFFFF", fontSize: "20px" }}>⑂</Box>
-          <Box>
-            <Typography sx={{ fontFamily: "'Inter', sans-serif", fontSize: "16px", lineHeight: "19px", fontWeight: 600, color: "#262E38" }}>
-              {branchCreated ? "Branch Created" : "Branch Research"}
-            </Typography>
-            <Typography sx={{ fontFamily: "'Inter', sans-serif", fontSize: "12px", lineHeight: "15px", color: "#737D8C" }}>
-              {branchCreated ? "Your new branch has been created successfully" : "Create a new branch from current results"}
-            </Typography>
-          </Box>
-        </Box>
-        <IconButton onClick={() => { setShowBranchDialog(false); setBranchCreated(false); }} sx={{ color: "#737D8C" }}>×</IconButton>
-      </DialogTitle>
-
-      {branchCreated ? (
-        <DialogContent sx={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "16px", px: "24px", py: "32px" }}>
-          <Box sx={{ width: "64px", height: "64px", display: "flex", alignItems: "center", justifyContent: "center", bgcolor: "#E0F7F5", borderRadius: "50%", color: TEAL, fontSize: "32px", fontWeight: 700 }}>✓</Box>
-          <Typography sx={{ fontFamily: "'Inter', sans-serif", fontSize: "18px", lineHeight: "22px", fontWeight: 600, color: "#1A2E44" }}>Branch created successfully!</Typography>
-          <Typography sx={{ fontFamily: "'Inter', sans-serif", fontSize: "14px", lineHeight: "17px", fontWeight: 600, color: TEAL }}>{branchName}</Typography>
-          <Typography sx={{ fontFamily: "'Inter', sans-serif", fontSize: "13px", lineHeight: "16px", color: "#94A3B8" }}>Branched from Main (Step 3: TxKG Results)</Typography>
-        </DialogContent>
-      ) : (
-        <DialogContent sx={{ display: "flex", flexDirection: "column", gap: "16px", px: "24px", py: "24px" }}>
-          <Box>
-            <Typography sx={{ fontFamily: "'Inter', sans-serif", fontSize: "12px", color: "#737D8C", mb: "6px" }}>Branch Name</Typography>
-            <TextField value={branchName} onChange={(event) => setBranchName(event.target.value)} fullWidth size="small" sx={{ "& .MuiOutlinedInput-root": { borderRadius: "8px" } }} />
-          </Box>
-          <Box>
-            <Typography sx={{ fontFamily: "'Inter', sans-serif", fontSize: "12px", color: "#737D8C", mb: "6px" }}>Branch From</Typography>
-            <TextField value="Main (Step 3: TxKG Results)" fullWidth size="small" disabled sx={{ "& .MuiOutlinedInput-root": { borderRadius: "8px" } }} />
-          </Box>
-          <Box>
-            <Typography sx={{ fontFamily: "'Inter', sans-serif", fontSize: "12px", color: "#737D8C", mb: "6px" }}>Description</Typography>
-            <TextField value={branchDescription} onChange={(event) => setBranchDescription(event.target.value)} fullWidth multiline rows={3} sx={{ "& .MuiOutlinedInput-root": { borderRadius: "8px" } }} />
-          </Box>
-        </DialogContent>
-      )}
-
-      <DialogActions sx={{ justifyContent: "flex-end", gap: "12px", px: "24px", py: "24px", bgcolor: "#FAFAFC", borderTop: "1px solid #E3E8F0" }}>
-        <Button onClick={() => { setShowBranchDialog(false); setBranchCreated(false); }} sx={{ minWidth: branchCreated ? "72px" : "81px", height: "35px", px: "16px", border: "1px solid #E3E8F0", borderRadius: "8px", color: "#262E38", fontFamily: "'Inter', sans-serif", fontSize: "14px", textTransform: "none" }}>
-          {branchCreated ? "Close" : "Cancel"}
-        </Button>
-        <Button onClick={() => branchCreated ? setShowBranchDialog(false) : setBranchCreated(true)} sx={{ height: "35px", px: "16px", bgcolor: TEAL, borderRadius: "8px", color: "#FFFFFF", fontFamily: "'Inter', sans-serif", fontSize: "14px", textTransform: "none", "&:hover": { bgcolor: "#00A9BF" } }}>
-          {branchCreated ? "Go to Branch" : "Create & Branch"}
-        </Button>
-      </DialogActions>
-    </Dialog>
-  );
+  // The "Branch Research" dialog that used to live here was a mock: a fixed
+  // "JAK2-alternative-targets" name, a Type 2 Diabetes description and a
+  // "Create & Branch" button that only flipped a local flag. Branch is the
+  // wired PhaseActions button on each card now.
 
   /**
    * Article Detail Side Panel.
@@ -1430,8 +1692,18 @@ const CompleteWorkflow = () => {
   const ArticleDetailPanel = () => {
     if (!showArticleDetail || !selectedArticle) return null;
 
-    // The list row is shown immediately; the full record fills in behind it.
-    const article = articleDetail || selectedArticle;
+    // The list row is shown immediately; the full record is MERGED over it.
+    // Replacing the row with the detail meant an empty `keywords: []` from
+    // GET /articles/{id} hid the keywords the row already had.
+    const article = { ...selectedArticle };
+    if (articleDetail && typeof articleDetail === "object") {
+      Object.entries(articleDetail).forEach(([key, value]) => {
+        if (value == null) return;
+        if (typeof value === "string" && !value.trim()) return;
+        if (Array.isArray(value) && !value.length) return;
+        article[key] = value;
+      });
+    }
 
     const keywords = Array.isArray(article.keywords)
       ? article.keywords
@@ -1439,9 +1711,14 @@ const CompleteWorkflow = () => {
       ? article.keywords.split(",").map((k) => k.trim()).filter(Boolean)
       : article.keywordList || [];
 
-    // The API's pmcLink when it has one; otherwise the PubMed record derived
-    // from the article id, which is a real destination rather than a dead label.
-    const externalUrl = article.pmcLink || pubmedUrl(article.id);
+    // The article's pmcLink; failing that, GET /articles/{id}/pmc-link; and
+    // only then the PubMed record derived from the article id.
+    const externalUrl = article.pmcLink || articlePmc?.url || pubmedUrl(article.id);
+    const externalLabel = article.pmcLink
+      ? "View on PubMed Central"
+      : articlePmc?.url
+      ? `View on ${articlePmc.provider || "PubMed Central"}`
+      : "View on PubMed";
 
     return (
       <Box sx={{
@@ -1531,7 +1808,7 @@ const CompleteWorkflow = () => {
                 rel="noopener noreferrer"
                 sx={{ fontFamily: FONT, fontSize: "14px", fontWeight: 500, color: TEAL, textDecoration: "none", "&:hover": { textDecoration: "underline" } }}
               >
-                ↗ {article.pmcLink ? "View on PubMed Central" : "View on PubMed"}
+                ↗ {externalLabel}
               </Typography>
             ) : (
               <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: TEXT_MUTED }}>
@@ -1561,6 +1838,31 @@ const CompleteWorkflow = () => {
                     <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: msg.isError ? "#DC2626" : "#374151", lineHeight: 1.6 }}>
                       {msg.content}
                     </Typography>
+                    {/* The reply's citations were stored but never shown. */}
+                    {Array.isArray(msg.citations) && msg.citations.length > 0 && (
+                      <Box sx={{ mt: "6px", display: "flex", flexDirection: "column", gap: "2px" }}>
+                        <Typography sx={{ fontFamily: FONT, fontSize: "10px", fontWeight: 600, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                          Citations
+                        </Typography>
+                        {msg.citations.map((citation, ci) => {
+                          const text =
+                            typeof citation === "string"
+                              ? citation
+                              : citation?.title || citation?.text || citation?.source || citation?.id || citation?.pmid || "";
+                          const href = typeof citation === "object" ? citation?.url || citation?.link || null : null;
+                          if (!text && !href) return null;
+                          return href ? (
+                            <Typography key={ci} component="a" href={href} target="_blank" rel="noopener noreferrer" sx={{ fontFamily: FONT, fontSize: "11px", color: TEAL, textDecoration: "none", "&:hover": { textDecoration: "underline" } }}>
+                              [{ci + 1}] {text || href} ↗
+                            </Typography>
+                          ) : (
+                            <Typography key={ci} sx={{ fontFamily: FONT, fontSize: "11px", color: "#6B7280" }}>
+                              [{ci + 1}] {String(text)}
+                            </Typography>
+                          );
+                        })}
+                      </Box>
+                    )}
                   </Box>
                 ))}
               </Box>
@@ -1590,10 +1892,10 @@ const CompleteWorkflow = () => {
 
           {articleNotice && (
             <Typography
-              role="status"
-              sx={{ fontFamily: FONT, fontSize: "12px", color: articleNotice === "Article saved." ? "#059669" : "#DC2626" }}
+              role={articleNotice.isError ? "alert" : "status"}
+              sx={{ fontFamily: FONT, fontSize: "12px", color: articleNotice.isError ? "#DC2626" : "#059669" }}
             >
-              {articleNotice}
+              {articleNotice.text}
             </Typography>
           )}
 
@@ -1611,94 +1913,104 @@ const CompleteWorkflow = () => {
     );
   };
 
-  // Compound Detail Dialog (Figma Image 15)
-  const CompoundDetailDialog = () => (
-    <Dialog 
-      open={showCompoundDetail} 
-      onClose={() => setShowCompoundDetail(false)}
-      maxWidth="sm"
-      fullWidth
-    >
-      <DialogTitle sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${BORDER}` }}>
-        <Typography sx={{ fontFamily: FONT, fontSize: "16px", fontWeight: 700, color: TEXT_DARK }}>
-          Metformin - Compound Detail
-        </Typography>
-        <IconButton size="small" onClick={() => setShowCompoundDetail(false)}>
-          <CloseOutlined />
-        </IconButton>
-      </DialogTitle>
-      <DialogContent sx={{ pt: "24px" }}>
-        {selectedCompound && (
-          <Box>
-            <Typography sx={{ fontFamily: FONT, fontSize: "15px", fontWeight: 700, color: TEXT_DARK, mb: "16px" }}>
-              Metformin - Compound Detail
-            </Typography>
+  /**
+   * Compound Detail Dialog (Figma Image 15).
+   *
+   * Every compound used to open the same Metformin write-up — AMPK mechanism,
+   * "First-line therapy for Type 2 Diabetes", "3 relevant patents", "94%
+   * match". It now shows only what GET /agents/curatex/{jobId}/results returned
+   * for the compound that was clicked; mechanism, clinical use and patent
+   * status have no endpoint behind them, so they are not shown.
+   */
+  const CompoundDetailDialog = () => {
+    const compound = selectedCompound || {};
+    const target = curatexResults.data?.target || curatexProfile.data?.target || null;
+    const rows = [
+      ["Rank", compound.rank],
+      ["Match score", compound.score != null && compound.score !== "—" ? compound.score : null],
+      ["Target", target],
+      ["ChEMBL ID", compound.chemblId],
+      ["SMILES", compound.smiles],
+    ].filter(([, value]) => value != null && value !== "");
 
-            <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase", mb: "8px" }}>
-              SUMMARY OF MECHANISM, CLINICAL USE, AND IP STATUS
-            </Typography>
-
-            <Box sx={{ mb: "20px" }}>
-              <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: TEXT_DARK, mb: "4px" }}>
-                Mechanism of Action
-              </Typography>
-              <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: TEXT_DARK, lineHeight: 1.6, mb: "12px" }}>
-                Metformin activates AMP-activated protein kinase (AMPK), reducing hepatic glucose production and improving insulin sensitivity. In the context of JAK2 inhibition, recent studies suggest Metformin may modulate JAK-STAT signaling indirectly through AMPK activation.
-              </Typography>
-
-              <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: TEXT_DARK, mb: "4px" }}>
-                Current Uses
-              </Typography>
-              <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: TEXT_DARK, lineHeight: 1.6, mb: "12px" }}>
-                First-line therapy for Type 2 Diabetes. Also used off-label for PCOS, weight management, and under investigation for anti-aging and oncology applications.
-              </Typography>
-
-              <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: TEXT_DARK, mb: "4px" }}>
-                Patent Status
-              </Typography>
-              <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: TEXT_DARK, lineHeight: 1.6, mb: "12px" }}>
-                Original patents expired. Generic formulations widely available. Novel formulations and combination therapies may carry active IP - 3 relevant patents identified by NovSearch.
-              </Typography>
-
-              <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: TEXT_DARK, mb: "4px" }}>
-                Match Score
-              </Typography>
-              <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: TEXT_DARK, lineHeight: 1.6 }}>
-                94% - Strong alignment on 5 of 6 target profile properties.
+    return (
+      <Dialog
+        open={showCompoundDetail}
+        onClose={() => setShowCompoundDetail(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${BORDER}` }}>
+          <Typography sx={{ fontFamily: FONT, fontSize: "16px", fontWeight: 700, color: TEXT_DARK }}>
+            {compound.name ? `${compound.name} - Compound Detail` : "Compound Detail"}
+          </Typography>
+          <IconButton size="small" onClick={() => setShowCompoundDetail(false)}>
+            <CloseOutlined />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent sx={{ pt: "24px" }}>
+          {selectedCompound && (
+            <Box sx={{ display: "flex", flexDirection: "column", gap: "12px", pt: "8px" }}>
+              {rows.map(([label, value]) => (
+                <Box key={label}>
+                  <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase", mb: "4px" }}>
+                    {label}
+                  </Typography>
+                  {label === "ChEMBL ID" ? (
+                    <Typography
+                      component="a"
+                      href={`https://www.ebi.ac.uk/chembl/compound_report_card/${encodeURIComponent(value)}/`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      sx={{ fontFamily: FONT, fontSize: "13px", color: TEAL, textDecoration: "none", "&:hover": { textDecoration: "underline" } }}
+                    >
+                      {value} ↗
+                    </Typography>
+                  ) : (
+                    <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: TEXT_DARK, lineHeight: 1.6, wordBreak: "break-all" }}>
+                      {String(value)}
+                    </Typography>
+                  )}
+                </Box>
+              ))}
+              <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: TEXT_MUTED, lineHeight: 1.5 }}>
+                Mechanism of action, clinical use and patent status are not provided by the CurateX results.
               </Typography>
             </Box>
-
-            <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase", mb: "8px" }}>
-              SOURCE: PUBMED, DRUGBANK, USPTO VIA NOVSEARCH
-            </Typography>
-          </Box>
-        )}
-      </DialogContent>
-      <DialogActions sx={{ borderTop: `1px solid ${BORDER}`, px: "24px", py: "16px" }}>
-        <Button 
-          variant="outlined"
-          onClick={() => setShowCompoundDetail(false)}
-          sx={{ textTransform: "none", fontFamily: FONT, fontSize: "13px", color: TEXT_DARK, borderColor: BORDER }}
-        >
-          Back to Results
-        </Button>
-        <Button 
-          variant="contained"
-          sx={{ 
-            bgcolor: TEAL,
-            color: "#FFFFFF",
-            textTransform: "none",
-            fontFamily: FONT,
-            fontSize: "13px",
-            fontWeight: 600,
-            "&:hover": { bgcolor: "#089B98" }
-          }}
-        >
-          Select for Screening
-        </Button>
-      </DialogActions>
-    </Dialog>
-  );
+          )}
+        </DialogContent>
+        <DialogActions sx={{ borderTop: `1px solid ${BORDER}`, px: "24px", py: "16px" }}>
+          <Button
+            variant="outlined"
+            onClick={() => setShowCompoundDetail(false)}
+            sx={{ textTransform: "none", fontFamily: FONT, fontSize: "13px", color: TEXT_DARK, borderColor: BORDER }}
+          >
+            Back to Results
+          </Button>
+          {/* Had no onClick. It hands this compound to ScreenSuite. */}
+          <Button
+            variant="contained"
+            disabled={!selectedCompound || session.pending}
+            onClick={() => {
+              setShowCompoundDetail(false);
+              handleContinueToScreenSuite();
+            }}
+            sx={{
+              bgcolor: TEAL,
+              color: "#FFFFFF",
+              textTransform: "none",
+              fontFamily: FONT,
+              fontSize: "13px",
+              fontWeight: 600,
+              "&:hover": { bgcolor: "#089B98" }
+            }}
+          >
+            Select for Screening
+          </Button>
+        </DialogActions>
+      </Dialog>
+    );
+  };
 
   // ---------------------------------------------------------------------------
   // Hand-offs.
@@ -1719,8 +2031,15 @@ const CompleteWorkflow = () => {
    * keyed on UniProt accessions, and PubMed text never contains one, so sending
    * the ticked ids verbatim would return nothing for every target.
    */
-  const handleContinueToLitMineX = useCallback(() => {
-    const { targetIds, unresolved } = toGeneNames(selectedTargets, txkgResult.targets);
+  /**
+   * @param {string[]} [ids] - targets to send. "Proceed with Recommended
+   *   Targets" passes every TxKG target (the copy says "all N"); the target
+   *   picker passes nothing and the ticked selection is sent.
+   */
+  const handleContinueToLitMineX = useCallback((ids) => {
+    const chosen = Array.isArray(ids) ? ids : selectedTargets;
+    if (Array.isArray(ids)) setSelectedTargets(ids);
+    const { targetIds, unresolved } = toGeneNames(chosen, txkgResult.targets);
 
     if (!targetIds.length) {
       session.setStepError(
@@ -1822,9 +2141,9 @@ const CompleteWorkflow = () => {
     if (session.activeStepId) {
       session.rerunActiveStep({});
     } else {
-      job.retry();
+      activeJob.retry();
     }
-  }, [session, job]);
+  }, [session, activeJob]);
 
   /**
    * LitMineX → CurateX, carrying a gene symbol.
@@ -1858,8 +2177,11 @@ const CompleteWorkflow = () => {
   /** The article the detail panel is showing, enriched from /articles/{id}. */
   const [articleDetail, setArticleDetail] = useState(null);
   const [articleBusy, setArticleBusy] = useState(null);
+  /** { text, isError } */
   const [articleNotice, setArticleNotice] = useState(null);
   const [articleChat, setArticleChat] = useState([]);
+  /** GET /articles/{id}/pmc-link → { url, provider }, when pmcLink is missing. */
+  const [articlePmc, setArticlePmc] = useState(null);
 
   /**
    * Item 21/22: open the detail panel with the FULL article.
@@ -1873,12 +2195,26 @@ const CompleteWorkflow = () => {
       setArticleDetail(null);
       setArticleChat([]);
       setArticleNotice(null);
+      setArticlePmc(null);
       return undefined;
     }
 
     let mounted = true;
+    const articleId = selectedArticle.id;
+    const rowPmcLink = selectedArticle.pmcLink;
     setArticleBusy("detail");
     setArticleNotice(null);
+    setArticlePmc(null);
+
+    // Without a pmcLink the panel fell straight back to PubMed. The pmc-link
+    // endpoint is asked first; failing that, the PubMed fallback stands.
+    const lookUpPmc = () =>
+      litminexApi
+        .getArticlePmcLink(articleId)
+        .then((link) => {
+          if (mounted && link?.url) setArticlePmc({ url: link.url, provider: link.provider || null });
+        })
+        .catch(() => {});
 
     Promise.all([
       litminexApi.getArticle(selectedArticle.id),
@@ -1889,16 +2225,23 @@ const CompleteWorkflow = () => {
         setArticleDetail(detail);
         setArticleChat(Array.isArray(history) ? history : []);
         setArticleBusy(null);
+        if (!detail?.pmcLink && !rowPmcLink) lookUpPmc();
       })
       .catch((err) => {
         if (!mounted) return;
-        setArticleNotice(err?.userMessage || err?.message || "The article could not be loaded.");
+        setArticleNotice({
+          text: err?.userMessage || err?.message || "The article could not be loaded.",
+          isError: true,
+        });
         setArticleBusy(null);
+        if (!rowPmcLink) lookUpPmc();
       });
 
     return () => {
       mounted = false;
     };
+    // The row's pmcLink is read once per opened article.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showArticleDetail, selectedArticle?.id]);
 
   /** Item 22: bookmark the article. */
@@ -1907,10 +2250,21 @@ const CompleteWorkflow = () => {
     setArticleBusy("save");
     setArticleNotice(null);
     try {
-      await litminexApi.saveArticle(selectedArticle.id, location.state?.projectId ?? null);
-      setArticleNotice("Article saved.");
+      // { success, message } — a 200 is not proof of a save; `success` is.
+      const response = await litminexApi.saveArticle(selectedArticle.id, location.state?.projectId ?? null);
+      if (response?.success === true) {
+        setArticleNotice({ text: response.message || "Article saved.", isError: false });
+      } else {
+        setArticleNotice({
+          text: response?.message || "The server did not confirm the save.",
+          isError: true,
+        });
+      }
     } catch (err) {
-      setArticleNotice(err?.userMessage || err?.message || "The article could not be saved.");
+      setArticleNotice({
+        text: err?.userMessage || err?.message || "The article could not be saved.",
+        isError: true,
+      });
     } finally {
       setArticleBusy(null);
     }
@@ -2055,19 +2409,30 @@ const CompleteWorkflow = () => {
         <PipelinePhase
           workflowPhase={phase}
           pipeline={pipeline.data}
-          progressMessage={job.progressMessage}
+          progressMessage={pipelineJob.progressMessage}
           query={query}
         />
       );
     }
 
     if (moduleKey === "txkg") {
+      // A resumed, completed TxKG step lands on its results phase before its
+      // /result has been fetched; show the loading screen until it arrives
+      // rather than the "no targets" state.
+      const txkgJobSettled =
+        txkgJob.jobId === step?.jobId && (txkgJob.isDone || txkgJob.isFailed);
+      const awaitingResult =
+        (phase === "txkg-results" || phase === "target-selection") &&
+        Boolean(step?.jobId) &&
+        !step?.data?.jobResult &&
+        !txkgJobSettled;
+
       return (
         <TXKGPhase
-          workflowPhase={phase}
+          workflowPhase={awaitingResult ? "txkg-loading" : phase}
           query={query}
           txkg={txkgResult}
-          progressMessage={job.progressMessage}
+          progressMessage={txkgJob.progressMessage}
           expandedAccordion={expandedAccordion}
           setExpandedAccordion={setExpandedAccordion}
           insightTab={insightTab}
@@ -2076,13 +2441,13 @@ const CompleteWorkflow = () => {
           setSelectedTargets={setSelectedTargets}
           setWorkflowPhase={setWorkflowPhase}
           setActiveStep={setActiveStep}
-          setShowBranchDialog={setShowBranchDialog}
           onContinue={handleContinueToLitMineX}
           continuePending={session.pending}
           jobId={session.steps.txkg?.jobId ?? null}
-          actions={actions}
+          actions={txkgActions}
           subgraph={subgraph}
           onGenerateSubgraph={handleGenerateSubgraph}
+          metapath={metapath}
         />
       );
     }
@@ -2094,7 +2459,7 @@ const CompleteWorkflow = () => {
           litMinexResults={litMinexResults}
           setSelectedArticle={setSelectedArticle}
           setShowArticleDetail={setShowArticleDetail}
-          progressMessage={job.progressMessage}
+          progressMessage={litminexJob.progressMessage}
           loading={litminex.loading}
           error={litminex.error}
           onRetry={litminex.reload}
@@ -2108,7 +2473,9 @@ const CompleteWorkflow = () => {
           onToggleArticle={handleToggleArticle}
           onContinue={handleContinueToCurateX}
           continuePending={session.pending}
-          actions={actions}
+          actions={litminexActions}
+          jobId={session.steps.litminex?.jobId ?? null}
+          pageSize={litminex.data?.pageSize}
         />
       );
     }
@@ -2128,7 +2495,7 @@ const CompleteWorkflow = () => {
           setSelectedCompound={setSelectedCompound}
           setShowCompoundDetail={setShowCompoundDetail}
           setActiveStep={setActiveStep}
-          progressMessage={job.progressMessage || compoundsJob.progressMessage}
+          progressMessage={curatexJob.progressMessage || compoundsJob.progressMessage}
           profile={curatexProfile.data}
           profileLoading={curatexProfile.loading}
           profileError={curatexProfile.error}
@@ -2143,6 +2510,8 @@ const CompleteWorkflow = () => {
           totalPages={curatexResults.data?.totalPages ?? 1}
           total={curatexResults.data?.total ?? 0}
           onPageChange={setCuratexPage}
+          actions={curatexActions}
+          resultsTarget={curatexResults.data?.target ?? null}
         />
       );
     }
@@ -2151,13 +2520,16 @@ const CompleteWorkflow = () => {
       return (
         <ScreeningSuitePhase
           workflowPhase={phase}
-          progressMessage={job.progressMessage}
+          progressMessage={screensuiteJob.progressMessage}
           hits={screensuite.data?.hits ?? []}
           loading={screensuite.loading}
           error={screensuite.error}
           onRetry={screensuite.reload}
           unavailable={SCREENSUITE_UNAVAILABLE}
           unavailableMessage={SCREENSUITE_UNAVAILABLE_MESSAGE}
+          actions={screensuiteActions}
+          target={step?.data?.selections?.target ?? null}
+          compounds={step?.data?.selections?.compounds ?? []}
         />
       );
     }
@@ -2166,12 +2538,14 @@ const CompleteWorkflow = () => {
       return (
         <NoveltySearchPhase
           workflowPhase={phase}
-          progressMessage={job.progressMessage}
+          progressMessage={novsearchJob.progressMessage ?? null}
+          isLoading={phase === "novelty-loading"}
           report={novsearch.data}
           loading={novsearch.loading}
           error={novsearch.error}
           onRetry={novsearch.reload}
-          actions={actions}
+          actions={novsearchActions}
+          onEndTask={handleEndTask}
         />
       );
     }
@@ -2247,7 +2621,12 @@ const CompleteWorkflow = () => {
     if (viewMode === "artifacts") {
       return (
         <Box sx={{ flex: 1, p: "24px", overflow: "auto" }}>
-          <ArtifactsPage />
+          <ArtifactsPage
+            sessionId={session.sessionId}
+            projectId={entryState.projectId ?? null}
+            refreshKey={sessionRefreshTick}
+            onLoaded={(list) => setArtifactCount(list.length)}
+          />
         </Box>
       );
     }
@@ -2260,10 +2639,14 @@ const CompleteWorkflow = () => {
       return (
         <Box sx={{ flex: 1, overflow: "auto" }}>
           <PhaseError
-            title="The research session could not be started"
+            title={entrySessionId ? "The research session could not be reopened" : "The research session could not be started"}
             message={session.error}
-            detail="The supervisor decides which agent runs, so nothing can proceed until this call succeeds."
-            onRetry={startSession}
+            detail={
+              entrySessionId
+                ? "The saved session is read from GET /sessions/{id}; nothing can be shown until it loads."
+                : "The supervisor decides which agent runs, so nothing can proceed until this call succeeds."
+            }
+            onRetry={openSession}
           />
         </Box>
       );
@@ -2278,6 +2661,7 @@ const CompleteWorkflow = () => {
           <ModuleResultCard
             moduleKey={moduleKey}
             status={cardStatusFor(moduleKey)}
+            hasFailedStages={moduleKey === "pipeline" && Boolean(pipeline.data?.hasFailures)}
             isActive={session.activeKey === moduleKey}
             /* Only the module the session is on opens by itself. The subgraph
                and the docking views are heavy, and mounting all five at once
@@ -2359,7 +2743,6 @@ const CompleteWorkflow = () => {
 
       <ArticleDetailPanel />
       <CompoundDetailDialog />
-      <BranchDialog />
       <ShareModal open={showShareDialog} onClose={() => setShowShareDialog(false)} />
     </Box>
   );

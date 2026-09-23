@@ -9,8 +9,9 @@ export const getCurrentUser = async () => unwrap(await apiClient.get("/users/me"
 export const getOnboardingStatus = async () =>
   unwrap(await apiClient.get("/users/me/onboarding-status"));
 
-export const getResearchFocus = async () =>
-  unwrap(await apiClient.get("/users/me/research-focus"));
+// GET /users/me/research-focus was removed: the API contract only defines
+// POST for this path, so the call failed on every Welcome screen visit.
+// Re-add it here if the backend publishes the GET route.
 
 /**
  * Save the researcher's chosen therapeutic areas.
@@ -18,15 +19,17 @@ export const getResearchFocus = async () =>
  * @param {string[]} therapeuticAreas
  *
  * Writes drp_user_profiles.therapeutic_areas. Backs the welcome screen's
- * Quick Start picker, which was a hardcoded SPECIALTIES list that saved
- * nowhere.
+ * Quick Start picker. Resolves to { success, message }; callers must check
+ * `success`, a 200 can still carry success: false.
  */
 export const saveResearchFocus = async (therapeuticAreas) =>
   unwrap(await apiClient.post("/users/me/research-focus", { therapeuticAreas }));
 
-export const completeOnboarding = async (payload) =>
+/** POST /users/me/onboarding/complete with {} → { success, message }. */
+export const completeOnboarding = async (payload = {}) =>
   unwrap(await apiClient.post("/users/me/onboarding/complete", payload));
 
+/** GET /therapeutic-areas → string[] (the catalog of selectable areas). */
 export const getTherapeuticAreas = async () =>
   unwrap(await apiClient.get("/therapeutic-areas"));
 
@@ -40,7 +43,6 @@ const researchApi = {
   getModules,
   getCurrentUser,
   getOnboardingStatus,
-  getResearchFocus,
   saveResearchFocus,
   completeOnboarding,
   getTherapeuticAreas,

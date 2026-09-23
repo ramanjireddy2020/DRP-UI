@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from "react";
+﻿import React, { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Box,
@@ -23,7 +23,15 @@ import {
   CloseOutlined,
   KeyboardArrowDownOutlined,
 } from "@mui/icons-material";
-import apiClient from "../../services/apiClient";
+import {
+  listProjects,
+  readProjectList,
+  createProject,
+  updateProject,
+  deleteProject,
+  PROJECT_STATUSES,
+} from "../../services/api/projects";
+import { formatUtcDate, buildPageList } from "../../utils/formatDate";
 import "./irenovo-create-new-project.css";
 
 /* ─────────────────────────────────────────────────────────────
@@ -55,111 +63,30 @@ const BG = "#F8FAFC";
 
   This keeps Disease, Last Module and Status perfectly aligned.
 */
-const TABLE_GRID = "minmax(220px, 1fr) 230px 155px 130px 40px";
+const TABLE_GRID = "minmax(220px, 1fr) 230px 155px 130px 120px 40px";
+const TABLE_MIN_WIDTH = "895px";
 
-/* ─────────────────────────────────────────────────────────────
-   PROJECT DATA
-───────────────────────────────────────────────────────────── */
-
-const ALL_PROJECTS = [
-  {
-    id: "type-2-diabetes",
-    name: "Type 2 Diabetes",
-    disease: "Type 2 Diabetes",
-    module: "TxKG",
-    status: "ACTIVE",
-  },
-  {
-    id: "rapamycin-for-neuro",
-    name: "Rapamycin for Neuro",
-    disease: "Alzheimer's Disease",
-    module: "LitMineX",
-    status: "ACTIVE",
-  },
-  {
-    id: "sildenafil-for-cv",
-    name: "Sildenafil for CV",
-    disease: "Pulmonary Hypertension",
-    module: "CurateX",
-    status: "ON HOLD",
-  },
-  {
-    id: "anastrozole-for-lung",
-    name: "Anastrozole for Lung",
-    disease: "NSCLC",
-    module: "NovSearch",
-    status: "ACTIVE",
-  },
-  {
-    id: "propranolol-for-hema",
-    name: "Propranolol for Hema",
-    disease: "Hemangioma",
-    module: "LitMineX",
-    status: "ACTIVE",
-  },
-  {
-    id: "imatinib-for-nsclc",
-    name: "Imatinib for NSCLC",
-    disease: "Lung Cancer",
-    module: "CurateX",
-    status: "REVIEW",
-  },
-  {
-    id: "losartan-for-fibrosis",
-    name: "Losartan for Fibrosis",
-    disease: "Hepatic Fibrosis",
-    module: "TxKG",
-    status: "ACTIVE",
-  },
-  {
-    id: "thalidomide-for-myeloma",
-    name: "Thalidomide for Myeloma",
-    disease: "Multiple Myeloma",
-    module: "NovSearch",
-    status: "REVIEW",
-  },
-  {
-    id: "metformin-for-breast-cancer",
-    name: "Metformin for Breast Cancer",
-    disease: "Breast Cancer",
-    module: "LitMineX",
-    status: "ACTIVE",
-  },
-];
+const errorText = (err, fallback) => err?.userMessage || err?.message || fallback;
 
 /* ─────────────────────────────────────────────────────────────
    STATUS COLORS
 ───────────────────────────────────────────────────────────── */
 
+/* Keyed by the API's own Title Case values ("Active" | "On Hold" | "Review"). */
 const STATUS_META = {
-  ACTIVE: {
+  Active: {
     color: "#0D9488",
     bg: "#E6FAF7",
   },
 
-  "ON HOLD": {
+  "On Hold": {
     color: "#7C3AED",
     bg: "#EDE9FE",
   },
 
-  REVIEW: {
+  Review: {
     color: "#D97706",
     bg: "#FEF3C7",
-  },
-
-  "IN REVIEW": {
-    color: "#D97706",
-    bg: "#FEF3C7",
-  },
-
-  COMPLETED: {
-    color: "#164E63",
-    bg: "#DDF4F4",
-  },
-
-  ARCHIVED: {
-    color: "#64748B",
-    bg: "#F1F5F9",
   },
 };
 
@@ -217,9 +144,10 @@ const StatusChip = ({ status, onClick }) => {
           color,
           letterSpacing: "0.4px",
           lineHeight: 1,
+          textTransform: "uppercase",
         }}
       >
-        {status}
+        {status || "—"}
       </Typography>
     </Box>
   );
@@ -496,34 +424,22 @@ const StatusDropdown = ({
 }) => {
   const statuses = [
     {
-      value: "ACTIVE",
+      value: "Active",
       label: "Active",
       color: "#00BCD4",
       bg: "#E6FAF7",
     },
     {
-      value: "REVIEW",
+      value: "Review",
       label: "In Review",
       color: "#F59E0B",
       bg: "#FEF3C7",
     },
     {
-      value: "ON HOLD",
+      value: "On Hold",
       label: "On Hold",
       color: "#8B5CF6",
       bg: "#F0EBFF",
-    },
-    {
-      value: "COMPLETED",
-      label: "Completed",
-      color: "#164E63",
-      bg: "#DDF4F4",
-    },
-    {
-      value: "ARCHIVED",
-      label: "Archived",
-      color: "#64748B",
-      bg: "#F1F5F9",
     },
   ];
 
@@ -549,7 +465,6 @@ const StatusDropdown = ({
         paper: {
           sx: {
             width: "180px",
-            height: "216px",
             mt: "8px",
             borderRadius: "8px",
             bgcolor: "#FFFFFF",
@@ -563,7 +478,6 @@ const StatusDropdown = ({
       <Box
         sx={{
           width: "180px",
-          height: "216px",
           display: "flex",
           flexDirection: "column",
           boxSizing: "border-box",
@@ -689,10 +603,9 @@ const ActionsDropdown = ({
   onClose,
   onAction,
 }) => {
+  // Duplicate / Archive are hidden: the API has no endpoint for either.
   const actions = [
     { value: "edit", label: "Edit Project" },
-    { value: "duplicate", label: "Duplicate" },
-    { value: "archive", label: "Archive" },
     { value: "delete", label: "Delete", danger: true },
   ];
 
@@ -718,7 +631,6 @@ const ActionsDropdown = ({
         paper: {
           sx: {
             width: "160px",
-            height: "157px",
             mt: "6px",
             borderRadius: "8px",
             bgcolor: "#FFFFFF",
@@ -732,7 +644,6 @@ const ActionsDropdown = ({
       <Box
         sx={{
           width: "160px",
-          height: "157px",
           display: "flex",
           flexDirection: "column",
           boxSizing: "border-box",
@@ -756,8 +667,7 @@ const ActionsDropdown = ({
                 handleAction(action.value);
               }}
               sx={{
-                flex: 1,
-                minHeight: 0,
+                height: "44px",
                 display: "flex",
                 alignItems: "center",
                 px: "24px",
@@ -790,8 +700,6 @@ const ActionsDropdown = ({
 /* ─────────────────────────────────────────────────────────────
    PAGINATION BUTTON
 ───────────────────────────────────────────────────────────── */
-
-const ROWS_PER_PAGE = 10;
 
 function PageButton({
   children,
@@ -865,16 +773,29 @@ function PageButton({
    PROJECTS PAGE
 ───────────────────────────────────────────────────────────── */
 
+const SEARCH_DEBOUNCE_MS = 300;
+
+const SORTERS = {
+  "Latest Activity": (a, b) =>
+    String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")),
+  Name: (a, b) => String(a.name || "").localeCompare(String(b.name || "")),
+  Status: (a, b) => String(a.status || "").localeCompare(String(b.status || "")),
+};
+
 const ProjectsPage = () => {
   const navigate = useNavigate();
 
   const [search, setSearch] = useState("");
-  const [moduleFilter, setModuleFilter] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [sortBy, setSortBy] =
     useState("Latest Activity");
 
   const [page, setPage] = useState(1);
+
+  /* Bumped to force a refetch (after create / delete). */
+  const [refreshKey, setRefreshKey] = useState(0);
+  const refetch = () => setRefreshKey((k) => k + 1);
 
   /* Status dropdown state */
   const [statusAnchorEl, setStatusAnchorEl] =
@@ -897,24 +818,16 @@ const ProjectsPage = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  const normalizeStatus = (s) => {
-    if (!s) return "";
-    const v = s.toString().trim().toUpperCase();
-    if (v === "ACTIVE") return "ACTIVE";
-    if (v === "ON HOLD" || v === "ONHOLD" || v === "ON_HOLD") return "ON HOLD";
-    if (v.includes("REVIEW")) return "REVIEW";
-    if (v === "COMPLETED") return "COMPLETED";
-    if (v === "ARCHIVED") return "ARCHIVED";
-    return v;
-  };
+  /* Errors from row actions (status / rename / delete) */
+  const [actionError, setActionError] = useState(null);
 
-  const toTitleCase = (s) =>
-    s
-      .toString()
-      .toLowerCase()
-      .split(" ")
-      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-      .join(" ");
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search.trim());
+      setPage(1);
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [search]);
 
   useEffect(() => {
     let mounted = true;
@@ -924,25 +837,22 @@ const ProjectsPage = () => {
       setError(null);
 
       try {
-        const params = {
-          search: search || "",
-          module: moduleFilter || "",
-          status: statusFilter ? toTitleCase(statusFilter) : "",
-          sortBy: sortBy || "Latest Activity",
-          page,
-        };
+        // Contract query params only: search, status, page.
+        const params = { page };
+        if (debouncedSearch) params.search = debouncedSearch;
+        if (statusFilter) params.status = statusFilter;
 
-        const res = await apiClient.get("/projects", { params });
-        const data = res.data || {};
+        const data = readProjectList(await listProjects(params));
 
         if (!mounted) return;
 
-        setProjects(data.items || []);
-        setTotalCount(data.totalCount || 0);
-        setTotalPages(data.totalPages || 1);
+        setProjects(data.items);
+        setTotalCount(data.totalCount);
+        setTotalPages(data.totalPages);
       } catch (err) {
         if (!mounted) return;
-        setError(err.userMessage || err.message || "Failed to fetch projects");
+        setProjects([]);
+        setError(errorText(err, "Failed to fetch projects"));
       } finally {
         if (mounted) setLoading(false);
       }
@@ -953,75 +863,58 @@ const ProjectsPage = () => {
     return () => {
       mounted = false;
     };
-  }, [search, moduleFilter, statusFilter, sortBy, page]);
+  }, [debouncedSearch, statusFilter, page, refreshKey]);
 
-  const displayed = projects;
+  /* The API has no sort param, so sorting applies to the current page. */
+  const displayed = useMemo(
+    () => [...projects].sort(SORTERS[sortBy] || SORTERS["Latest Activity"]),
+    [projects, sortBy]
+  );
 
   /* New project modal state */
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectDisease, setNewProjectDisease] = useState("");
-  const [newProjectDescription, setNewProjectDescription] = useState("");
   const [createLoading, setCreateLoading] = useState(false);
-
-  const diseaseOptions = Array.from(
-    new Set(ALL_PROJECTS.map((p) => p.disease).filter(Boolean))
-  );
-
-  useEffect(() => {
-    if (newProjectDisease) {
-      setNewProjectName(`${newProjectDisease} Target Analysis`);
-    }
-  }, [newProjectDisease]);
+  const [createError, setCreateError] = useState(null);
 
   const openNewProject = () => {
     setNewProjectDisease("");
     setNewProjectName("");
-    setNewProjectDescription("");
+    setCreateError(null);
     setNewProjectOpen(true);
   };
 
-  const closeNewProject = () => setNewProjectOpen(false);
+  const closeNewProject = () => {
+    if (!createLoading) setNewProjectOpen(false);
+  };
 
   const handleCreateProject = async () => {
-    const disease = newProjectDisease || "";
-    const name = newProjectName || `${disease} Target Analysis`;
+    const disease = newProjectDisease.trim();
+    const name = newProjectName.trim() || `${disease} Target Analysis`;
 
+    // Contract body: { name, disease, module, status }.
     const body = {
       name,
       disease,
       module: "TxKG",
       status: "Active",
-      description: newProjectDescription || undefined,
     };
 
     try {
       setCreateLoading(true);
-      const res = await apiClient.post("/projects", body);
+      setCreateError(null);
+      await createProject(body);
 
-      // Refresh list after successful create
-      setPage(1);
-      // trigger fetch by toggling page or using a refreshKey - page is sufficient
-
-      closeNewProject();
+      setNewProjectOpen(false);
+      if (page === 1) refetch();
+      else setPage(1);
     } catch (err) {
-      console.error("Create project failed", err);
-      setError(err.userMessage || err.message || "Failed to create project");
+      setCreateError(errorText(err, "Failed to create project"));
     } finally {
       setCreateLoading(false);
     }
   };
-
-  /* ─────────────────────────────────────────────
-     PAGINATION
-  ───────────────────────────────────────────── */
-
-  const rangeStart =
-    (page - 1) * ROWS_PER_PAGE + 1;
-  const rangeEnd = Math.min(
-    page * ROWS_PER_PAGE,
-    totalCount || 0
-  );
 
   /* ─────────────────────────────────────────────
      STATUS DROPDOWN
@@ -1043,29 +936,28 @@ const ProjectsPage = () => {
     setSelectedProjectId(null);
   };
 
-  const handleStatusChange = (status) => {
-    console.log(
-      "Change project status:",
-      selectedProjectId,
-      status
-    );
+  // Optimistic update; PATCH /projects/{id} { status }, revert on failure.
+  const handleStatusChange = async (status) => {
+    const projectId = selectedProjectId;
+    const previous = projects.find((p) => p.id === projectId);
+    if (!previous || previous.status === status) return;
 
-    /*
-      Connect your API/update logic here.
-
-      For now the dropdown behavior is implemented
-      and the selected project/status are available.
-    */
-  };
-
-  // Update local state when status changes (optimistic update)
-  const handleStatusChangeLocal = (status) => {
+    setActionError(null);
     setProjects((prev) =>
-      prev.map((p) =>
-        p.id === selectedProjectId ? { ...p, status } : p
-      )
+      prev.map((p) => (p.id === projectId ? { ...p, status } : p))
     );
-    console.log("Updated local status for", selectedProjectId, status);
+
+    try {
+      const updated = await updateProject(projectId, { status });
+      setProjects((prev) =>
+        prev.map((p) => (p.id === projectId ? { ...p, ...(updated || {}) } : p))
+      );
+    } catch (err) {
+      setProjects((prev) =>
+        prev.map((p) => (p.id === projectId ? previous : p))
+      );
+      setActionError(errorText(err, "Failed to update status"));
+    }
   };
 
   /* ─────────────────────────────────────────────
@@ -1090,21 +982,63 @@ const ProjectsPage = () => {
     setActionProjectId(null);
   };
 
+  /* Rename / delete dialogs */
+  const [renameTarget, setRenameTarget] = useState(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [dialogBusy, setDialogBusy] = useState(false);
+  const [dialogError, setDialogError] = useState(null);
+
   const handleProjectAction = (action) => {
-    console.log(
-      "Project action:",
-      action,
-      actionProjectId
-    );
+    const project = projects.find((p) => p.id === actionProjectId);
+    if (!project) return;
 
-    /*
-      Connect your API/action handlers here.
+    setDialogError(null);
+    if (action === "edit") {
+      setRenameTarget(project);
+      setRenameValue(project.name || "");
+    } else if (action === "delete") {
+      setDeleteTarget(project);
+    }
+  };
 
-      edit
-      duplicate
-      archive
-      delete
-    */
+  const handleRename = async () => {
+    const name = renameValue.trim();
+    if (!renameTarget || !name) return;
+
+    setDialogBusy(true);
+    setDialogError(null);
+    try {
+      const updated = await updateProject(renameTarget.id, { name });
+      setProjects((prev) =>
+        prev.map((p) =>
+          p.id === renameTarget.id ? { ...p, name, ...(updated || {}) } : p
+        )
+      );
+      setRenameTarget(null);
+    } catch (err) {
+      setDialogError(errorText(err, "Failed to rename project"));
+    } finally {
+      setDialogBusy(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+
+    setDialogBusy(true);
+    setDialogError(null);
+    try {
+      await deleteProject(deleteTarget.id);
+      setDeleteTarget(null);
+      // Step back a page if this removed the last row on it.
+      if (projects.length === 1 && page > 1) setPage(page - 1);
+      else refetch();
+    } catch (err) {
+      setDialogError(errorText(err, "Failed to delete project"));
+    } finally {
+      setDialogBusy(false);
+    }
   };
 
   /* ─────────────────────────────────────────────
@@ -1329,13 +1263,13 @@ const ProjectsPage = () => {
               allowing the search field to take the remaining space.
               The smaller gaps also keep the controls visually grouped.
             */
-            gridTemplateColumns: "minmax(0, 1fr) 220px 165px 205px",
+            gridTemplateColumns: "minmax(0, 1fr) 165px 205px",
             alignItems: "center",
             gap: "8px",
             boxSizing: "border-box",
 
             "@media (max-width: 1200px)": {
-              gridTemplateColumns: "minmax(0, 1fr) 205px 155px 190px",
+              gridTemplateColumns: "minmax(0, 1fr) 155px 190px",
               gap: "8px",
             },
 
@@ -1419,37 +1353,16 @@ const ProjectsPage = () => {
             }}
           />
 
-          {/* Last Module */}
-          <FilterSelect
-            value={moduleFilter}
-            onChange={(event) =>
-              setModuleFilter(
-                event.target.value
-              )
-            }
-            options={[
-              "TxKG",
-              "LitMineX",
-              "CurateX",
-              "NovSearch",
-            ]}
-            label="Last Module"
-            allLabel="All Modules"
-          />
-
           {/* Status */}
           <FilterSelect
             value={statusFilter}
-            onChange={(event) =>
+            onChange={(event) => {
               setStatusFilter(
                 event.target.value
-              )
-            }
-            options={[
-              "ACTIVE",
-              "ON HOLD",
-              "REVIEW",
-            ]}
+              );
+              setPage(1);
+            }}
+            options={PROJECT_STATUSES}
             label="Status"
             allLabel="All Status"
           />
@@ -1462,6 +1375,36 @@ const ProjectsPage = () => {
             }
           />
         </Box>
+
+        {actionError && (
+          <Box
+            role="alert"
+            sx={{
+              flexShrink: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "12px",
+              px: "16px",
+              py: "10px",
+              borderRadius: "8px",
+              bgcolor: "#FEF2F2",
+              border: "1px solid #FECACA",
+            }}
+          >
+            <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: "#B91C1C" }}>
+              {actionError}
+            </Typography>
+            <Box
+              component="button"
+              onClick={() => setActionError(null)}
+              aria-label="Dismiss"
+              sx={{ border: "none", bgcolor: "transparent", cursor: "pointer", display: "flex", p: 0 }}
+            >
+              <CloseOutlined sx={{ fontSize: 16, color: "#B91C1C" }} />
+            </Box>
+          </Box>
+        )}
 
         {/* ───────────────────────────────────────
             TABLE CARD
@@ -1542,7 +1485,7 @@ const ProjectsPage = () => {
               flexShrink: 0,
 
               boxSizing: "border-box",
-              minWidth: "775px",
+              minWidth: TABLE_MIN_WIDTH,
             }}
           >
             <Typography
@@ -1613,6 +1556,23 @@ const ProjectsPage = () => {
               STATUS
             </Typography>
 
+            <Typography
+              sx={{
+                fontFamily: FONT,
+                fontSize: "11px",
+                fontWeight: 700,
+
+                color: MUTED,
+
+                letterSpacing:
+                  "0.4px",
+
+                whiteSpace: "nowrap",
+              }}
+            >
+              LATEST ACTIVITY
+            </Typography>
+
             {/* Action column spacer */}
             <Box />
           </Box>
@@ -1632,7 +1592,7 @@ const ProjectsPage = () => {
               overflowX: "auto",
             }}
           >
-            {displayed.map((project, index) => (
+            {!loading && displayed.map((project, index) => (
               <Box
                 key={project.id}
                 onClick={() =>
@@ -1666,7 +1626,7 @@ const ProjectsPage = () => {
                   cursor: "pointer",
 
                   boxSizing: "border-box",
-                  minWidth: "775px",
+                  minWidth: TABLE_MIN_WIDTH,
 
                   "&:hover": {
                     bgcolor: BG,
@@ -1712,7 +1672,7 @@ const ProjectsPage = () => {
                       "nowrap",
                   }}
                 >
-                  {project.disease}
+                  {project.disease || "—"}
                 </Typography>
 
                 {/* Last Module */}
@@ -1733,7 +1693,7 @@ const ProjectsPage = () => {
                       "nowrap",
                   }}
                 >
-                  {project.module}
+                  {project.module || "—"}
                 </Typography>
 
                 {/* Status */}
@@ -1748,7 +1708,7 @@ const ProjectsPage = () => {
                   }}
                 >
                   <StatusChip
-                    status={normalizeStatus(project.status)}
+                    status={project.status}
                     onClick={(event) =>
                       handleStatusClick(
                         event,
@@ -1757,6 +1717,21 @@ const ProjectsPage = () => {
                     }
                   />
                 </Box>
+
+                {/* Latest activity — updatedAt, UTC */}
+                <Typography
+                  sx={{
+                    fontFamily: FONT,
+                    fontSize: "13px",
+                    fontWeight: 400,
+
+                    color: "#475569",
+
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {formatUtcDate(project.updatedAt)}
+                </Typography>
 
                 {/* Actions */}
                 <Box
@@ -1832,6 +1807,32 @@ const ProjectsPage = () => {
                   Loading projects...
                 </Typography>
               </Box>
+            ) : error ? (
+              <Box
+                role="alert"
+                sx={{
+                  minHeight: "180px",
+
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "10px",
+                }}
+              >
+                <Typography
+                  sx={{
+                    fontFamily: FONT,
+                    fontSize: "14px",
+                    color: "#DC2626",
+                  }}
+                >
+                  Couldn&apos;t load projects: {error}
+                </Typography>
+                <Button onClick={refetch} sx={{ textTransform: "none", fontFamily: FONT, color: TEAL }}>
+                  Retry
+                </Button>
+              </Box>
             ) : (
               displayed.length === 0 && (
               <Box
@@ -1896,41 +1897,35 @@ const ProjectsPage = () => {
             />
           </PageButton>
 
-          {[1, 2, 3].map((number) => (
-            <PageButton
-              key={number}
-              active={page === number}
-              onClick={() =>
-                setPage(number)
-              }
-            >
-              {number}
-            </PageButton>
-          ))}
+          {buildPageList(page, totalPages).map((item, index) =>
+            item === "…" ? (
+              <Box
+                key={`gap-${index}`}
+                sx={{
+                  px: "4px",
 
-          <Box
-            sx={{
-              px: "4px",
+                  color: "#6B7280",
 
-              color: "#6B7280",
-
-              fontFamily: FONT,
-              fontSize: "12px",
-            }}
-          >
-            &hellip;
-          </Box>
-
-          <PageButton
-            active={page === totalPages}
-            onClick={() => setPage(totalPages)}
-          >
-            {totalPages}
-          </PageButton>
+                  fontFamily: FONT,
+                  fontSize: "12px",
+                }}
+              >
+                &hellip;
+              </Box>
+            ) : (
+              <PageButton
+                key={item}
+                active={page === item}
+                onClick={() => setPage(item)}
+              >
+                {item}
+              </PageButton>
+            )
+          )}
 
           <PageButton
             aria-label="Next page"
-            disabled={page === totalPages}
+            disabled={page >= totalPages}
             onClick={() =>
               setPage((currentPage) =>
                 Math.min(totalPages, currentPage + 1)
@@ -1955,7 +1950,8 @@ const ProjectsPage = () => {
               ml: "8px",
             }}
           >
-            Showing {rangeStart}-{rangeEnd} of {totalCount} projects
+            Showing {projects.length} of {totalCount} projects
+            {totalPages > 1 ? ` · Page ${page} of ${totalPages}` : ""}
           </Typography>
         </Box>
       </Box>
@@ -1969,12 +1965,10 @@ const ProjectsPage = () => {
         open={Boolean(statusAnchorEl)}
         onClose={handleStatusClose}
         currentStatus={
-          normalizeStatus(
-            projects.find((p) => p.id === selectedProjectId)
-              ?.status
-          )
+          projects.find((p) => p.id === selectedProjectId)
+            ?.status
         }
-        onStatusChange={handleStatusChangeLocal}
+        onStatusChange={handleStatusChange}
       />
 
       {/* ─────────────────────────────────────────
@@ -2021,35 +2015,123 @@ const ProjectsPage = () => {
               variant="outlined"
             />
 
-            <Select
+            <TextField
+              label="Disease"
               value={newProjectDisease}
               onChange={(e) => setNewProjectDisease(e.target.value)}
-              displayEmpty
-              fullWidth
-              size="small"
-            >
-              <MenuItem value="">Select disease</MenuItem>
-              {diseaseOptions.map((d) => (
-                <MenuItem key={d} value={d}>{d}</MenuItem>
-              ))}
-            </Select>
-
-            <TextField
-              label="Description"
-              value={newProjectDescription}
-              onChange={(e) => setNewProjectDescription(e.target.value)}
-              multiline
-              rows={4}
               fullWidth
               variant="outlined"
+              placeholder="e.g. Thrombocytosis"
             />
+
+            {createError && (
+              <Typography role="alert" sx={{ fontFamily: FONT, fontSize: 13, color: "#DC2626" }}>
+                {createError}
+              </Typography>
+            )}
           </Box>
         </DialogContent>
 
         <DialogActions>
           <Button className="irenovo-create-cancel" onClick={closeNewProject}>Cancel</Button>
-          <Button className="irenovo-create-save" onClick={handleCreateProject} disabled={createLoading}>
-            Create & Save
+          <Button
+            className="irenovo-create-save"
+            onClick={handleCreateProject}
+            disabled={createLoading || !newProjectDisease.trim()}
+          >
+            {createLoading ? "Creating..." : "Create & Save"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Rename Dialog — PATCH /projects/{id} { name } */}
+      <Dialog
+        className="irenovo-modal"
+        open={Boolean(renameTarget)}
+        onClose={() => !dialogBusy && setRenameTarget(null)}
+        fullWidth
+        maxWidth="sm"
+      >
+        <Box className="irenovo-modal-header">
+          <Box sx={{ display: 'flex', flexDirection: 'column', ml: 1 }}>
+            <Typography sx={{ fontFamily: FONT, fontWeight: 700, fontSize: 20 }}>Edit project</Typography>
+            <Typography sx={{ color: MUTED, fontSize: 13 }}>Rename this project</Typography>
+          </Box>
+
+          <Box sx={{ flex: 1 }} />
+
+          <Box component="button" onClick={() => !dialogBusy && setRenameTarget(null)} className="irenovo-modal-close">
+            <CloseOutlined />
+          </Box>
+        </Box>
+
+        <DialogContent>
+          <Box className="irenovo-form">
+            <TextField
+              label="Project Name"
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              fullWidth
+              variant="outlined"
+              autoFocus
+            />
+            {dialogError && (
+              <Typography role="alert" sx={{ fontFamily: FONT, fontSize: 13, color: "#DC2626" }}>
+                {dialogError}
+              </Typography>
+            )}
+          </Box>
+        </DialogContent>
+
+        <DialogActions>
+          <Button className="irenovo-create-cancel" onClick={() => setRenameTarget(null)} disabled={dialogBusy}>
+            Cancel
+          </Button>
+          <Button
+            className="irenovo-create-save"
+            onClick={handleRename}
+            disabled={dialogBusy || !renameValue.trim()}
+          >
+            {dialogBusy ? "Saving..." : "Save"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Delete confirm — DELETE /projects/{id} */}
+      <Dialog
+        className="irenovo-modal"
+        open={Boolean(deleteTarget)}
+        onClose={() => !dialogBusy && setDeleteTarget(null)}
+        fullWidth
+        maxWidth="xs"
+      >
+        <Box className="irenovo-modal-header">
+          <Box sx={{ display: 'flex', flexDirection: 'column', ml: 1 }}>
+            <Typography sx={{ fontFamily: FONT, fontWeight: 700, fontSize: 20 }}>Delete project?</Typography>
+          </Box>
+        </Box>
+
+        <DialogContent>
+          <Typography sx={{ fontFamily: FONT, fontSize: 14, color: TITLE_COLOR }}>
+            &ldquo;{deleteTarget?.name}&rdquo; will be deleted. Its sessions are kept and unlinked.
+          </Typography>
+          {dialogError && (
+            <Typography role="alert" sx={{ fontFamily: FONT, fontSize: 13, color: "#DC2626", mt: 1 }}>
+              {dialogError}
+            </Typography>
+          )}
+        </DialogContent>
+
+        <DialogActions>
+          <Button className="irenovo-create-cancel" onClick={() => setDeleteTarget(null)} disabled={dialogBusy}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleDelete}
+            disabled={dialogBusy}
+            sx={{ textTransform: "none", fontFamily: FONT, color: "#FFFFFF", bgcolor: "#EF4444", "&:hover": { bgcolor: "#DC2626" } }}
+          >
+            {dialogBusy ? "Deleting..." : "Delete"}
           </Button>
         </DialogActions>
       </Dialog>

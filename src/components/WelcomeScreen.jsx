@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   X,
   Plus,
@@ -9,7 +9,8 @@ import {
 import { useNavigate } from "react-router-dom";
 import { useCurrentUser } from "../context/CurrentUserContext";
 import {
-  getResearchFocus,
+  completeOnboarding,
+  getTherapeuticAreas,
   saveResearchFocus,
 } from "../services/researchApi";
 import "./WelcomeScreen.css";
@@ -24,46 +25,20 @@ export const BG_IMAGE =
 
 
 /* ============================================================
-   Therapeutic specialties
+   Therapeutic areas
+
+   The chips come from GET /therapeutic-areas (a string array).
+   The hardcoded SPECIALTIES list and the three default search
+   tags were removed: they drifted from the backend catalog and
+   saved areas the user never picked. Nothing starts selected.
    ============================================================ */
 
-const SPECIALTIES = [
-  {
-    label: "Oncology / Cancer",
-    defaultOn: true,
-  },
-  {
-    label: "Neurodegenerative (Alzheimer's, Parkinson's)",
-    defaultOn: false,
-  },
-  {
-    label: "Diabetes",
-    defaultOn: true,
-  },
-  {
-    label: "Cardiovascular Systems",
-    defaultOn: false,
-  },
-  {
-    label: "Immunology & Inflammation",
-    defaultOn: false,
-  },
-  {
-    label: "Infectious Viruses",
-    defaultOn: false,
-  },
-];
-
-
-/* ============================================================
-   Initial search tags
-   ============================================================ */
-
-const INITIAL_SEARCH_TAGS = [
-  "Type 2 Diabetes",
-  "Oncology",
-  "Rare Diseases",
-];
+const statusTextStyle = {
+  margin: 0,
+  fontFamily: "Inter, sans-serif",
+  fontSize: "12px",
+  color: "#64748b",
+};
 
 
 /* ============================================================
@@ -233,27 +208,60 @@ export default function WelcomeScreen({
 
 
   /* ============================================================
-     Selected specialties state
+     Therapeutic area catalog (GET /therapeutic-areas)
      ============================================================ */
 
-  const [selected, setSelected] = useState(() =>
-    Object.fromEntries(
-      SPECIALTIES.map(
-        ({ label, defaultOn }) => [
-          label,
-          defaultOn,
-        ]
-      )
-    )
-  );
+  const [areas, setAreas] = useState([]);
+  const [areasLoading, setAreasLoading] = useState(true);
+  const [areasError, setAreasError] = useState(null);
+
+  const loadAreas = useCallback(() => {
+    let mounted = true;
+
+    setAreasLoading(true);
+    setAreasError(null);
+
+    getTherapeuticAreas()
+      .then((list) => {
+        if (!mounted) return;
+        setAreas(
+          Array.isArray(list)
+            ? list.filter((item) => typeof item === "string" && item.trim())
+            : []
+        );
+      })
+      .catch((error) => {
+        if (!mounted) return;
+        setAreasError(
+          error?.userMessage ||
+            "Could not load therapeutic areas."
+        );
+      })
+      .finally(() => {
+        if (mounted) setAreasLoading(false);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => loadAreas(), [loadAreas]);
 
 
   /* ============================================================
-     Search tags state
+     Selected chips — only what the user ticks
+     ============================================================ */
+
+  const [selected, setSelected] = useState({});
+
+
+  /* ============================================================
+     Search tags state — free-text areas the user typed
      ============================================================ */
 
   const [searchTags, setSearchTags] =
-    useState(INITIAL_SEARCH_TAGS);
+    useState([]);
 
   const [draft, setDraft] =
     useState("");
@@ -262,58 +270,16 @@ export default function WelcomeScreen({
   /* ============================================================
      Saving state
 
-     Review point 10: the picker was pure local state — "Save Focus
-     & Get Started" called an optional prop and navigated away, so
-     nothing was ever written. It now reads GET and writes POST
-     /users/me/research-focus.
+     "Save" writes POST /users/me/research-focus and then
+     POST /users/me/onboarding/complete; "Skip" only completes
+     onboarding. Both responses are { success, message } and a
+     success: false is surfaced, not ignored.
      ============================================================ */
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
-
-
-  /* ============================================================
-     Pre-select whatever was saved before
-     ============================================================ */
-
-  useEffect(() => {
-    let mounted = true;
-
-    getResearchFocus()
-      .then((focus) => {
-        const areas = Array.isArray(focus)
-          ? focus
-          : focus?.therapeuticAreas;
-
-        if (!mounted || !Array.isArray(areas) || !areas.length) return;
-
-        setSelected((previous) => {
-          const next = { ...previous };
-          Object.keys(next).forEach((label) => {
-            next[label] = areas.includes(label);
-          });
-          return next;
-        });
-
-        // Anything saved that is not one of the six built-in chips is
-        // still the user's focus, so it shows as a removable tag.
-        setSearchTags((previous) => [
-          ...previous,
-          ...areas.filter(
-            (area) =>
-              !SPECIALTIES.some((s) => s.label === area) &&
-              !previous.includes(area)
-          ),
-        ]);
-      })
-      .catch(() => {
-        // Onboarding must not be blocked by a missing saved focus.
-      });
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
+  const [skipping, setSkipping] = useState(false);
+  const [skipFailed, setSkipFailed] = useState(false);
 
 
   /* ============================================================
@@ -358,6 +324,19 @@ export default function WelcomeScreen({
 
     event.preventDefault();
 
+    const catalogMatch = areas.find(
+      (area) => area.toLowerCase() === value.toLowerCase()
+    );
+
+    if (catalogMatch) {
+      setSelected((previous) => ({
+        ...previous,
+        [catalogMatch]: true,
+      }));
+      setDraft("");
+      return;
+    }
+
     setSearchTags((previous) =>
       previous.includes(value)
         ? previous
@@ -372,29 +351,56 @@ export default function WelcomeScreen({
      Save
      ============================================================ */
 
-  const handleSave = async () => {
-    if (saving) return;
+  /**
+   * POST /users/me/onboarding/complete. Throws with a user-facing
+   * message when the request fails or the backend says success: false.
+   */
+  const finishOnboarding = async () => {
+    const result = await completeOnboarding({});
 
-    // The chips the user ticked plus any free-text disease area they added:
-    // both are "therapeutic areas of interest" as far as the endpoint goes.
-    const therapeuticAreas = [
-      ...Object.entries(selected)
-        .filter(([, on]) => on)
-        .map(([label]) => label),
-      ...searchTags,
-    ];
+    if (result?.success === false) {
+      throw new Error(
+        result?.message ||
+          "Could not complete onboarding. Please try again."
+      );
+    }
+  };
+
+  const handleSave = async () => {
+    if (saving || skipping) return;
+
+    // Only what the user chose: the chips they ticked plus any free-text
+    // disease area they added.
+    const therapeuticAreas = Array.from(
+      new Set([
+        ...areas.filter((label) => selected[label]),
+        ...searchTags,
+      ])
+    );
 
     setSaving(true);
     setSaveError(null);
 
     try {
-      await saveResearchFocus(therapeuticAreas);
+      if (therapeuticAreas.length) {
+        const result = await saveResearchFocus(therapeuticAreas);
+
+        if (result?.success === false) {
+          throw new Error(
+            result?.message ||
+              "Could not save your research focus. Please try again."
+          );
+        }
+      }
+
+      await finishOnboarding();
     } catch (error) {
       // Surfaced rather than swallowed — the whole point of this screen is
       // that the choice is persisted, so a silent failure is worse than a
       // blocked button.
       setSaveError(
         error?.userMessage ||
+          error?.message ||
           "Could not save your research focus. Please try again."
       );
       setSaving(false);
@@ -409,15 +415,43 @@ export default function WelcomeScreen({
       therapeuticAreas,
     });
 
-    navigate("/dashboard/new-research");
+    navigate("/dashboard");
   };
 
 
   /* ============================================================
      Skip
+
+     Still marks onboarding complete so the splash stops routing
+     here. If that fails the error is shown and the next click
+     continues anyway, so a backend problem never traps the user.
      ============================================================ */
 
-  const handleSkip = () => {
+  const handleSkip = async () => {
+    if (saving || skipping) return;
+
+    if (!skipFailed) {
+      setSkipping(true);
+      setSaveError(null);
+
+      try {
+        await finishOnboarding();
+      } catch (error) {
+        setSaveError(
+          `${
+            error?.userMessage ||
+            error?.message ||
+            "Could not complete onboarding."
+          } Click skip again to continue anyway.`
+        );
+        setSkipFailed(true);
+        setSkipping(false);
+        return;
+      }
+
+      setSkipping(false);
+    }
+
     onSkip?.();
 
     navigate("/dashboard/new-research");
@@ -621,31 +655,62 @@ export default function WelcomeScreen({
 
             <div className="ws-specialty-row">
 
-              {SPECIALTIES.map((specialty) => {
+              {areasLoading && (
+                <p style={statusTextStyle} role="status">
+                  Loading therapeutic areas...
+                </p>
+              )}
 
-                const active =
-                  selected[specialty.label];
+              {!areasLoading && areasError && (
+                <p className="ws-save-error" role="alert" style={{ margin: 0 }}>
+                  {areasError}{" "}
+                  <button
+                    type="button"
+                    onClick={loadAreas}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      padding: 0,
+                      color: "inherit",
+                      textDecoration: "underline",
+                      cursor: "pointer",
+                      font: "inherit",
+                    }}
+                  >
+                    Retry
+                  </button>
+                </p>
+              )}
+
+              {!areasLoading && !areasError && areas.length === 0 && (
+                <p style={statusTextStyle}>
+                  No therapeutic areas are available yet. You can still
+                  add disease areas above.
+                </p>
+              )}
+
+              {!areasLoading && !areasError && areas.map((label) => {
+
+                const active = Boolean(selected[label]);
 
 
                 return (
                   <button
                     type="button"
-                    key={specialty.label}
+                    key={label}
                     className={`ws-specialty ${
                       active
                         ? "is-selected"
                         : ""
                     }`}
                     onClick={() =>
-                      toggleSpecialty(
-                        specialty.label
-                      )
+                      toggleSpecialty(label)
                     }
                     aria-pressed={active}
                   >
 
                     <span>
-                      {specialty.label}
+                      {label}
                     </span>
 
 
@@ -683,7 +748,7 @@ export default function WelcomeScreen({
               type="button"
               className="ws-primary"
               onClick={handleSave}
-              disabled={saving}
+              disabled={saving || skipping}
             >
               {saving
                 ? "Saving..."
@@ -711,8 +776,11 @@ export default function WelcomeScreen({
               <button
                 type="button"
                 onClick={handleSkip}
+                disabled={saving || skipping}
               >
-                take me to the new research task
+                {skipping
+                  ? "finishing setup..."
+                  : "take me to the new research task"}
               </button>
 
             </div>

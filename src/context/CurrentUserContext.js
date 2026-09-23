@@ -1,5 +1,13 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { fetchAuthSession } from "@aws-amplify/auth";
+import { Hub } from "aws-amplify/utils";
 import { getCurrentUser as getUserProfile } from "../services/researchApi";
 
 /**
@@ -9,6 +17,11 @@ import { getCurrentUser as getUserProfile } from "../services/researchApi";
  * every chat bubble in all five phase screens, the sidebar, the welcome screen,
  * the share dialog. Threading a prop down six levels to reach a chat bubble
  * would have been worse than a context, and the value changes once per session.
+ *
+ * The provider mounts once, above the router, so it is NOT remounted by a
+ * sign-in. It re-fetches when Login calls refresh() and when Amplify's Hub
+ * reports signedIn / signedOut, so logging out and back in as someone else
+ * never shows the previous researcher's name.
  *
  * Nothing here blocks rendering. A screen that has not got the profile yet
  * shows the neutral fallback rather than an empty bubble or a spinner, because
@@ -71,7 +84,7 @@ export const CurrentUserProvider = ({ children }) => {
 
       if (!signedIn) {
         // Not an error state: the screens fall back to "Researcher" until the
-        // user signs in, at which point this provider remounts and retries.
+        // user signs in, at which point refresh() / the Hub listener retries.
         setUser(null);
         setLoading(false);
         return;
@@ -99,6 +112,33 @@ export const CurrentUserProvider = ({ children }) => {
     };
   }, [attempt]);
 
+  const refresh = useCallback(() => setAttempt((n) => n + 1), []);
+
+  /*
+   * Follow Cognito session changes. signedOut clears the profile at once so
+   * nothing renders the old name while the next account signs in; signedIn
+   * (and a refreshed token for a different user) re-fetches GET /users/me.
+   */
+  useEffect(() => {
+    const stop = Hub.listen("auth", ({ payload }) => {
+      switch (payload?.event) {
+        case "signedOut":
+          setUser(null);
+          setError(null);
+          refresh();
+          break;
+        case "signedIn":
+          setUser(null);
+          refresh();
+          break;
+        default:
+          break;
+      }
+    });
+
+    return stop;
+  }, [refresh]);
+
   const value = useMemo(() => {
     const name = user?.name?.trim() || FALLBACK_NAME;
     return {
@@ -112,9 +152,9 @@ export const CurrentUserProvider = ({ children }) => {
       role: user?.role ?? null,
       email: user?.email ?? null,
       avatarUrl: user?.avatarUrl || null,
-      refresh: () => setAttempt((n) => n + 1),
+      refresh,
     };
-  }, [user, loading, error]);
+  }, [user, loading, error, refresh]);
 
   return <CurrentUserContext.Provider value={value}>{children}</CurrentUserContext.Provider>;
 };

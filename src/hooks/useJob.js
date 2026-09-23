@@ -26,7 +26,12 @@ import {
  * @param {number}      options.initialDelay - first poll delay, ms (default 1000)
  * @param {number}      options.maxDelay     - delay ceiling, ms (default 5000)
  * @param {number}      options.timeout      - give up after, ms (default 300000 / 5 min)
- * @param {boolean}     options.fetchResult  - fetch /result on success (default true)
+ * @param {boolean}     options.fetchResult  - fetch /result on success (default true).
+ *   Pass false for modules that have their own results endpoint — only TxKG
+ *   reads the generic /result.
+ *
+ * Disabling the hook (enabled=false) stops polling but keeps the last state, so
+ * a finished job's result survives the step being switched off.
  */
 const useJob = (jobId, options = {}) => {
   const {
@@ -58,6 +63,13 @@ const useJob = (jobId, options = {}) => {
   /** The module /status reports this job belongs to. */
   const [jobModule, setJobModule] = useState(null);
 
+  /**
+   * The job id the state above belongs to. Several of these hooks run side by
+   * side (one per workflow step), and a caller has to be able to tell a result
+   * for the step's current job from one left over from the job before it.
+   */
+  const [trackedJobId, setTrackedJobId] = useState(null);
+
   // Bumped to force a re-poll of the same job id.
   const [attempt, setAttempt] = useState(0);
 
@@ -86,6 +98,7 @@ const useJob = (jobId, options = {}) => {
     setIsFailed(false);
     setProgressMessage(null);
     setJobModule(null);
+    setTrackedJobId(null);
   }, []);
 
   useEffect(() => {
@@ -106,6 +119,7 @@ const useJob = (jobId, options = {}) => {
     setIsFailed(false);
     setProgressMessage(null);
     setJobModule(null);
+    setTrackedJobId(jobId);
     setIsPolling(true);
 
     const startedAt = Date.now();
@@ -188,6 +202,7 @@ const useJob = (jobId, options = {}) => {
   }, [jobId, enabled, attempt, initialDelay, maxDelay, timeout, fetchResult]);
 
   return {
+    jobId: trackedJobId,
     status,
     statusPayload,
     result,

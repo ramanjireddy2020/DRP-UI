@@ -1,12 +1,15 @@
-import React, { useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   Box,
   Typography,
   Button,
   Checkbox,
   IconButton,
+  Tooltip,
 } from '@mui/material';
 import { moduleDisplayFor } from '../../../workflow/moduleMap';
+import litminexApi from '../../../services/api/litminex';
+import { normalizeArticlePreview, RESULTS_PAGE_SIZE } from '../../../workflow/phaseResults';
 import PhaseActions from '../PhaseActions';
 import { useCurrentUser } from '../../../context/CurrentUserContext';
 import {
@@ -165,11 +168,20 @@ const LitMineXAgentHeader = ({
    ========================================================================== */
 
 /**
- * The API's page size for LitMineX results. Only used for the "Showing x-y of
- * n" caption; the server decides how many rows actually come back, so the
- * caption's upper bound is taken from the row count rather than from this.
+ * How long the pointer has to rest on a row before its preview is fetched, so
+ * sweeping across the table does not fire one request per row.
  */
-const PAGE_SIZE = 10;
+const PREVIEW_DELAY_MS = 400;
+
+/** One insight item — the API's example is an empty list, so no shape is assumed. */
+const insightItemText = (item) => {
+  if (item == null) return null;
+  if (typeof item === 'string' || typeof item === 'number') return String(item);
+  const head = item.title ?? item.label ?? item.name ?? item.heading ?? null;
+  const body = item.content ?? item.text ?? item.description ?? item.value ?? item.summary ?? null;
+  if (head && body) return `${head}: ${body}`;
+  return head ?? body ?? null;
+};
 
 /**
  * The page numbers to show, with ellipses, for a given current page and total.
@@ -270,8 +282,68 @@ const LiteminexPhase = ({
   continuePending = false,
   /** Branch / Rerun / Export handlers from usePhaseActions. */
   actions = {},
+  /**
+   * The LitMineX job, for the row-hover preview
+   * (GET /agents/litminex/{jobId}/results/{articleId}/preview). Without it
+   * rows simply have no hover preview.
+   */
+  jobId = null,
+  /** Rows per page, for the "Showing x-y" caption when rows carry no position. */
+  pageSize = RESULTS_PAGE_SIZE,
 }) => {
   const { chatLabel: userLabel } = useCurrentUser();
+
+  /**
+   * Row-hover previews, cached per job + article. A failed preview is cached
+   * as a failure too, so a broken article is not re-requested on every hover.
+   */
+  const [previews, setPreviews] = useState({});
+  const previewRequestedRef = useRef(new Set());
+
+  const loadPreview = useCallback(
+    (articleId) => {
+      if (!jobId || !articleId) return;
+      const cacheKey = `${jobId}:${articleId}`;
+      if (previewRequestedRef.current.has(cacheKey)) return;
+      previewRequestedRef.current.add(cacheKey);
+
+      setPreviews((prev) => ({ ...prev, [cacheKey]: { status: 'loading' } }));
+      litminexApi
+        .getArticlePreview(jobId, articleId)
+        .then((payload) =>
+          setPreviews((prev) => ({
+            ...prev,
+            [cacheKey]: { status: 'done', data: normalizeArticlePreview(payload) },
+          }))
+        )
+        .catch(() =>
+          setPreviews((prev) => ({ ...prev, [cacheKey]: { status: 'error' } }))
+        );
+    },
+    [jobId]
+  );
+
+  const renderPreview = (articleId) => {
+    const entry = previews[`${jobId}:${articleId}`];
+    const body = !entry || entry.status === 'loading'
+      ? 'Loading preview…'
+      : entry.status === 'error'
+      ? 'Preview unavailable for this article.'
+      : entry.data?.snippet || 'No preview snippet was returned for this article.';
+
+    return (
+      <Box sx={{ maxWidth: 320 }}>
+        {entry?.data?.title && (
+          <Typography sx={{ fontFamily: FONT, fontSize: '12px', fontWeight: 600, color: TEXT_DARK, mb: '4px' }}>
+            {entry.data.title}
+          </Typography>
+        )}
+        <Typography sx={{ fontFamily: FONT, fontSize: '11px', color: '#475569', lineHeight: 1.5 }}>
+          {body}
+        </Typography>
+      </Box>
+    );
+  };
 
   // Falls back only when the parent supplied nothing.
   const requestLabel = requestText || 'Mine literature for the selected drug targets';
@@ -551,7 +623,15 @@ const LiteminexPhase = ({
               mb: '16px',
             }}
           >
-            Literature mining complete. Found 124 articles across PubMed and clinical databases. Results ranked by confidence score with keyword extraction.
+            {/* Was a fixed "Found 124 articles across PubMed and clinical
+                databases" on every run. */}
+            {error
+              ? 'The literature results could not be loaded.'
+              : loading
+              ? 'Loading the literature results…'
+              : total
+              ? `Literature mining complete. Found ${total} article${total === 1 ? '' : 's'}. Results ranked by confidence score with keyword extraction.`
+              : 'Literature mining complete. No articles were found for these targets.'}
           </Typography>
 
 
@@ -707,8 +787,28 @@ const LiteminexPhase = ({
                   const cc = confidenceColor(article.confidence);
 
                   return (
-                    <Box
+                    <Tooltip
                       key={article.id}
+                      /* An empty title disables the tooltip, so rows get no
+                         hover preview when there is no job to ask. */
+                      title={jobId ? renderPreview(article.id) : ''}
+                      onOpen={() => loadPreview(article.id)}
+                      enterDelay={PREVIEW_DELAY_MS}
+                      enterNextDelay={PREVIEW_DELAY_MS}
+                      placement="bottom-start"
+                      componentsProps={{
+                        tooltip: {
+                          sx: {
+                            bgcolor: '#FFFFFF',
+                            color: TEXT_DARK,
+                            border: `1px solid ${BORDER}`,
+                            boxShadow: '0 4px 12px rgba(15,23,42,0.08)',
+                            p: '10px 12px',
+                          },
+                        },
+                      }}
+                    >
+                    <Box
                       sx={{
                         display: 'grid',
                         gridTemplateColumns:
@@ -757,7 +857,8 @@ const LiteminexPhase = ({
                           color: TEXT_MUTED,
                         }}
                       >
-                        {idx + 1}
+                        {/* Continues across pages; was idx + 1 on every page. */}
+                        {article.position ?? (page - 1) * pageSize + idx + 1}
                       </Typography>
 
 
@@ -843,6 +944,7 @@ const LiteminexPhase = ({
                       </IconButton>
 
                     </Box>
+                    </Tooltip>
                   );
                 })}
 
@@ -931,7 +1033,14 @@ const LiteminexPhase = ({
                   }}
                 >
                   {litMinexResults.length
-                    ? `Showing ${(page - 1) * PAGE_SIZE + 1}-${(page - 1) * PAGE_SIZE + litMinexResults.length} of ${total} article${total === 1 ? '' : 's'}`
+                    ? (() => {
+                        // The first row's position is the server's own offset;
+                        // pageSize is only the fallback.
+                        const start =
+                          litMinexResults[0]?.position ?? (page - 1) * pageSize + 1;
+                        const end = Math.min(start + litMinexResults.length - 1, total || Infinity);
+                        return `Showing ${start}-${end} of ${total} article${total === 1 ? '' : 's'}`;
+                      })()
                     : 'No articles on this page'}
                 </Typography>
 
@@ -989,28 +1098,71 @@ const LiteminexPhase = ({
               </Typography>
 
 
-              {litMinexResults[0] && (
-                <Box
+              {/* Shown whether or not the table has rows — the commentary
+                  and items come from their own endpoint. */}
+              <Box
+                sx={{
+                  bgcolor: '#F0FDFC',
+                  border: '1px solid rgba(0,188,212,0.35)',
+                  borderRadius: '8px',
+                  p: '12px',
+                }}
+              >
+
+                <Typography
                   sx={{
-                    bgcolor: '#F0FDFC',
-                    border: '1px solid rgba(0,188,212,0.35)',
-                    borderRadius: '8px',
-                    p: '12px',
+                    fontFamily: FONT,
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    color: TEAL,
+                    mb: '6px',
                   }}
                 >
+                  Article Relevance
+                </Typography>
 
+                {/* The agent's own relevance commentary and items from
+                    GET /agents/litminex/{jobId}/insights. This used to be a
+                    fixed sentence about Metformin and JAK2, and the items were
+                    never shown. */}
+                {insights?.content && (
                   <Typography
                     sx={{
                       fontFamily: FONT,
                       fontSize: '11px',
-                      fontWeight: 600,
-                      color: TEAL,
-                      mb: '6px',
+                      color: '#64748B',
+                      lineHeight: 1.5,
+                      whiteSpace: 'pre-line',
                     }}
                   >
-                    Article Relevance
+                    {insights.content}
                   </Typography>
+                )}
 
+                {insights?.items?.length > 0 && (
+                  <Box component="ul" sx={{ m: insights?.content ? '8px 0 0' : 0, pl: '16px' }}>
+                    {insights.items.map((item, i) => {
+                      const line = insightItemText(item);
+                      return line ? (
+                        <Typography
+                          component="li"
+                          key={item?.id ?? i}
+                          sx={{
+                            fontFamily: FONT,
+                            fontSize: '11px',
+                            color: '#64748B',
+                            lineHeight: 1.5,
+                            mb: '4px',
+                          }}
+                        >
+                          {line}
+                        </Typography>
+                      ) : null;
+                    })}
+                  </Box>
+                )}
+
+                {!insights?.content && !insights?.items?.length && (
                   <Typography
                     sx={{
                       fontFamily: FONT,
@@ -1019,16 +1171,13 @@ const LiteminexPhase = ({
                       lineHeight: 1.5,
                     }}
                   >
-                    {/* The agent's own relevance commentary from
-                        GET /agents/litminex/{jobId}/insights. This used to be a
-                        fixed sentence about Metformin and JAK2, shown whatever
-                        the session was actually about. */}
-                    {insights?.content ||
-                      'No relevance commentary was returned for this run.'}
+                    {loading
+                      ? 'Loading insights…'
+                      : 'No relevance commentary was returned for this run.'}
                   </Typography>
+                )}
 
-                </Box>
-              )}
+              </Box>
 
             </Box>
 

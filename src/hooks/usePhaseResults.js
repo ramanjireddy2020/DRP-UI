@@ -12,6 +12,7 @@ import {
   normalizeDockingHits,
   normalizeNoveltyReport,
   normalizePipelineResult,
+  RESULTS_PAGE_SIZE,
 } from "../workflow/phaseResults";
 
 /**
@@ -29,23 +30,26 @@ import {
  * two different jobs: the editable profile, then the scored compounds.
  */
 const FETCHERS = {
-  litminex: async (jobId, { page }) => {
+  litminex: async (jobId, { page, pageSize = RESULTS_PAGE_SIZE }) => {
     // Insights are a separate call and a nice-to-have: a failure there must not
     // blank out the article table, which is the actual content.
+    //
+    // pageSize is sent explicitly: without it the server picked its own (20 in
+    // the live example) while the table's "Showing x-y" assumed 10.
     const [results, insights] = await Promise.all([
-      litminexApi.getResults(jobId, page ? { page } : undefined),
+      litminexApi.getResults(jobId, { ...(page ? { page } : {}), pageSize }),
       litminexApi.getInsights(jobId).catch(() => null),
     ]);
     return {
-      ...normalizeLitminexResults(results),
+      ...normalizeLitminexResults(results, { pageSize }),
       insights: insights ? normalizeInsights(insights) : null,
     };
   },
 
   "curatex-profile": async (jobId) => normalizeCuratexProfile(await curatexApi.getProfile(jobId)),
 
-  "curatex-results": async (jobId, { page, pageSize }) =>
-    normalizeCuratexResults(await curatexApi.getResults(jobId, { page, pageSize })),
+  "curatex-results": async (jobId, { page, pageSize = RESULTS_PAGE_SIZE }) =>
+    normalizeCuratexResults(await curatexApi.getResults(jobId, { page, pageSize }), { pageSize }),
 
   screensuite: async (jobId) => normalizeDockingHits(await screensuiteApi.getHits(jobId)),
 
@@ -62,7 +66,8 @@ const FETCHERS = {
  * @param {object} options
  * @param {boolean} options.enabled   - default true
  * @param {number}  options.page      - forwarded to paginated endpoints
- * @param {number}  options.pageSize  - forwarded to CurateX results
+ * @param {number}  options.pageSize  - forwarded to the LitMineX and CurateX
+ *                                      tables (default RESULTS_PAGE_SIZE = 10)
  */
 const usePhaseResults = (kind, jobId, options = {}) => {
   const { enabled = true, page, pageSize } = options;

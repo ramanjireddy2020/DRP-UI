@@ -73,6 +73,26 @@ export const getSubgraphStats = async (graphJobId) =>
 export const exploreNode = async (graphJobId, nodeId) =>
   unwrap(await apiClient.post(`/agents/subgraph/${graphJobId}/explore`, { nodeId }));
 
+/* -------------------------------------------------------------------------- */
+/* MetaPath — analysis over a generated subgraph (collection folder 5b)        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Run meta-path analysis over a completed subgraph job. Returns 202 { jobId } —
+ * a NEW job that must be polled before the three readers below.
+ */
+export const analyzeMetapath = async (graphJobId) =>
+  unwrap(await apiClient.post("/agents/metapath/analyze", { jobId: graphJobId }));
+
+export const getMetapath = async (metapathJobId) =>
+  unwrap(await apiClient.get(`/agents/metapath/${metapathJobId}`));
+
+export const getMetapathScores = async (metapathJobId) =>
+  unwrap(await apiClient.get(`/agents/metapath/${metapathJobId}/scores`));
+
+export const getMetapathTraversals = async (metapathJobId) =>
+  unwrap(await apiClient.get(`/agents/metapath/${metapathJobId}/traversals`));
+
 const txkgApi = {
   INSIGHT_TABS,
   insightTabParam,
@@ -84,6 +104,10 @@ const txkgApi = {
   getSubgraph,
   getSubgraphStats,
   exploreNode,
+  analyzeMetapath,
+  getMetapath,
+  getMetapathScores,
+  getMetapathTraversals,
 };
 
 export default txkgApi;

@@ -1,61 +1,87 @@
-﻿import React, { useRef, useState } from "react";
+﻿import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Box,
   Typography,
   Button,
   IconButton,
-  Popover,
-  TextField,
 } from "@mui/material";
-import {
-  AddOutlined,
-  SearchOutlined,
-  UploadFileOutlined,
-  FolderOpenOutlined,
-  ChevronRightOutlined,
-} from "@mui/icons-material";
+import { AddOutlined } from "@mui/icons-material";
 import { BG_IMAGE } from "../WelcomeScreen";
 import NewProjectModal from "../NewProjectModal";
+import ComposerAddPopover, { ComposerAttachments } from "../Composer/ComposerAddPopover";
+import useComposer from "../../hooks/useComposer";
+import { getDashboardSummary, getQuickActions } from "../../services/researchApi";
+import { listSessions } from "../../services/api/sessions";
+import { formatUtcDateTime } from "../../utils/formatDate";
 
 const FONT      = "'Inter', sans-serif";
-const TEAL      = "#0ABFBC";
-const MUTED     = "#94A3B8";
-const BORDER    = "#E2E8F0";
-const TEXT_DARK = "#0F172A";
-const BG        = "#F8FAFC";
+const ERROR     = "#DC2626";
 
-const MOCK_PROJECTS = [
-  { name: "End to End Virtual Screening", dot: "#F97316" },
-  { name: "JAK2 \u2013 Thrombocytosis",  dot: TEAL      },
-  { name: "BRAF Melanoma Research",       dot: "#16A34A" },
-  { name: "HER2 Breast Cancer Study",     dot: "#D97706" },
-  { name: "Type 2 Diabetes \u2013 PPARG", dot: TEAL     },
+const WORKFLOW_ROUTE = "/dashboard/new-research/workflow";
+const RECENT_LIMIT = 4;
+
+const STAT_TILES = [
+  { key: "activeProjects",    label: "Active projects" },
+  { key: "targetsIdentified", label: "Targets identified" },
+  { key: "compoundsCurated",  label: "Compounds curated" },
+  { key: "patentsAnalysed",   label: "Patents analysed" },
 ];
 
-const RECENT_SESSIONS = [
-  { title: "Find protein targets for thrombocytosis", time: "Updated 18h ago"  },
-  { title: "find protein targets for TB",             time: "Updated Just now" },
-  { title: "high blood pressure",                     time: "Updated 18h ago"  },
-  { title: "Psoriasis",                               time: "Updated 1d ago"   },
-];
+const sectionLabelSx = {
+  fontFamily: FONT,
+  fontWeight: 600,
+  fontSize: "11px",
+  lineHeight: "13px",
+  letterSpacing: "1.2px",
+  textTransform: "uppercase",
+  color: "#667080",
+};
+
+const noteSx = { fontFamily: FONT, fontSize: "12px", color: "#8C99A6" };
+
+/* Counts as the API sent them; "—" when a field is missing. */
+const formatCount = (value) =>
+  typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("en-US") : "—";
+
+const errText = (err, fallback) => err?.userMessage || err?.message || fallback;
+
+/* Runs one GET on mount and tracks { data, loading, error }. */
+const useLoad = (loader) => {
+  const [state, setState] = useState({ data: null, loading: true, error: null });
+  useEffect(() => {
+    let active = true;
+    loader()
+      .then((data) => active && setState({ data, loading: false, error: null }))
+      .catch((err) => active && setState({ data: null, loading: false, error: errText(err, "Failed to load") }));
+    return () => {
+      active = false;
+    };
+  }, [loader]);
+  return state;
+};
+
+const loadRecentSessions = () => listSessions({ page: 1 });
 
 const HomePage = () => {
   const navigate = useNavigate();
   const inputRef = useRef(null);
+  const composer = useComposer();
+  const { query, setQuery, setModule } = composer;
 
-  const [query,           setQuery]           = useState("");
   const [addAnchorEl,     setAddAnchorEl]     = useState(null);
-  const [showProjectSub,  setShowProjectSub]  = useState(false);
-  const [projectSearch,   setProjectSearch]   = useState("");
-  const [selectedProject, setSelectedProject] = useState(null);
   const [createModalOpen, setCreateModalOpen] = useState(false);
 
+  const summary      = useLoad(getDashboardSummary);
+  const quickActions = useLoad(getQuickActions);
+  const recent       = useLoad(loadRecentSessions);
+
+  const quickActionItems = Array.isArray(quickActions.data) ? quickActions.data : [];
+  const recentItems = (Array.isArray(recent.data?.items) ? recent.data.items : []).slice(0, RECENT_LIMIT);
+
   const handleSubmit = () => {
-    if (!query.trim()) return;
-    navigate("/dashboard/new-research/workflow", {
-      state: { query: query.trim() },
-    });
+    if (!query.trim() || composer.uploading) return;
+    navigate(WORKFLOW_ROUTE, { state: composer.buildWorkflowState() });
   };
 
   const handleKeyDown = (e) => {
@@ -65,195 +91,10 @@ const HomePage = () => {
     }
   };
 
-  const closeAddPopover = () => {
-    setAddAnchorEl(null);
-    setShowProjectSub(false);
-    setProjectSearch("");
-  };
-
-  const renderAddPopover = () => {
-    const filteredProjects = MOCK_PROJECTS.filter((p) =>
-      !projectSearch
-        ? true
-        : p.name.toLowerCase().includes(projectSearch.toLowerCase())
-    );
-
-    return (
-      <Popover
-        open={Boolean(addAnchorEl)}
-        anchorEl={addAnchorEl}
-        onClose={closeAddPopover}
-        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
-        transformOrigin={{ vertical: "top", horizontal: "left" }}
-        elevation={0}
-        PaperProps={{
-          sx: {
-            border: `1px solid ${BORDER}`,
-            borderRadius: "10px",
-            boxShadow: "0px 8px 24px rgba(0,0,0,0.10)",
-            mt: "8px",
-            overflow: "hidden",
-          },
-        }}
-      >
-        <Box sx={{ display: "flex", maxWidth: "100%" }}>
-          <Box sx={{ width: "220px", py: "6px", flexShrink: 0 }}>
-            <Box
-              sx={{
-                display: "flex",
-                alignItems: "center",
-                gap: "10px",
-                px: "14px",
-                py: "10px",
-                cursor: "pointer",
-                "&:hover": { bgcolor: BG },
-              }}
-            >
-              <UploadFileOutlined sx={{ fontSize: 16, color: MUTED, flexShrink: 0 }} />
-              <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 500, color: TEXT_DARK }}>
-                Upload files or data
-              </Typography>
-            </Box>
-
-            <Box
-              onClick={() => setShowProjectSub((prev) => !prev)}
-              sx={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: "10px",
-                px: "14px",
-                py: "10px",
-                cursor: "pointer",
-                bgcolor: showProjectSub ? BG : "transparent",
-                "&:hover": { bgcolor: BG },
-              }}
-            >
-              <Box sx={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                <FolderOpenOutlined sx={{ fontSize: 16, color: MUTED, flexShrink: 0 }} />
-                <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 500, color: TEXT_DARK }}>
-                  Add to project
-                </Typography>
-              </Box>
-              <ChevronRightOutlined sx={{ fontSize: 15, color: MUTED }} />
-            </Box>
-          </Box>
-
-          {showProjectSub && (
-            <Box
-              sx={{
-                width: "220px",
-                borderLeft: `1px solid ${BORDER}`,
-                py: "12px",
-                display: "flex",
-                flexDirection: "column",
-                maxHeight: "320px",
-              }}
-            >
-              <Typography
-                sx={{
-                  fontFamily: FONT,
-                  fontSize: "11px",
-                  fontWeight: 700,
-                  color: MUTED,
-                  textTransform: "uppercase",
-                  px: "14px",
-                  mb: "8px",
-                }}
-              >
-                Select Project
-              </Typography>
-
-              <Box
-                sx={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "6px",
-                  mx: "10px",
-                  mb: "6px",
-                  px: "8px",
-                  height: "32px",
-                  border: `1px solid ${BORDER}`,
-                  borderRadius: "6px",
-                  bgcolor: BG,
-                }}
-              >
-                <SearchOutlined sx={{ fontSize: 13, color: MUTED, flexShrink: 0 }} />
-                <TextField
-                  variant="standard"
-                  placeholder="Search projects..."
-                  value={projectSearch}
-                  onChange={(e) => setProjectSearch(e.target.value)}
-                  fullWidth
-                  InputProps={{ disableUnderline: true }}
-                  sx={{
-                    "& input": { fontFamily: FONT, fontSize: "12px", color: TEXT_DARK, py: 0 },
-                    "& input::placeholder": { color: MUTED, opacity: 1 },
-                  }}
-                />
-              </Box>
-
-              <Box sx={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
-                {filteredProjects.map((project) => (
-                  <Box
-                    key={project.name}
-                    onClick={() => {
-                      setSelectedProject(project);
-                      closeAddPopover();
-                    }}
-                    sx={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "8px",
-                      px: "14px",
-                      py: "8px",
-                      cursor: "pointer",
-                      bgcolor: selectedProject?.name === project.name ? "#E6FAFA" : "transparent",
-                      "&:hover": { bgcolor: "#E6FAFA" },
-                    }}
-                  >
-                    <Box sx={{ width: 8, height: 8, borderRadius: "50%", bgcolor: project.dot, flexShrink: 0 }} />
-                    <Typography
-                      sx={{
-                        fontFamily: FONT,
-                        fontSize: "12.5px",
-                        color: TEXT_DARK,
-                        whiteSpace: "nowrap",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                      }}
-                    >
-                      {project.name}
-                    </Typography>
-                  </Box>
-                ))}
-              </Box>
-
-              <Box
-                onClick={() => {
-                  closeAddPopover();
-                  setCreateModalOpen(true);
-                }}
-                sx={{
-                  display: "flex",
-                  alignItems: "center",
-                  px: "14px",
-                  py: "8px",
-                  mt: "2px",
-                  borderTop: `1px solid ${BORDER}`,
-                  cursor: "pointer",
-                  "&:hover": { bgcolor: BG },
-                }}
-              >
-                <Typography sx={{ fontFamily: FONT, fontSize: "12.5px", fontWeight: 600, color: TEAL }}>
-                  + Create new project
-                </Typography>
-              </Box>
-            </Box>
-          )}
-        </Box>
-      </Popover>
-    );
+  const applyQuickAction = (action) => {
+    setQuery(action.prefillQuery || action.label || "");
+    setModule(action.module || null);
+    inputRef.current?.focus();
   };
 
   return (
@@ -469,7 +310,7 @@ const HomePage = () => {
             }}
           >
             {/* toolbar-left */}
-            <Box sx={{ display: "flex", flexDirection: "row", alignItems: "center", padding: 0, gap: "8px", flexShrink: 0 }}>
+            <Box sx={{ display: "flex", flexDirection: "row", alignItems: "center", padding: 0, gap: "8px", flex: 1, minWidth: 0 }}>
               <IconButton
                 size="small"
                 onClick={(e) => setAddAnchorEl(e.currentTarget)}
@@ -491,13 +332,14 @@ const HomePage = () => {
               >
                 <AddOutlined sx={{ width: "14px", height: "14px", fontSize: "14px", color: "#475569" }} />
               </IconButton>
+              <ComposerAttachments composer={composer} />
             </Box>
 
             {/* toolbar-right */}
             <Box sx={{ display: "flex", flexDirection: "row", alignItems: "center", padding: 0, gap: "12px", flexShrink: 0 }}>
               <Button
                 onClick={handleSubmit}
-                disabled={!query.trim()}
+                disabled={!query.trim() || composer.uploading}
                 sx={{
                   display: "flex",
                   justifyContent: "center",
@@ -533,7 +375,57 @@ const HomePage = () => {
 
         </Box>
 
-        {/* quick-start — RECENT SESSIONS */}
+        {/* quick-actions — GET /dashboard/quick-actions */}
+        {(quickActions.loading || quickActions.error || quickActionItems.length > 0) && (
+          <Box sx={{ display: "flex", flexDirection: "column", gap: "10px", width: "100%" }}>
+            <Typography sx={sectionLabelSx}>QUICK START</Typography>
+            {quickActions.loading && <Typography sx={noteSx}>Loading suggestions...</Typography>}
+            {quickActions.error && (
+              <Typography sx={{ ...noteSx, color: ERROR }}>
+                Couldn&apos;t load suggestions: {quickActions.error}
+              </Typography>
+            )}
+            {quickActionItems.length > 0 && (
+              <Box sx={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                {quickActionItems.map((action, i) => (
+                  <Box
+                    key={`${action.label}-${i}`}
+                    component="button"
+                    type="button"
+                    onClick={() => applyQuickAction(action)}
+                    title={action.prefillQuery}
+                    sx={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      height: "30px",
+                      px: "12px",
+                      bgcolor: "#FFFFFF",
+                      border: "1px solid #EBEDF2",
+                      borderRadius: "999px",
+                      cursor: "pointer",
+                      fontFamily: FONT,
+                      fontSize: "12.5px",
+                      fontWeight: 500,
+                      color: "#1A1F26",
+                      boxShadow: "0px 2px 8px rgba(0, 0, 0, 0.0392157)",
+                      "&:hover": { borderColor: "#D1D5DB", boxShadow: "0px 4px 16px rgba(0, 0, 0, 0.08)" },
+                    }}
+                  >
+                    {action.module && (
+                      <Box component="span" sx={{ fontSize: "10px", fontWeight: 600, letterSpacing: "0.5px", color: "#00BCD4", textTransform: "uppercase" }}>
+                        {action.module}
+                      </Box>
+                    )}
+                    {action.label}
+                  </Box>
+                ))}
+              </Box>
+            )}
+          </Box>
+        )}
+
+        {/* quick-start — RECENT SESSIONS (GET /sessions?page=1) */}
         <Box
           sx={{
             display: "flex",
@@ -545,21 +437,20 @@ const HomePage = () => {
             alignSelf: "stretch",
           }}
         >
-          <Typography
-            sx={{
-              fontFamily: FONT,
-              fontWeight: 600,
-              fontSize: "11px",
-              lineHeight: "13px",
-              letterSpacing: "1.2px",
-              textTransform: "uppercase",
-              color: "#667080",
-            }}
-          >
-            RECENT SESSIONS
-          </Typography>
+          <Typography sx={sectionLabelSx}>RECENT SESSIONS</Typography>
+
+          {recent.loading && <Typography sx={noteSx}>Loading sessions...</Typography>}
+          {recent.error && (
+            <Typography sx={{ ...noteSx, color: ERROR }}>
+              Couldn&apos;t load recent sessions: {recent.error}
+            </Typography>
+          )}
+          {!recent.loading && !recent.error && recentItems.length === 0 && (
+            <Typography sx={noteSx}>No sessions yet — start one above.</Typography>
+          )}
 
           {/* suggestion-chips 2x2 grid */}
+          {recentItems.length > 0 && (
           <Box
             sx={{
               display: "flex",
@@ -573,12 +464,12 @@ const HomePage = () => {
               alignSelf: "stretch",
             }}
           >
-            {RECENT_SESSIONS.map((session, i) => (
+            {recentItems.map((session) => (
               <Box
-                key={i}
+                key={session.id}
                 onClick={() =>
-                  navigate("/dashboard/new-research/workflow", {
-                    state: { query: session.title },
+                  navigate(WORKFLOW_ROUTE, {
+                    state: { sessionId: session.id },
                   })
                 }
                 sx={{
@@ -613,7 +504,7 @@ const HomePage = () => {
                     textTransform: "uppercase",
                   }}
                 >
-                  CONTINUE
+                  CONTINUE{session.module ? ` · ${session.module}` : ""}
                 </Typography>
 
                 <Typography
@@ -626,7 +517,7 @@ const HomePage = () => {
                     maxWidth: "220px",
                   }}
                 >
-                  {session.title}
+                  {session.title || "Untitled session"}
                 </Typography>
 
                 <Typography
@@ -638,19 +529,75 @@ const HomePage = () => {
                     color: "#8C99A6",
                   }}
                 >
-                  {session.time}
+                  Updated {formatUtcDateTime(session.updatedAt)}
                 </Typography>
               </Box>
             ))}
           </Box>
+          )}
+        </Box>
+
+        {/* stat tiles — GET /dashboard/summary */}
+        <Box sx={{ display: "flex", flexDirection: "column", gap: "12px", width: "100%" }}>
+          <Typography sx={sectionLabelSx}>AT A GLANCE</Typography>
+          {summary.error ? (
+            <Typography sx={{ ...noteSx, color: ERROR }}>
+              Couldn&apos;t load dashboard summary: {summary.error}
+            </Typography>
+          ) : (
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: { xs: "repeat(2, 1fr)", sm: "repeat(4, 1fr)" },
+                gap: "12px",
+                width: "100%",
+              }}
+            >
+              {STAT_TILES.map((tile) => {
+                const value = summary.data?.[tile.key];
+                return (
+                  <Box
+                    key={tile.key}
+                    sx={{
+                      boxSizing: "border-box",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "4px",
+                      padding: "14px 16px",
+                      background: "#FFFFFF",
+                      border: "1px solid #EBEDF2",
+                      boxShadow: "0px 2px 8px rgba(0, 0, 0, 0.0392157)",
+                      borderRadius: "12px",
+                    }}
+                  >
+                    <Typography sx={{ fontFamily: FONT, fontWeight: 700, fontSize: "22px", lineHeight: "26px", color: "#1A1F26" }}>
+                      {summary.loading ? "…" : formatCount(value)}
+                    </Typography>
+                    <Typography sx={{ fontFamily: FONT, fontWeight: 400, fontSize: "11px", lineHeight: "13px", color: "#8C99A6" }}>
+                      {tile.label}
+                    </Typography>
+                  </Box>
+                );
+              })}
+            </Box>
+          )}
         </Box>
       </Box>
 
-      {renderAddPopover()}
+      <ComposerAddPopover
+        anchorEl={addAnchorEl}
+        onClose={() => setAddAnchorEl(null)}
+        composer={composer}
+        onCreateProject={() => setCreateModalOpen(true)}
+      />
 
       <NewProjectModal
         open={createModalOpen}
         onClose={() => setCreateModalOpen(false)}
+        onCreated={(project) => {
+          composer.selectProject(project);
+          composer.reloadProjects();
+        }}
       />
     </Box>
   );

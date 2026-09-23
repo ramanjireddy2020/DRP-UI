@@ -5,6 +5,7 @@ import {
   createStep as createStepRequest,
   rerunStep as rerunStepRequest,
   postMessage as postMessageRequest,
+  patchSession as patchSessionRequest,
 } from "../services/api/sessions";
 import {
   MODULES,
@@ -62,6 +63,9 @@ const initialState = {
   sessionId: null,
   status: "idle", // idle | creating | ready | error
   error: null,
+  /** The session's own title and status as the server reports them. */
+  title: null,
+  sessionStatus: null,
   /** Raw supervisor payload, kept for debugging an unresolved module. */
   lastSupervisorResponse: null,
   /** The module key the user is currently looking at. */
@@ -104,7 +108,118 @@ function reducer(state, action) {
         status: "ready",
         error: null,
         lastSupervisorResponse: raw ?? state.lastSupervisorResponse,
+        title: raw?.title ?? state.title,
+        sessionStatus: raw?.status ?? state.sessionStatus,
       };
+    }
+
+    /** PATCH /sessions/{id} answered — keep its title/status. */
+    case "SESSION_PATCHED":
+      return {
+        ...state,
+        title: action.raw?.title ?? state.title,
+        sessionStatus: action.raw?.status ?? state.sessionStatus,
+      };
+
+    /**
+     * Fold a re-fetched GET /sessions/{id} into local state after a job
+     * finishes.
+     *
+     * - Step ids and summaries come from the server's step list. The step that
+     *   carries the module's current jobId wins, so a chat or rerun addresses
+     *   the step the server actually recorded for that run (this is what
+     *   resolves the @Module stepId uncertainty on POST /messages).
+     * - The server's messages[] are merged, not replaced: anything already in
+     *   the thread (the user's own turns, chat replies) is matched by role and
+     *   text and skipped, so only the agent's write-ups that were never shown
+     *   are appended — each under the module its step belongs to.
+     */
+    case "MERGE_SERVER_SESSION": {
+      const { raw } = action;
+      if (!raw || typeof raw !== "object") return state;
+
+      let next = {
+        ...state,
+        title: raw.title ?? state.title,
+        sessionStatus: raw.status ?? state.sessionStatus,
+      };
+
+      const serverSteps = Array.isArray(raw.steps) ? raw.steps : [];
+      const byModule = {};
+      serverSteps.forEach((step) => {
+        const parsed = parseStepResponse(step);
+        if (!parsed.moduleKey) return;
+        (byModule[parsed.moduleKey] = byModule[parsed.moduleKey] || []).push({ step, parsed });
+      });
+
+      Object.entries(byModule).forEach(([key, list]) => {
+        const local = next.steps[key];
+        if (!local || !local.visited) return;
+
+        const match =
+          list.find((entry) => entry.parsed.jobId && entry.parsed.jobId === local.jobId) ??
+          // No local job to match on: fall back to the latest step for the module.
+          (local.jobId ? null : list[list.length - 1]);
+        if (!match) return;
+
+        const patch = {};
+        if (match.parsed.stepId) patch.stepId = match.parsed.stepId;
+        if (match.step?.summary) {
+          patch.data = { ...local.data, summary: match.step.summary };
+        }
+        next = withStep(next, key, patch);
+      });
+
+      const serverMessages = Array.isArray(raw.messages) ? raw.messages : [];
+      if (serverMessages.length) {
+        const signature = (role, text) =>
+          `${String(role || "").toLowerCase()}|${String(text ?? "").trim()}`;
+
+        // Multiset of what is already on screen, so a question asked twice is
+        // matched twice rather than collapsing into one.
+        const onScreen = new Map();
+        next.conversation.forEach((m) => {
+          if (m.isError) return;
+          const k = signature(m.role, m.text);
+          onScreen.set(k, (onScreen.get(k) || 0) + 1);
+        });
+
+        const additions = [];
+        serverMessages.forEach((m) => {
+          if (!m?.content) return;
+          const k = signature(m.role, m.content);
+          const seen = onScreen.get(k) || 0;
+          if (seen > 0) {
+            onScreen.set(k, seen - 1);
+            return;
+          }
+          const owner = serverSteps.find((s) => s.id === m.stepId);
+          const key = owner ? parseStepResponse(owner).moduleKey : null;
+          additions.push({
+            role: m.role,
+            text: m.content,
+            agentName: m.agentName || null,
+            stepId: m.stepId || null,
+            moduleKey: key,
+            stepIndex: key ? MODULE_BY_KEY[key]?.index ?? null : null,
+          });
+        });
+
+        if (additions.length) {
+          const stamped = additions.map((message, offset) => ({
+            id: `m${next.seq + offset + 1}`,
+            at: Date.now(),
+            ...message,
+          }));
+          next = {
+            ...next,
+            conversation: [...next.conversation, ...stamped],
+            seq: next.seq + stamped.length,
+          };
+        }
+      }
+
+      return next;
     }
 
     /**
@@ -402,6 +517,38 @@ const useWorkflowSession = () => {
     return { sessionId: sessionIdRef.current, raw };
   }, []);
 
+  /**
+   * Re-read GET /sessions/{id} and merge it in. Called after each job
+   * completes, which is when the backend has written the agent's message and
+   * the step summary. A failure here is not worth an error screen — the
+   * results themselves are already on the page — so it resolves to null.
+   */
+  const refreshSession = useCallback(async () => {
+    const sessionId = sessionIdRef.current;
+    if (!sessionId) return null;
+    try {
+      const raw = await getSessionRequest(sessionId);
+      dispatch({ type: "MERGE_SERVER_SESSION", raw });
+      return raw;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("[session] could not re-read the session", err);
+      return null;
+    }
+  }, []);
+
+  /**
+   * PATCH /sessions/{id} — rename, or mark Saved ("End Task"). Throws on
+   * failure so the caller can show the reason.
+   */
+  const updateSession = useCallback(async (payload) => {
+    const sessionId = sessionIdRef.current;
+    if (!sessionId) throw new Error("There is no session to save.");
+    const raw = await patchSessionRequest(sessionId, payload);
+    dispatch({ type: "SESSION_PATCHED", raw: { ...payload, ...(raw || {}) } });
+    return raw;
+  }, []);
+
   /** Activate a module directly. */
   const activateModule = useCallback((key, opts = {}) => {
     dispatch({ type: "ACTIVATE_MODULE", key, ...opts });
@@ -665,10 +812,10 @@ const useWorkflowSession = () => {
    * Run the active step again with different parameters. The original is kept;
    * the new step points back at it via rerunOfStepId.
    */
-  const rerunActiveStep = useCallback(
-    async (params = {}) => {
+  const rerunStep = useCallback(
+    async (moduleKey, params = {}) => {
       const sessionId = sessionIdRef.current;
-      const key = state.activeKey;
+      const key = moduleKey ?? state.activeKey;
       const stepId = key ? state.steps[key]?.stepId : null;
 
       if (!sessionId || !stepId) {
@@ -710,6 +857,12 @@ const useWorkflowSession = () => {
       return { ...parsed, moduleKey: landedKey };
     },
     [state.activeKey, state.steps]
+  );
+
+  /** Rerun whichever step is on screen. */
+  const rerunActiveStep = useCallback(
+    (params = {}) => rerunStep(state.activeKey, params),
+    [rerunStep, state.activeKey]
   );
 
   /**
@@ -779,6 +932,8 @@ const useWorkflowSession = () => {
     activationOrder: state.activationOrder,
     conversation: state.conversation,
     pending: state.pending,
+    title: state.title,
+    sessionStatus: state.sessionStatus,
 
     // derived
     activeKey: state.activeKey,
@@ -795,6 +950,8 @@ const useWorkflowSession = () => {
     // actions
     startSession,
     resumeSession,
+    refreshSession,
+    updateSession,
     activateModule,
     goToModule,
     goToIndex,
@@ -806,6 +963,7 @@ const useWorkflowSession = () => {
     messagesForModule,
     handOff,
     sendMessage,
+    rerunStep,
     rerunActiveStep,
     reset,
 

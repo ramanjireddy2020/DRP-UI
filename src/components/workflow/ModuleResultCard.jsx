@@ -22,8 +22,18 @@ import { moduleDisplayFor } from "../../workflow/moduleMap";
  */
 const ModuleResultCard = ({
   moduleKey,
-  /** "running" | "done" | "failed" | "idle" — drives the status chip. */
+  /**
+   * "running" | "done" | "partial" | "failed" | "idle" — drives the status chip.
+   * "partial" is a job that completed with at least one failed stage (a
+   * pipeline run whose job says "completed" while a stage says "failed").
+   */
   status = "idle",
+  /**
+   * Shorthand for the same thing: when true, a "done" status renders as
+   * "partial". Lets the caller pass the job status and the stage check
+   * separately.
+   */
+  hasFailedStages = false,
   defaultExpanded = true,
   /** Highlights the card the session is currently on. */
   isActive = false,
@@ -33,12 +43,19 @@ const ModuleResultCard = ({
 
   const display = moduleDisplayFor(moduleKey) ?? { label: moduleKey, role: null };
 
+  const effectiveStatus = status === "done" && hasFailedStages ? "partial" : status;
+
   const statusChip = {
     running: { label: "Running", color: "#B4670E", bg: "rgba(180,103,14,0.12)" },
     done: { label: "Completed", color: "#0F766E", bg: "rgba(15,118,110,0.12)" },
+    partial: {
+      label: "Completed with failures",
+      color: "#B45309",
+      bg: "rgba(245,158,11,0.16)",
+    },
     failed: { label: "Failed", color: "#B4232C", bg: "rgba(180,35,44,0.12)" },
     idle: null,
-  }[status];
+  }[effectiveStatus];
 
   return (
     <Box
@@ -85,7 +102,7 @@ const ModuleResultCard = ({
             flexShrink: 0,
           }}
         >
-          {status === "running" ? (
+          {effectiveStatus === "running" ? (
             <CircularProgress size={12} sx={{ color: TEAL }} />
           ) : (
             <svg width="13" height="13" viewBox="0 0 14 14" fill="none">

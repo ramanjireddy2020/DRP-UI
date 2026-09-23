@@ -1,10 +1,12 @@
 import React from "react";
-import { Outlet } from "react-router-dom";
+import { Outlet, useLocation } from "react-router-dom";
 import { signOut } from "@aws-amplify/auth";
 import { Box } from "@mui/material";
 import SideBar from "../SideBar/SideBar";
 
 const MainLayout = ({ children }) => {
+  const location = useLocation();
+
   const handleLogout = async () => {
     await signOut();
   };
@@ -12,7 +14,7 @@ const MainLayout = ({ children }) => {
   return (
     <Box sx={{ display: "flex", height: "100vh", overflow: "hidden" }}>
       {/* Sidebar */}
-      <SideBar onLogout={handleLogout} />
+      <SideBar onLogout={handleLogout} activePath={location.pathname} />
 
       {/* Main content area */}
       <Box sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden", bgcolor: "#F8FAFC" }}>

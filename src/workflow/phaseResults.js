@@ -26,6 +26,38 @@ const num = (value, digits = 3) => {
   return Number.isFinite(n) ? n.toFixed(digits) : "—";
 };
 
+/** The page size the UI asks for on the paginated tables. */
+export const RESULTS_PAGE_SIZE = 10;
+
+/**
+ * How many rows the server actually put on each page.
+ *
+ * The request carries pageSize, but the live LitMineX example came back with
+ * 20 rows and no pageSize field, so the value asked for cannot be trusted for
+ * the row offset. A page before the last is always full, so its row count is
+ * the page size; on the last page the size is recovered from the total.
+ */
+const derivePageSize = (payload, rowCount, requested) => {
+  const explicit = Number(payload?.pageSize);
+  if (explicit > 0) return explicit;
+
+  const page = Number(payload?.page) || 1;
+  const totalPages = Number(payload?.totalPages) || 1;
+  const total = Number(payload?.totalArticles ?? payload?.totalCompounds ?? payload?.total);
+
+  if (page < totalPages && rowCount > 0) return rowCount;
+  // On the last page, the size asked for is right whenever it agrees with the
+  // server's own page count.
+  if (requested > 0 && Number.isFinite(total) && Math.ceil(total / requested) === totalPages) {
+    return requested;
+  }
+  if (totalPages > 1 && Number.isFinite(total)) {
+    const size = (total - rowCount) / (totalPages - 1);
+    if (Number.isInteger(size) && size > 0) return size;
+  }
+  return requested || rowCount || RESULTS_PAGE_SIZE;
+};
+
 /* -------------------------------------------------------------------------- */
 /* LitMineX                                                                   */
 /* -------------------------------------------------------------------------- */
@@ -40,15 +72,19 @@ const num = (value, digits = 3) => {
  * come from GET /articles/{id}, so the field is left null and the detail panel
  * fills it in when opened.
  */
-export const normalizeLitminexResults = (payload) => {
+export const normalizeLitminexResults = (payload, { pageSize: requested } = {}) => {
   const items = Array.isArray(payload?.items)
     ? payload.items
     : Array.isArray(payload)
     ? payload
     : [];
 
+  const page = Number(payload?.page) || 1;
+  const pageSize = derivePageSize(payload, items.filter(Boolean).length, requested);
+
   const articles = items
-    .map((a) => {
+    .filter(Boolean)
+    .map((a, index) => {
       if (!a) return null;
       const id = a.id ?? a.articleId ?? a.pmid ?? null;
       if (!id) return null;
@@ -61,6 +97,9 @@ export const normalizeLitminexResults = (payload) => {
 
       return {
         id,
+        // The "#" column: numbering continues across pages instead of
+        // restarting at 1.
+        position: (page - 1) * pageSize + index + 1,
         title: a.title ?? "Untitled",
         year: a.year ?? "—",
         confidence: pct(a.confidenceScore ?? a.confidence_score ?? a.confidence),
@@ -79,10 +118,23 @@ export const normalizeLitminexResults = (payload) => {
     hasData: articles.length > 0,
     articles,
     total: Number(payload?.totalArticles ?? payload?.total ?? articles.length) || articles.length,
-    page: Number(payload?.page) || 1,
+    page,
+    pageSize,
     totalPages: Number(payload?.totalPages) || 1,
   };
 };
+
+/**
+ * GET /agents/litminex/{jobId}/results/{articleId}/preview
+ *   { id, title, snippet, confidenceScore, foundKeywords }
+ */
+export const normalizeArticlePreview = (payload) => ({
+  id: payload?.id ?? null,
+  title: payload?.title ?? null,
+  snippet: payload?.snippet ?? null,
+  confidence: payload?.confidenceScore != null ? pct(payload.confidenceScore) : null,
+  keywords: Array.isArray(payload?.foundKeywords) ? payload.foundKeywords : [],
+});
 
 /** GET /agents/litminex/{jobId}/insights → { tab, content, items } */
 export const normalizeInsights = (payload) => ({
@@ -121,58 +173,68 @@ const PROFILE_FIELDS = [
 
 const squash = (value) => String(value ?? "").toLowerCase().replace(/[\s_-]+/g, "");
 
+const humanize = (name) =>
+  String(name ?? "")
+    .replace(/[_-]+/g, " ")
+    // molecularWeight → Molecular Weight; acronyms like hERG or LogP stay as
+    // written.
+    .replace(/([a-z])([A-Z][a-z])/g, "$1 $2")
+    .replace(/^[a-z](?![A-Z])/, (c) => c.toUpperCase())
+    .trim();
+
 /**
  * GET /agents/curatex/{jobId}/profile
  *   { target, profile, criteria: [{ name, value, weight }], ligandCount,
  *     editable, warnings }
  *
- * Returns both the flat object the profile form binds to and the raw criteria,
- * because the weights have to go back out in POST /agents/curatex/compounds and
- * the flat form would lose them.
+ * The rows are the criteria exactly as returned, in the API's order. This used
+ * to be a fixed list of nine form fields: criteria outside that list were
+ * hidden (while their weights were still sent), and fields the API did not
+ * return showed up as blank rows. PROFILE_FIELDS now only supplies a friendlier
+ * label when a criterion name matches one of them.
+ *
+ * Row keys are the matching form field's key (so edits made before this change
+ * keep their meaning) or the criterion's own name. `fieldToCriterion` maps each
+ * row key back to the API's name for POST /agents/curatex/compounds.
  */
 export const normalizeCuratexProfile = (payload) => {
   const criteria = Array.isArray(payload?.criteria) ? payload.criteria : [];
 
-  const byName = new Map(criteria.map((c) => [squash(c?.name), c]));
-
+  /** Row key → criterion value, in the API's order. */
   const profileData = {};
 
-  /**
-   * Weights keyed BY FORM FIELD, because that is how the profile table reads
-   * them (`weights[key]` where key comes from Object.entries(profileData)).
-   */
+  /** Row key → display label. */
+  const labels = {};
+
+  /** Row key → weight, on the API's own scale (e.g. 1.0). */
   const weights = {};
 
   /** The same weights keyed by the API's own criterion names, for the POST. */
   const apiWeights = {};
 
-  /** form field → API criterion name, so edits can be translated back. */
+  /** Row key → API criterion name, so edits can be translated back. */
   const fieldToCriterion = {};
 
-  PROFILE_FIELDS.forEach((field) => {
-    const hit =
-      byName.get(squash(field.key)) ??
-      field.aliases.map((a) => byName.get(a)).find(Boolean) ??
-      null;
-
-    profileData[field.key] = hit?.value ?? "";
-
-    if (hit) {
-      fieldToCriterion[field.key] = hit.name;
-      if (hit.weight != null) {
-        weights[field.key] = hit.weight;
-        apiWeights[hit.name] = hit.weight;
-      }
-    }
-  });
-
-  // Anything the backend sent that the form has no row for still has to reach
-  // the compounds call, or the researcher's weighting is silently dropped.
   criteria.forEach((c) => {
-    if (c?.name != null && c.weight != null && !(c.name in apiWeights)) {
-      apiWeights[c.name] = c.weight;
-      weights[c.name] = c.weight;
-      fieldToCriterion[c.name] = c.name;
+    if (c?.name == null || c.name === "") return;
+
+    const name = String(c.name);
+    const squashed = squash(name);
+    const field = PROFILE_FIELDS.find(
+      (f) => squash(f.key) === squashed || f.aliases.includes(squashed)
+    );
+
+    const key = field && !(field.key in profileData) ? field.key : name;
+    // A duplicate name has nowhere distinct to go; the first one wins.
+    if (key in profileData) return;
+
+    profileData[key] = c.value ?? "";
+    labels[key] = field?.label ?? humanize(name);
+    fieldToCriterion[key] = name;
+
+    if (c.weight != null && c.weight !== "") {
+      weights[key] = c.weight;
+      apiWeights[name] = c.weight;
     }
   });
 
@@ -180,6 +242,7 @@ export const normalizeCuratexProfile = (payload) => {
     hasData: criteria.length > 0 || Boolean(payload?.target),
     target: payload?.target ?? null,
     profileData,
+    labels,
     criteria,
     weights,
     apiWeights,
@@ -200,9 +263,10 @@ export const normalizeCuratexProfile = (payload) => {
  * whatever `criteria[].name` it sent, and a parameter the researcher added by
  * hand exists in neither map.
  *
- * Values are passed through in the API's own numeric scale — the profile
- * returns e.g. `weight: 1.0` while the table renders a "%" suffix, and
- * reinterpreting the number to match the suffix would change what is scored.
+ * Values are passed through in the API's own numeric scale (the profile
+ * returns e.g. `weight: 1.0`, and the table shows and edits that same number).
+ * Only weights go out: the compounds contract has no field for criterion
+ * values.
  */
 export const toApiWeights = (formWeights, profile) => {
   if (!formWeights || typeof formWeights !== "object") return profile?.apiWeights ?? {};
@@ -228,18 +292,21 @@ export const CURATEX_PROFILE_FIELDS = PROFILE_FIELDS;
  *   { totalCompounds, page, totalPages, target, items: [{ name, score, … }] }
  *
  * The fixture carried `matchedProps` / `mismatchedProps` as comma strings. The
- * API's example only shows name and score, so those are built from whatever
- * match detail comes back and left empty rather than invented — an empty
- * column is honest, a fabricated one is not.
+ * API's example only shows name and score, so those are read if present and
+ * left empty otherwise — the table hides the columns when no row has them.
  */
-export const normalizeCuratexResults = (payload) => {
+export const normalizeCuratexResults = (payload, { pageSize: requested } = {}) => {
   const items = Array.isArray(payload?.items)
     ? payload.items
     : Array.isArray(payload)
     ? payload
     : [];
 
+  const page = Number(payload?.page) || 1;
+  const pageSize = derivePageSize(payload, items.filter(Boolean).length, requested);
+
   const compounds = items
+    .filter(Boolean)
     .map((c, index) => {
       if (!c) return null;
       const name = c.name ?? c.compound ?? c.drug ?? null;
@@ -253,7 +320,8 @@ export const normalizeCuratexResults = (payload) => {
       const scoreNum = Number(rawScore);
 
       return {
-        rank: c.rank ?? index + 1,
+        // Ranks continue across pages instead of restarting at 1.
+        rank: c.rank ?? (page - 1) * pageSize + index + 1,
         name,
         matchedProps: asText(matched),
         mismatchedProps: asText(mismatched),
@@ -275,7 +343,8 @@ export const normalizeCuratexResults = (payload) => {
     compounds,
     target: payload?.target ?? null,
     total: Number(payload?.totalCompounds ?? payload?.total ?? compounds.length) || compounds.length,
-    page: Number(payload?.page) || 1,
+    page,
+    pageSize,
     totalPages: Number(payload?.totalPages) || 1,
   };
 };
@@ -289,8 +358,10 @@ export const normalizeCuratexResults = (payload) => {
  *   [{ mode, compound, protein, affinityKcalPerMol, outputFile }]
  *
  * The fixture also carried proteinLigand / proteinValue / ligand, which were
- * PyMOL output file stems. Only `outputFile` exists in the API, so those
- * columns are derived from it where possible and left blank otherwise.
+ * PyMOL output file stems. Only `outputFile` exists in the API (and it is ""
+ * in the live example), so proteinLigand is derived from it where possible and
+ * proteinValue is always empty; the table renders those columns only when some
+ * row has a value.
  *
  * In practice this normaliser will rarely run: docking cannot complete on this
  * deployment.
@@ -379,6 +450,8 @@ export const normalizeNoveltyReport = (payload) => {
  * that says what actually happened — a single job status of "completed" can
  * still mean 4 of 5.
  */
+const FAILED_STAGE_STATUSES = ["failed", "error", "cancelled", "canceled"];
+
 export const normalizePipelineResult = (payload) => {
   const r = payload?.result && typeof payload.result === "object" ? payload.result : payload;
   const stages = Array.isArray(r?.stages) ? r.stages : [];
@@ -386,22 +459,27 @@ export const normalizePipelineResult = (payload) => {
   const rows = stages.map((s) => ({
     module: s?.module ?? "—",
     status: s?.status ?? "Unknown",
-    failed: String(s?.status ?? "").toLowerCase() === "failed",
+    failed: FAILED_STAGE_STATUSES.includes(String(s?.status ?? "").toLowerCase()),
     summary: s?.summary ?? null,
   }));
+
+  const failedCount = rows.filter((s) => s.failed).length;
 
   return {
     hasData: rows.length > 0,
     stages: rows,
     summary: r?.summary ?? null,
-    completed: rows.filter((s) => !s.failed).length,
+    completed: rows.length - failedCount,
     total: rows.length,
+    /** True when the job "completed" but at least one stage did not. */
+    hasFailures: failedCount > 0,
   };
 };
 
 const phaseResults = {
   normalizeLitminexResults,
   normalizeInsights,
+  normalizeArticlePreview,
   normalizeCuratexProfile,
   toApiWeights,
   normalizeCuratexResults,
@@ -409,6 +487,7 @@ const phaseResults = {
   normalizeNoveltyReport,
   normalizePipelineResult,
   CURATEX_PROFILE_FIELDS,
+  RESULTS_PAGE_SIZE,
 };
 
 export default phaseResults;

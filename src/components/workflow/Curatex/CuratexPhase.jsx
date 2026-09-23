@@ -10,36 +10,37 @@ import {
   AddOutlined,
   DeleteOutlineOutlined,
 } from "@mui/icons-material";
-import {
-  FONT,
-  TEAL,
-  USER_MSG_BG,
-  GRAY_BG,
-  BORDER,
-  TEXT_DARK,
-  TEXT_MUTED,
-} from "../workflowConstants";
 import AgentHeader from "../AgentHeader";
 import PhaseActions from "../PhaseActions";
 import { useCurrentUser } from "../../../context/CurrentUserContext";
 import "./CuratexPhase.css";
 
-// Default weight allocation per property — matches Figma "Target Product
-// Profile - JAK2" card (weight-field values shown next to each row).
-const DEFAULT_WEIGHTS = {
-  indication: "15",
-  moa: "10",
-  route: "15",
-  molecularWeight: "10",
-  bioavailability: "20",
-  halfLife: "15",
-  logP: "10",
-  solubility: "15",
-  plasmaProteinBinding: "10",
-};
-
 /** The pageSize CompleteWorkflow requests, used only for the row caption. */
 const CURATEX_PAGE_SIZE = 10;
+
+/**
+ * A weight on the API's own scale. The profile returns e.g. `weight: 1.0`,
+ * which used to render as "1%" next to fake 10-20% placeholders.
+ */
+const formatWeight = (weight) => {
+  if (weight == null || weight === "") return "—";
+  const n = Number(weight);
+  if (!Number.isFinite(n)) return String(weight);
+  return Number.isInteger(n) ? n.toFixed(1) : String(n);
+};
+
+/** Header/row grid for the compound table, with or without the property columns. */
+const resultsGrid = (showProps) =>
+  showProps
+    ? "60px minmax(110px, 1fr) 72px minmax(160px, 2fr) minmax(110px, 1fr) 24px"
+    : "60px minmax(160px, 1fr) 96px 24px";
+
+/** Match status → icon and colour. "match" keeps the stylesheet's teal. */
+const STATUS_ICON = {
+  match: { icon: "✓", className: "is-match", title: "Matches the criterion" },
+  mismatch: { icon: "✕", color: "#DC2626", title: "Outside the criterion" },
+  unknown: { icon: "?", color: "#94A3B8", title: "Not returned by the API" },
+};
 
 /**
  * Page numbers with ellipses for the compound table — always the first and
@@ -118,8 +119,12 @@ const buildMatchDetails = (compound, profile) => {
       measured[key] ??
       (status === "unknown" ? "Not returned" : status === "match" ? "Within criterion" : "Outside criterion");
 
+    const rowKey = Object.keys(profile?.fieldToCriterion ?? {}).find(
+      (k) => profile.fieldToCriterion[k] === criterion?.name
+    );
+
     return {
-      label: humanize(criterion?.name),
+      label: (rowKey && profile?.labels?.[rowKey]) || humanize(criterion?.name),
       target: criterion?.value ?? "—",
       value,
       status,
@@ -171,22 +176,30 @@ const CuratexPhase = ({
   onPageChange,
   /** Branch / Rerun / Export handlers from usePhaseActions. */
   actions = {},
+  /** GET /agents/curatex/{jobId}/results → target, when the profile has none. */
+  resultsTarget = null,
 }) => {
   const { chatLabel: userLabel } = useCurrentUser();
   const activeCompound = selectedCompound || curateXResults?.[0];
+
+  /** The API's `editable` flag. A locked profile can be reviewed and submitted, not changed. */
+  const editable = profile?.editable !== false;
 
   // Local state — weights per property, and the "Adding new parameter"
   // sub-state inside edit mode (Figma: field-row-new with Parameter
   // name.../Enter value or range... inputs + Save Changes/Cancel).
   /**
-   * Criterion weights.
+   * Criterion weights, keyed by row, on the API's scale.
    *
-   * DEFAULT_WEIGHTS is only the pre-load placeholder now — the real weights
-   * come from GET /agents/curatex/{jobId}/profile and are what
-   * POST /agents/curatex/compounds is scored against, so seeding them from a
-   * fixture meant the researcher was editing numbers the backend never saw.
+   * These come only from GET /agents/curatex/{jobId}/profile and are what
+   * POST /agents/curatex/compounds is scored against. They used to start from
+   * a DEFAULT_WEIGHTS fixture (10-20 "%"), so rows showed numbers the backend
+   * never saw.
    */
-  const [weights, setWeights] = useState(DEFAULT_WEIGHTS);
+  const [weights, setWeights] = useState({});
+
+  /** Snapshot taken on entering edit mode, so Cancel really cancels. */
+  const editSnapshotRef = useRef(null);
 
   const weightsSeededRef = useRef(false);
   useEffect(() => {
@@ -250,8 +263,14 @@ const CuratexPhase = ({
     setWorkflowPhase("screensuite-loading");
   };
 
-  /** The target under study, from the profile endpoint. */
-  const targetLabel = profile?.target || "the selected target";
+  /** The target under study, from the profile or results endpoint. */
+  const targetName = profile?.target || resultsTarget || null;
+  const targetLabel = targetName || "the selected target";
+
+  const handleStartEdit = () => {
+    editSnapshotRef.current = { profileData: { ...profileData }, weights: { ...weights } };
+    setProfileEditMode?.(true);
+  };
 
   const handleAddParameterClick = () => {
     setIsAddingParameter(true);
@@ -270,6 +289,11 @@ const CuratexPhase = ({
   };
 
   const handleCancelEdit = () => {
+    if (editSnapshotRef.current) {
+      setProfileData?.(editSnapshotRef.current.profileData);
+      setWeights(editSnapshotRef.current.weights);
+      editSnapshotRef.current = null;
+    }
     setIsAddingParameter(false);
     setNewParamName("");
     setNewParamValue("");
@@ -277,19 +301,30 @@ const CuratexPhase = ({
     setProfileEditMode?.(false);
   };
 
+  /**
+   * An added parameter is a criterion name plus a weight — the only two things
+   * POST /agents/curatex/compounds can carry. Its weight is on the API's
+   * scale; a blank weight defaults to 1.0, the scale the profile itself uses.
+   * (This used to default to 10 on a percent scale, about 10x too large.)
+   */
+  const newWeightNumber = newParamWeight.trim() === "" ? 1 : Number(newParamWeight);
+  const newParamValid =
+    newParamName.trim() !== "" && Number.isFinite(newWeightNumber) && newWeightNumber >= 0;
+
   const handleSaveChanges = () => {
-    if (isAddingParameter && newParamName.trim() && newParamValue.trim()) {
+    if (isAddingParameter && newParamValid) {
       const key = newParamName
         .trim()
-        .toLowerCase()
-        .replace(/[^a-z0-9]+(.)/g, (_, c) => c.toUpperCase());
+        .replace(/[^A-Za-z0-9]+(.)/g, (_, c) => c.toUpperCase())
+        .replace(/^./, (c) => c.toLowerCase());
 
       setProfileData?.({ ...profileData, [key]: newParamValue.trim() });
       setWeights((prev) => ({
         ...prev,
-        [key]: newParamWeight.trim() || "10",
+        [key]: newWeightNumber,
       }));
     }
+    editSnapshotRef.current = null;
 
     setIsAddingParameter(false);
     setNewParamName("");
@@ -298,7 +333,10 @@ const CuratexPhase = ({
     setProfileEditMode?.(false);
   };
 
+  // Friendly label from the normaliser when the criterion matched a known
+  // field, otherwise the criterion's own name.
   const propertyLabel = (key) =>
+    profile?.labels?.[key] ??
     key
       .replace(/([A-Z])/g, " $1")
       .replace(/^./, (s) => s.toUpperCase())
@@ -379,10 +417,13 @@ const CuratexPhase = ({
     const subtitle = isAddingParameter
       ? "Adding new parameter — fill in the name and value below"
       : profileEditMode
-      ? "Editing mode — modify values below, then save changes"
-      : "Parameter added successfully. Review and submit to find matching candidates.";
+      ? "Editing mode — adjust the weights below, then save changes."
+      : editable
+      ? "Review the criteria and weights, then submit to find matching candidates."
+      : "This profile is locked by the backend and cannot be edited. Submit it to find matching candidates.";
 
-    const showInputs = profileEditMode || isAddingParameter;
+    const showInputs = editable && (profileEditMode || isAddingParameter);
+    const rows = Object.entries(profileData ?? {});
 
     return (
       <Box className="curatex-page">
@@ -461,44 +502,55 @@ const CuratexPhase = ({
             </div>
 
             <div className="curatex-profile-grid">
-              {Object.entries(profileData).map(([key, value]) => (
+              {/* One row per criterion the API returned — no fixed list, so
+                  no blank placeholder rows and no hidden criteria. */}
+              {rows.map(([key, value]) => (
                 <React.Fragment key={key}>
                   <Typography className="curatex-profile-property">
                     {propertyLabel(key)}
                   </Typography>
 
-                  {profileEditMode ? (
-                    <TextField
-                      value={value}
-                      onChange={(event) =>
-                        setProfileData?.({
-                          ...profileData,
-                          [key]: event.target.value,
-                        })
-                      }
-                      size="small"
-                      fullWidth
-                      className="curatex-profile-input"
-                    />
-                  ) : (
-                    <Typography className="curatex-profile-value">
-                      {value}
-                    </Typography>
-                  )}
+                  {/* Criterion values are read-only: POST
+                      /agents/curatex/compounds has no field for them, so an
+                      edited value would silently have no effect. */}
+                  <Typography className="curatex-profile-value">
+                    {value === "" || value == null ? "—" : String(value)}
+                  </Typography>
 
                   <div className="curatex-weight-field">
-                    <Typography className="curatex-profile-weight">
-                      {weights[key] || "10"}%
-                    </Typography>
+                    {showInputs ? (
+                      <TextField
+                        value={weights[key] ?? ""}
+                        onChange={(event) =>
+                          setWeights((prev) => ({ ...prev, [key]: event.target.value }))
+                        }
+                        placeholder="—"
+                        size="small"
+                        variant="standard"
+                        type="number"
+                        inputProps={{ step: 0.1, min: 0, "aria-label": `Weight for ${propertyLabel(key)}` }}
+                        className="curatex-new-weight-input"
+                        InputProps={{ disableUnderline: true }}
+                      />
+                    ) : (
+                      <Typography className="curatex-profile-weight">
+                        {formatWeight(weights[key])}
+                      </Typography>
+                    )}
                   </div>
 
-                  <IconButton
-                    size="small"
-                    className="curatex-profile-delete"
-                    onClick={() => handleDeleteParameter(key)}
-                  >
-                    <DeleteOutlineOutlined className="curatex-trash-icon" />
-                  </IconButton>
+                  {editable ? (
+                    <IconButton
+                      size="small"
+                      className="curatex-profile-delete"
+                      aria-label={`Remove ${propertyLabel(key)}`}
+                      onClick={() => handleDeleteParameter(key)}
+                    >
+                      <DeleteOutlineOutlined className="curatex-trash-icon" />
+                    </IconButton>
+                  ) : (
+                    <span />
+                  )}
                 </React.Fragment>
               ))}
 
@@ -516,7 +568,7 @@ const CuratexPhase = ({
                   <TextField
                     value={newParamValue}
                     onChange={(e) => setNewParamValue(e.target.value)}
-                    placeholder="Enter value or range..."
+                    placeholder="Value (for reference, not sent)"
                     size="small"
                     fullWidth
                     className="curatex-profile-input curatex-new-param-input"
@@ -526,22 +578,48 @@ const CuratexPhase = ({
                     <TextField
                       value={newParamWeight}
                       onChange={(e) => setNewParamWeight(e.target.value)}
-                      placeholder="%"
+                      placeholder="1.0"
                       size="small"
                       variant="standard"
+                      type="number"
+                      inputProps={{ step: 0.1, min: 0, "aria-label": "Weight for the new parameter" }}
                       className="curatex-new-weight-input"
                       InputProps={{ disableUnderline: true }}
                     />
                   </div>
 
-                  <IconButton size="small" className="curatex-profile-delete">
+                  <IconButton
+                    size="small"
+                    className="curatex-profile-delete"
+                    aria-label="Discard the new parameter"
+                    onClick={() => {
+                      setIsAddingParameter(false);
+                      setNewParamName("");
+                      setNewParamValue("");
+                      setNewParamWeight("");
+                    }}
+                  >
                     <DeleteOutlineOutlined className="curatex-trash-icon" />
                   </IconButton>
                 </>
               )}
             </div>
 
-            {profileEditMode && !isAddingParameter && (
+            {!profileLoading && !profileError && rows.length === 0 && (
+              <Typography className="curatex-body-text" sx={{ fontSize: "12px", color: "#64748B", mt: "8px" }}>
+                The profile returned no criteria.
+              </Typography>
+            )}
+
+            {/* Said once, plainly: only weights reach the scorer. */}
+            {rows.length > 0 && (
+              <Typography className="curatex-body-text" sx={{ fontSize: "11px", color: "#94A3B8", mt: "8px" }}>
+                Weights are on the API's own scale. Only weights are sent when scoring — the
+                API has no field for criterion values, so values are shown as returned.
+              </Typography>
+            )}
+
+            {showInputs && profileEditMode && !isAddingParameter && (
               <Button
                 startIcon={<AddOutlined />}
                 onClick={handleAddParameterClick}
@@ -553,11 +631,12 @@ const CuratexPhase = ({
           </div>
 
           <div className="curatex-action-row">
-            {profileEditMode || isAddingParameter ? (
+            {showInputs ? (
               <>
                 <Button
                   variant="contained"
                   onClick={handleSaveChanges}
+                  disabled={isAddingParameter && !newParamValid}
                   className="curatex-primary-button"
                 >
                   Save Changes
@@ -597,13 +676,16 @@ const CuratexPhase = ({
                   Submit Profile
                 </Button>
 
-                <Button
-                  variant="outlined"
-                  onClick={() => setProfileEditMode?.(true)}
-                  className="curatex-secondary-button curatex-edit-button"
-                >
-                  Edit Values
-                </Button>
+                {editable && (
+                  <Button
+                    variant="outlined"
+                    onClick={handleStartEdit}
+                    disabled={!profile?.hasData}
+                    className="curatex-secondary-button curatex-edit-button"
+                  >
+                    Edit Weights
+                  </Button>
+                )}
               </>
             )}
           </div>
@@ -639,6 +721,20 @@ const CuratexPhase = ({
   // CurateX Results
   // ---------------------------------------------------------------------------
   if (workflowPhase === "curatex-results") {
+    // MATCHED / MISMATCHED only appear when the API actually sent that detail;
+    // its example rows carry just name and score, which left both columns
+    // permanently blank.
+    const showProps = curateXResults.some(
+      (c) => String(c?.matchedProps ?? "").trim() || String(c?.mismatchedProps ?? "").trim()
+    );
+    const gridStyle = { gridTemplateColumns: resultsGrid(showProps) };
+
+    // The strongest candidate on this page, straight from the scores.
+    const scored = curateXResults.filter((c) => Number.isFinite(c?.rawScore));
+    const best = scored.length
+      ? scored.reduce((a, b) => (b.rawScore > a.rawScore ? b : a))
+      : null;
+
     return (
       <Box className="curatex-page">
         <div className="curatex-user-row">
@@ -664,7 +760,7 @@ const CuratexPhase = ({
               : resultsLoading
               ? "Loading scored candidates…"
               : curateXResults.length
-              ? `Scored ${curateXResults.length} candidate${curateXResults.length === 1 ? "" : "s"} against your ${targetLabel} target product profile. Here are the top candidates:`
+              ? `Scored ${total || curateXResults.length} candidate${(total || curateXResults.length) === 1 ? "" : "s"} against your ${targetLabel} target product profile. Here are the top candidates:`
               : `No candidates were returned for your ${targetLabel} target product profile.`}
           </Typography>
 
@@ -675,7 +771,7 @@ const CuratexPhase = ({
           )}
 
           <div className="curatex-results-table">
-            <div className="curatex-results-header">
+            <div className="curatex-results-header" style={gridStyle}>
               <Typography className="curatex-results-header-cell">
                 RANK
               </Typography>
@@ -683,11 +779,18 @@ const CuratexPhase = ({
                 COMPOUND
               </Typography>
               <Typography className="curatex-results-header-cell">
-                MATCHED PROPERTIES
+                SCORE
               </Typography>
-              <Typography className="curatex-results-header-cell">
-                MISMATCHED
-              </Typography>
+              {showProps && (
+                <Typography className="curatex-results-header-cell">
+                  MATCHED PROPERTIES
+                </Typography>
+              )}
+              {showProps && (
+                <Typography className="curatex-results-header-cell">
+                  MISMATCHED
+                </Typography>
+              )}
               <span />
             </div>
 
@@ -700,6 +803,7 @@ const CuratexPhase = ({
                     className={`curatex-result-row ${
                       isExpanded ? "is-expanded" : ""
                     }`}
+                    style={gridStyle}
                     onClick={() => {
                       setSelectedCompound?.(compound);
                       setExpandedRow(isExpanded ? -1 : index);
@@ -721,13 +825,27 @@ const CuratexPhase = ({
                       {compound.name}
                     </Typography>
 
-                    <Typography className="curatex-matched-properties">
-                      {compound.matchedProps}
+                    {/* The normalised score (0-1 API scores shown x100) —
+                        the only data field besides the name, and it was not
+                        shown at all. */}
+                    <Typography
+                      className="curatex-compound-name"
+                      title={compound.rawScore != null ? `API score: ${compound.rawScore}` : undefined}
+                    >
+                      {compound.score}
                     </Typography>
 
-                    <Typography className="curatex-mismatched-properties">
-                      {compound.mismatchedProps}
-                    </Typography>
+                    {showProps && (
+                      <Typography className="curatex-matched-properties">
+                        {compound.matchedProps}
+                      </Typography>
+                    )}
+
+                    {showProps && (
+                      <Typography className="curatex-mismatched-properties">
+                        {compound.mismatchedProps}
+                      </Typography>
+                    )}
 
                     <Typography className="curatex-row-chevron">
                       {isExpanded ? "⌃" : "›"}
@@ -738,8 +856,8 @@ const CuratexPhase = ({
                     <div className="curatex-match-details">
                       <div className="curatex-match-details-heading">
                         <Typography className="curatex-match-details-title">
-                          Match Details — {compound.name} vs JAK2 Target
-                          Profile
+                          Match Details — {compound.name}
+                          {targetName ? ` vs ${targetName} Target Profile` : ""}
                         </Typography>
 
                         <Button
@@ -754,6 +872,11 @@ const CuratexPhase = ({
                       </div>
 
                       <div className="curatex-match-detail-list">
+                        {buildMatchDetails(compound, profile).length === 0 && (
+                          <Typography className="curatex-match-detail-label">
+                            The profile has no criteria to compare against.
+                          </Typography>
+                        )}
                         {buildMatchDetails(compound, profile).map((detail) => (
                           <div className="curatex-match-detail-row" key={detail.label}>
                             <Typography className="curatex-match-detail-label">
@@ -768,12 +891,21 @@ const CuratexPhase = ({
                             <Typography className="curatex-match-detail-value">
                               {detail.value}
                             </Typography>
+                            {/* match / mismatch / unknown. This checked for
+                                "partial", which buildMatchDetails never
+                                produces, so every row showed a tick. */}
                             <Typography
                               className={`curatex-match-detail-status ${
-                                detail.status === "partial" ? "is-partial" : "is-match"
+                                STATUS_ICON[detail.status]?.className ?? ""
                               }`}
+                              title={STATUS_ICON[detail.status]?.title}
+                              style={
+                                STATUS_ICON[detail.status]?.color
+                                  ? { color: STATUS_ICON[detail.status].color }
+                                  : undefined
+                              }
                             >
-                              {detail.status === "partial" ? "~" : "✓"}
+                              {STATUS_ICON[detail.status]?.icon ?? "?"}
                             </Typography>
                           </div>
                         ))}
@@ -826,43 +958,42 @@ const CuratexPhase = ({
 
             <Typography className="curatex-pagination-text">
               {curateXResults.length
-                ? `Showing ${(page - 1) * CURATEX_PAGE_SIZE + 1}-${(page - 1) * CURATEX_PAGE_SIZE + curateXResults.length} of ${total} compound${total === 1 ? "" : "s"}`
+                ? (() => {
+                    const firstRank = Number(curateXResults[0]?.rank);
+                    const start = Number.isFinite(firstRank)
+                      ? firstRank
+                      : (page - 1) * CURATEX_PAGE_SIZE + 1;
+                    const end = Math.min(start + curateXResults.length - 1, total || Infinity);
+                    return `Showing ${start}-${end} of ${total} compound${total === 1 ? "" : "s"}`;
+                  })()
                 : "No compounds on this page"}
             </Typography>
           </div>
 
-          <div className="curatex-recommendation-card">
-            <Typography className="curatex-recommendation-title">
-              Recommendation
-            </Typography>
+          {/* Was a fixed Metformin/Pioglitazone recommendation. The API
+              returns no recommendation text, so this only states what the
+              scores show. */}
+          {best && (
+            <div className="curatex-recommendation-card">
+              <Typography className="curatex-recommendation-title">
+                Highest score on this page
+              </Typography>
 
-            <Typography className="curatex-recommendation-text">
-              Metformin and Pioglitazone are the strongest candidates. Both
-              match on molecular weight, route of administration, and
-              half-life. Metformin scores highest due to superior
-              bioavailability alignment. Recommend carrying both forward to
-              screening.
-            </Typography>
-          </div>
+              <Typography className="curatex-recommendation-text">
+                {best.name} (rank {best.rank}, score {best.score}) is the highest-scoring
+                candidate shown{targetName ? ` for ${targetName}` : ""}. The CurateX API does not
+                return a written recommendation.
+              </Typography>
+            </div>
+          )}
 
           <div className="curatex-results-actions">
-            <Button
-              variant="outlined"
-              className="curatex-secondary-button"
-            >
-              Branch
-            </Button>
-
-            <Button
-              variant="outlined"
-              className="curatex-secondary-button"
-            >
-              Rerun
-            </Button>
+            <PhaseActions {...actions} />
 
             <Button
               variant="contained"
               onClick={handleNextFromResults}
+              disabled={!curateXResults.length}
               className="curatex-primary-button curatex-next-button"
             >
               Next
@@ -875,9 +1006,16 @@ const CuratexPhase = ({
 
   // ---------------------------------------------------------------------------
   // Data Source Screen
+  //
+  // This screen, the exploration and the candidate-selection screens used to
+  // be fixed Metformin content (CAS 657-24-9, DrugBank DB00331, "94%", five
+  // source references) whatever compound was chosen. The CurateX API returns a
+  // name and a score per compound and the profile's criteria, so that is what
+  // they show; everything else says it is not available.
   // ---------------------------------------------------------------------------
   if (workflowPhase === "curatex-data-source") {
     const compound = activeCompound;
+    const details = compound ? buildMatchDetails(compound, profile) : [];
 
     return (
       <Box className="curatex-data-source-page">
@@ -889,169 +1027,64 @@ const CuratexPhase = ({
         </Button>
 
         <Typography className="curatex-data-source-title">
-          Data Source: {compound?.name || "Metformin"} — JAK2 Match
+          Data Source: {compound?.name || "No compound selected"}
+          {compound && targetName ? ` — ${targetName} Match` : ""}
         </Typography>
 
-        <div className="curatex-source-summary-card">
-          <SourceSummary
-            label="Compound Name"
-            value={compound?.name || "Metformin"}
-            accent
-          />
+        {compound && (
+          <div className="curatex-source-summary-card">
+            <SourceSummary label="Compound Name" value={compound.name} accent />
 
-          <SourceSummary label="CAS Number" value="657-24-9" />
+            <SourceSummary label="Rank" value={compound.rank ?? "—"} />
 
-          <SourceSummary label="Molecular Formula" value="C₄H₁₁N₅" />
+            {compound.chemblId && (
+              <SourceSummary label="ChEMBL ID" value={compound.chemblId} />
+            )}
 
-          <SourceSummary label="DrugBank ID" value="DB00331" />
+            {targetName && <SourceSummary label="Target" value={targetName} />}
 
-          <div className="curatex-source-summary-field">
-            <Typography className="curatex-source-label">
-              Overall Match Score
-            </Typography>
+            <div className="curatex-source-summary-field">
+              <Typography className="curatex-source-label">
+                Overall Match Score
+              </Typography>
 
-            <div className="curatex-score-badge">94%</div>
+              <div className="curatex-score-badge">{compound.score}</div>
+            </div>
           </div>
-        </div>
+        )}
 
         <Typography className="curatex-source-section-title">
           Source Data Comparison
         </Typography>
 
-        <div className="curatex-source-table">
-          <SourceTableHeader />
+        {details.length ? (
+          <div className="curatex-source-table">
+            <SourceTableHeader />
 
-          <SourceRow
-            parameter="Molecular Weight"
-            target="< 500 Da"
-            value="129.16 Da"
-            source="DrugBank"
-            status="✓ Match"
-            statusType="match"
-            confidence="High"
-          />
-
-          <SourceRow
-            parameter="Bioavailability"
-            target="> 60%"
-            value="50-60%"
-            source="FDA Label"
-            status="⚠ Partial"
-            statusType="partial"
-            confidence="Medium"
-          />
-
-          <SourceRow
-            parameter="Half-life"
-            target="8-12 hours"
-            value="6.2 hours"
-            source="PubChem"
-            status="✕ Mismatch"
-            statusType="mismatch"
-            confidence="High"
-          />
-
-          <SourceRow
-            parameter="LogP"
-            target="1.5-3.5"
-            value="-1.43"
-            source="ChEMBL"
-            status="✕ Mismatch"
-            statusType="mismatch"
-            confidence="High"
-          />
-
-          <SourceRow
-            parameter="Solubility"
-            target="> 10 mg/mL"
-            value=">300 mg/mL"
-            source="DrugBank"
-            status="✓ Match"
-            statusType="match"
-            confidence="High"
-          />
-
-          <SourceRow
-            parameter="Route of Administration"
-            target="Oral"
-            value="Oral"
-            source="FDA Label"
-            status="✓ Match"
-            statusType="match"
-            confidence="High"
-          />
-
-          <SourceRow
-            parameter="Mechanism of Action"
-            target="JAK2 Inhibition"
-            value="AMPK Activation"
-            source="PubMed"
-            status="⚠ Partial"
-            statusType="partial"
-            confidence="Medium"
-          />
-
-          <SourceRow
-            parameter="Indication"
-            target="Type 2 Diabetes"
-            value="Type 2 Diabetes"
-            source="DailyMed"
-            status="✓ Match"
-            statusType="match"
-            confidence="High"
-          />
-
-          <SourceRow
-            parameter="Plasma Protein Binding"
-            target="< 90%"
-            value="Negligible"
-            source="DrugBank"
-            status="✓ Match"
-            statusType="match"
-            confidence="High"
-          />
-        </div>
+            {details.map((detail) => (
+              <SourceRow
+                key={detail.label}
+                parameter={detail.label}
+                target={detail.target}
+                value={detail.value}
+                statusType={detail.status}
+              />
+            ))}
+          </div>
+        ) : (
+          <Typography className="curatex-body-text" sx={{ fontSize: "13px", color: "#64748B" }}>
+            The profile has no criteria to compare this compound against.
+          </Typography>
+        )}
 
         <Typography className="curatex-source-section-title">
           Source References
         </Typography>
 
-        <div className="curatex-source-references">
-          <SourceReference
-            number="1"
-            title="DrugBank (DB00331)"
-            updated="Last updated: Jan 2024"
-            url="drugbank.ca/drugs/DB00331"
-          />
-
-          <SourceReference
-            number="2"
-            title="PubChem (CID 4091)"
-            updated="Last updated: Mar 2024"
-            url="pubchem.ncbi.nlm.nih.gov"
-          />
-
-          <SourceReference
-            number="3"
-            title="ChEMBL (CHEMBL1431)"
-            updated="Last updated: Feb 2024"
-            url="ebi.ac.uk/chembl"
-          />
-
-          <SourceReference
-            number="4"
-            title="FDA Label"
-            updated="Approval: 1995"
-            url="accessdata.fda.gov"
-          />
-
-          <SourceReference
-            number="5"
-            title="PubMed"
-            updated="3 relevant articles cited"
-            url="pubmed.ncbi.nlm.nih.gov"
-          />
-        </div>
+        <Typography className="curatex-body-text" sx={{ fontSize: "13px", color: "#64748B" }}>
+          Not available from the API — CurateX returns a score per compound but no
+          per-property source values or references.
+        </Typography>
       </Box>
     );
   }
@@ -1064,61 +1097,49 @@ const CuratexPhase = ({
 
     return (
       <Box className="curatex-page curatex-exploration-page">
-        <div className="curatex-user-row">
-          <div className="curatex-user-bubble curatex-user-bubble--wide">
-            <Typography className="curatex-user-name">
-              {userLabel}
-            </Typography>
-
-            <Typography className="curatex-user-text">
-              Tell me more about {compound?.name || "Metformin"} - mechanism
-              of action, current uses, and patent status.
-            </Typography>
-          </div>
-        </div>
-
         <div className="curatex-agent-card curatex-exploration-card">
           <AgentHeader moduleKey="curatex" />
 
           <Typography className="curatex-body-text curatex-exploration-intro">
-            Here is the detailed compound profile for{" "}
-            {compound?.name || "Metformin"}:
+            {compound
+              ? `Here is what the CurateX results report for ${compound.name}:`
+              : "No compound is selected."}
           </Typography>
 
-          <div className="curatex-compound-detail-card">
-            <Typography className="curatex-compound-detail-title">
-              {compound?.name || "Metformin"} - Compound Detail
-            </Typography>
+          {compound && (
+            <div className="curatex-compound-detail-card">
+              <Typography className="curatex-compound-detail-title">
+                {compound.name} - Compound Detail
+              </Typography>
 
-            <Typography className="curatex-compound-detail-subtitle">
-              Summary of mechanism, clinical use, and IP status.
-            </Typography>
+              <Typography className="curatex-compound-detail-subtitle">
+                Summary of what the scoring run returned.
+              </Typography>
 
-            <CompoundSection
-              title="Mechanism of Action"
-              text="Metformin activates AMP-activated protein kinase (AMPK), reducing hepatic glucose production and improving insulin sensitivity. In the context of JAK2 inhibition, recent studies suggest Metformin may modulate JAK-STAT signaling indirectly through AMPK activation."
-            />
+              <CompoundSection
+                title="Match Score"
+                text={`${compound.score} — rank ${compound.rank ?? "—"} of ${total || curateXResults.length} scored candidates${targetName ? ` against the ${targetName} target profile` : ""}.`}
+              />
 
-            <CompoundSection
-              title="Current Uses"
-              text="First-line therapy for Type 2 Diabetes. Also used off-label for PCOS, weight management, and under investigation for anti-aging and oncology applications."
-            />
+              {(compound.chemblId || compound.smiles) && (
+                <CompoundSection
+                  title="Identifiers"
+                  text={[
+                    compound.chemblId && `ChEMBL: ${compound.chemblId}`,
+                    compound.smiles && `SMILES: ${compound.smiles}`,
+                  ]
+                    .filter(Boolean)
+                    .join("\n")}
+                />
+              )}
 
-            <CompoundSection
-              title="Patent Status"
-              text="Original patents expired. Generic formulations widely available. Novel formulations and combination therapies may carry active IP - 3 relevant patents identified by NovSearch."
-            />
-
-            <CompoundSection
-              title="Match Score"
-              text="94% - Strong alignment on 5 of 6 target profile properties."
-              last
-            />
-          </div>
-
-          <Typography className="curatex-source-note">
-            Source: PubMed, DrugBank, USPTO via NovSearch
-          </Typography>
+              <CompoundSection
+                title="Mechanism of Action, Current Uses, Patent Status"
+                text="Not available from the CurateX API. Patent status is assessed by NovSearch later in the workflow."
+                last
+              />
+            </div>
+          )}
 
           <div className="curatex-exploration-actions">
             <Button
@@ -1132,6 +1153,7 @@ const CuratexPhase = ({
             <Button
               variant="contained"
               onClick={handleNextFromCompoundExploration}
+              disabled={!compound}
               className="curatex-primary-button"
             >
               Next
@@ -1146,61 +1168,47 @@ const CuratexPhase = ({
   // Candidate Selection Screen
   // ---------------------------------------------------------------------------
   if (workflowPhase === "curatex-candidate-selection") {
+    // The same rule the hand-off uses: the chosen compound, or failing that
+    // the top five on this page.
+    const forwarded = selectedCompound
+      ? [selectedCompound]
+      : (curateXResults ?? []).slice(0, 5);
+
     return (
       <Box className="curatex-page curatex-candidate-page">
-        <div className="curatex-agent-card curatex-candidate-question-card">
-          <AgentHeader moduleKey="curatex" />
-
-          <Typography className="curatex-body-text curatex-candidate-question">
-            Would you like to select specific candidates for screening, or
-            should I proceed with the top-ranked compounds (Metformin and
-            Pioglitazone) automatically?
-          </Typography>
-        </div>
-
-        <div className="curatex-user-row">
-          <div className="curatex-user-bubble curatex-user-bubble--wide">
-            <Typography className="curatex-user-name">
-              {userLabel}
-            </Typography>
-
-            <Typography className="curatex-user-text">
-              Go with the top two - Metformin and Pioglitazone. Send them to
-              ScreenSuite for docking.
-            </Typography>
-          </div>
-        </div>
-
         <div className="curatex-agent-card curatex-candidate-card">
           <AgentHeader moduleKey="curatex" />
 
           <Typography className="curatex-body-text curatex-candidate-intro">
-            Selected candidates forwarded to ScreenSuite for molecular
-            docking:
+            {forwarded.length
+              ? `Candidate${forwarded.length === 1 ? "" : "s"} to forward to ScreenSuite for molecular docking:`
+              : "There are no candidates to forward to ScreenSuite."}
           </Typography>
 
-          {["Metformin", "Pioglitazone"].map((compoundName) => (
-            <div className="curatex-candidate-compound" key={compoundName}>
+          {forwarded.map((compound) => (
+            <div className="curatex-candidate-compound" key={compound.name}>
               <Typography className="curatex-candidate-name">
-                {compoundName}
+                {compound.name}
+                {compound.score && compound.score !== "—" ? ` (${compound.score})` : ""}
               </Typography>
 
-              <Typography className="curatex-candidate-target">
-                Target: JAK2
-              </Typography>
+              {targetName && (
+                <Typography className="curatex-candidate-target">
+                  Target: {targetName}
+                </Typography>
+              )}
             </div>
           ))}
 
           <Typography className="curatex-candidate-status">
-            ScreenSuite is now running PLP docking simulations. Estimated
-            completion: ~5 minutes.
+            Docking starts when you continue to ScreenSuite.
           </Typography>
 
           <div className="curatex-candidate-actions">
             <Button
               variant="contained"
               onClick={handleViewInScreenSuite}
-              disabled={continuePending}
+              disabled={continuePending || !forwarded.length}
               className="curatex-primary-button"
             >
               {continuePending ? "Starting ScreenSuite…" : "View in ScreenSuite"}
@@ -1240,16 +1248,11 @@ const SourceSummary = ({ label, value, accent = false }) => (
   </div>
 );
 
+const SOURCE_GRID = { gridTemplateColumns: "minmax(140px, 1fr) minmax(140px, 1fr) minmax(140px, 1fr) 150px" };
+
 const SourceTableHeader = () => (
-  <div className="curatex-source-table-header">
-    {[
-      "PARAMETER",
-      "TARGET CRITERION",
-      "SOURCE VALUE",
-      "SOURCE",
-      "MATCH STATUS",
-      "CONFIDENCE",
-    ].map((header) => (
+  <div className="curatex-source-table-header" style={SOURCE_GRID}>
+    {["PARAMETER", "TARGET CRITERION", "COMPOUND VALUE", "MATCH STATUS"].map((header) => (
       <Typography key={header} className="curatex-source-table-header-cell">
         {header}
       </Typography>
@@ -1257,67 +1260,34 @@ const SourceTableHeader = () => (
   </div>
 );
 
-const SourceRow = ({
-  parameter,
-  target,
-  value,
-  source,
-  status,
-  statusType,
-  confidence,
-}) => (
-  <div className="curatex-source-table-row">
-    <Typography className="curatex-source-cell strong">
-      {parameter}
-    </Typography>
+const SOURCE_STATUS = {
+  match: { label: "✓ Match", className: "curatex-status-match" },
+  mismatch: { label: "✕ Mismatch", className: "curatex-status-mismatch" },
+  unknown: { label: "? Not returned", className: "curatex-status-partial" },
+};
 
-    <Typography className="curatex-source-cell">{target}</Typography>
+const SourceRow = ({ parameter, target, value, statusType }) => {
+  const status = SOURCE_STATUS[statusType] ?? SOURCE_STATUS.unknown;
+  return (
+    <div className="curatex-source-table-row" style={SOURCE_GRID}>
+      <Typography className="curatex-source-cell strong">
+        {parameter}
+      </Typography>
 
-    <Typography className="curatex-source-cell strong">
-      {value}
-    </Typography>
+      <Typography className="curatex-source-cell">{target}</Typography>
 
-    <Typography className="curatex-source-cell">{source}</Typography>
-
-    <div>
-      <span
-        className={`curatex-status-badge curatex-status-${statusType}`}
-      >
-        {status}
-      </span>
-    </div>
-
-    <div>
-      <span
-        className={`curatex-confidence-badge ${
-          confidence === "High" ? "is-high" : "is-medium"
-        }`}
-      >
-        {confidence}
-      </span>
-    </div>
-  </div>
-);
-
-const SourceReference = ({ number, title, updated, url }) => (
-  <div className="curatex-source-reference">
-    <div className="curatex-source-reference-left">
-      <div className="curatex-source-reference-number">{number}</div>
+      <Typography className="curatex-source-cell strong">
+        {value}
+      </Typography>
 
       <div>
-        <Typography className="curatex-source-reference-title">
-          {title}
-        </Typography>
-
-        <Typography className="curatex-source-reference-updated">
-          {updated}
-        </Typography>
+        <span className={`curatex-status-badge ${status.className}`}>
+          {status.label}
+        </span>
       </div>
     </div>
-
-    <Typography className="curatex-source-reference-url">{url}</Typography>
-  </div>
-);
+  );
+};
 
 const CompoundSection = ({ title, text, last = false }) => (
   <div className={`curatex-compound-section ${last ? "is-last" : ""}`}>
@@ -1325,7 +1295,7 @@ const CompoundSection = ({ title, text, last = false }) => (
       {title}
     </Typography>
 
-    <Typography className="curatex-compound-section-text">
+    <Typography className="curatex-compound-section-text" sx={{ whiteSpace: "pre-line" }}>
       {text}
     </Typography>
   </div>

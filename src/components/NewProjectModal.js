@@ -2,46 +2,73 @@
 import { useNavigate } from "react-router-dom";
 import {
   Dialog, DialogContent, Box, Typography, TextField, Button, IconButton,
-  Select, MenuItem, FormControl,
 } from "@mui/material";
 import { CloseOutlined, ScienceOutlined, CheckCircleOutlined } from "@mui/icons-material";
-import { useProjects } from "../context/ProjectsContext";
-
-const DISEASES = [
-  "Thrombocytosis", "Pancreatic Cancer", "Type 2 Diabetes", "Alzheimer's Disease",
-  "Lung Cancer", "Breast Cancer", "Melanoma", "Pulmonary Hypertension",
-  "Hepatic Fibrosis", "Multiple Myeloma", "Hemangioma", "NSCLC",
-];
+import { createProject } from "../services/api/projects";
 
 const TEAL = "#0ABFBC";
 const DARK = "#0F172A";
 const SUB  = "#64748B";
 const FONT = "'Inter', sans-serif";
 
-const NewProjectModal = ({ open, onClose }) => {
+const fieldSx = {
+  "& .MuiOutlinedInput-root": {
+    borderRadius: "8px", fontFamily: FONT, fontSize: "13px",
+    "& fieldset": { borderColor: "#E2E8F0" },
+    "&:hover fieldset": { borderColor: "#CBD5E1" },
+    "&.Mui-focused fieldset": { borderColor: TEAL, borderWidth: "1.5px" },
+  },
+  "& input::placeholder": { color: "#94A3B8", opacity: 1, fontFamily: FONT },
+};
+
+/**
+ * Creates a project via POST /projects. The contract body is exactly
+ * { name, disease, module, status } — there is no description field, so the
+ * form doesn't ask for one. onCreated(project) receives the API response.
+ */
+const NewProjectModal = ({ open, onClose, onCreated }) => {
   const navigate = useNavigate();
-  const { addProject } = useProjects();
   const [name, setName]       = useState("");
   const [disease, setDisease] = useState("");
-  const [desc, setDesc]       = useState("");
   const [step, setStep]       = useState("form");
+  const [saving, setSaving]   = useState(false);
+  const [error, setError]     = useState(null);
+  const [created, setCreated] = useState(null);
 
-  const handleCreate = () => {
-    addProject(name);
-    setStep("success");
+  const handleCreate = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const project = await createProject({
+        name: name.trim(),
+        disease: disease.trim(),
+        module: "TxKG",
+        status: "Active",
+      });
+      setCreated(project);
+      setStep("success");
+      onCreated?.(project);
+    } catch (err) {
+      setError(err.userMessage || err.message || "Failed to create project");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleClose = () => {
+    if (saving) return;
     setName("");
     setDisease("");
-    setDesc("");
+    setError(null);
+    setCreated(null);
     setStep("form");
     onClose();
   };
 
   const handleViewProject = () => {
+    const id = created?.id;
     handleClose();
-    navigate("/dashboard");
+    navigate(id ? `/dashboard/active-projects/${id}` : "/dashboard/active-projects");
   };
 
   return (
@@ -96,66 +123,30 @@ const NewProjectModal = ({ open, onClose }) => {
                 <TextField
                   fullWidth
                   size="small"
-                  placeholder="e.g. Metformin to Parkinson"
+                  placeholder="e.g. Thrombocytosis repurposing"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  sx={{
-                    "& .MuiOutlinedInput-root": {
-                      borderRadius: "8px", fontFamily: FONT, fontSize: "13px",
-                      "& fieldset": { borderColor: "#E2E8F0" },
-                      "&:hover fieldset": { borderColor: "#CBD5E1" },
-                      "&.Mui-focused fieldset": { borderColor: TEAL, borderWidth: "1.5px" },
-                    },
-                    "& input::placeholder": { color: "#94A3B8", opacity: 1, fontFamily: FONT },
-                  }}
+                  sx={fieldSx}
                 />
               </Box>
               <Box>
                 <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 500, color: DARK, mb: "8px" }}>
                   Disease
                 </Typography>
-                <FormControl fullWidth size="small">
-                  <Select
-                    value={disease}
-                    onChange={(e) => setDisease(e.target.value)}
-                    displayEmpty
-                    renderValue={(v) => v || <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: "#94A3B8" }}>Select a disease...</Typography>}
-                    sx={{
-                      borderRadius: "8px", fontFamily: FONT, fontSize: "13px",
-                      "& .MuiOutlinedInput-notchedOutline": { borderColor: "#E2E8F0" },
-                      "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: "#CBD5E1" },
-                      "&.Mui-focused .MuiOutlinedInput-notchedOutline": { borderColor: TEAL, borderWidth: "1.5px" },
-                    }}
-                  >
-                    {DISEASES.map(d => (
-                      <MenuItem key={d} value={d} sx={{ fontFamily: FONT, fontSize: "13px" }}>{d}</MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-              </Box>
-              <Box>
-                <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 500, color: DARK, mb: "8px" }}>
-                  Description
-                </Typography>
                 <TextField
                   fullWidth
-                  multiline
-                  rows={4}
-                  placeholder="Describe the repurposing hypothesis..."
-                  value={desc}
-                  onChange={(e) => setDesc(e.target.value)}
-                  sx={{
-                    "& .MuiOutlinedInput-root": {
-                      borderRadius: "8px", fontFamily: FONT, fontSize: "13px",
-                      bgcolor: "#F8FAFC", alignItems: "flex-start",
-                      "& fieldset": { borderColor: "#E2E8F0" },
-                      "&:hover fieldset": { borderColor: "#CBD5E1" },
-                      "&.Mui-focused fieldset": { borderColor: TEAL, borderWidth: "1.5px" },
-                    },
-                    "& textarea::placeholder": { color: "#94A3B8", opacity: 1, fontFamily: FONT },
-                  }}
+                  size="small"
+                  placeholder="e.g. Thrombocytosis"
+                  value={disease}
+                  onChange={(e) => setDisease(e.target.value)}
+                  sx={fieldSx}
                 />
               </Box>
+              {error && (
+                <Typography role="alert" sx={{ fontFamily: FONT, fontSize: "12.5px", color: "#DC2626" }}>
+                  {error}
+                </Typography>
+              )}
             </Box>
           </DialogContent>
 
@@ -176,7 +167,7 @@ const NewProjectModal = ({ open, onClose }) => {
               variant="contained"
               disableElevation
               onClick={handleCreate}
-              disabled={!name.trim()}
+              disabled={!name.trim() || !disease.trim() || saving}
               sx={{
                 fontFamily: FONT, fontSize: "13px", fontWeight: 500,
                 bgcolor: TEAL, color: "#fff", textTransform: "none",
@@ -185,7 +176,7 @@ const NewProjectModal = ({ open, onClose }) => {
                 "&.Mui-disabled": { bgcolor: "#A5F3F2", color: "#fff" },
               }}
             >
-              Create &amp; Save
+              {saving ? "Creating..." : "Create & Save"}
             </Button>
           </Box>
         </>
@@ -232,7 +223,7 @@ const NewProjectModal = ({ open, onClose }) => {
                   Project Created Successfully!
                 </Typography>
                 <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: SUB }}>
-                  {name || "Your project"} has been added to your active projects.
+                  {created?.name || name || "Your project"} has been added to your active projects.
                 </Typography>
               </Box>
               <Button

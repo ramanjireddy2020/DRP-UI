@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Box, TextField, IconButton, CircularProgress, Typography } from "@mui/material";
-import { AddOutlined } from "@mui/icons-material";
 import { FONT, TEAL, GRAY_BG, BORDER, TEXT_DARK, TEXT_MUTED } from "./workflowConstants";
 import modulesApi from "../../services/api/modules";
 
@@ -241,9 +240,10 @@ const ChatInputBar = ({ onSend, pending = false, placeholder, hint }) => {
 
         <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <Box sx={{ display: "flex", alignItems: "center", gap: "6px" }}>
-            <IconButton size="small" sx={{ color: TEXT_MUTED }} disabled={disabled}>
-              <AddOutlined sx={{ fontSize: 18 }} />
-            </IconButton>
+            {/* The "+" attach and microphone buttons had no handlers. They are
+                gone rather than wired: POST /sessions/{id}/messages takes only
+                { message, stepId }, so an uploaded file would have nowhere to
+                go, and there is no speech endpoint. */}
             {/* Says why the module changed, since only an @mention can do it. */}
             {hint && (
               <Typography sx={{ fontFamily: FONT, fontSize: "11px", color: TEXT_MUTED }}>
@@ -253,18 +253,6 @@ const ChatInputBar = ({ onSend, pending = false, placeholder, hint }) => {
           </Box>
 
           <Box sx={{ display: "flex", gap: "8px", alignItems: "center" }}>
-            <IconButton size="small" sx={{ color: TEXT_MUTED }} disabled={disabled}>
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <rect x="5" y="1" width="6" height="9" rx="3" stroke="#94A3B8" strokeWidth="1.3" />
-                <path
-                  d="M2 8C2 11.3137 4.68629 14 8 14M8 14C11.3137 14 14 11.3137 14 8M8 14V15.5"
-                  stroke="#94A3B8"
-                  strokeWidth="1.3"
-                  strokeLinecap="round"
-                />
-              </svg>
-            </IconButton>
-
             <IconButton
               size="small"
               onClick={submit}

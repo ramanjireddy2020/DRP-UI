@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { signOut } from "@aws-amplify/auth";
 import {
   Box,
   Typography,
@@ -156,13 +157,22 @@ function NavItem({
    SIDEBAR
    ========================================================= */
 
+/* Sign out of Cognito when the host layout does not supply its own handler
+   (CompleteWorkflow and WorkflowLayout render <SideBar /> bare), so "Log out"
+   never just navigates to /login while leaving the session alive. */
+const defaultLogout = () => signOut();
+
 const SideBar = ({
   onNewResearch,
-  onLogout = () => {},
+  onLogout = defaultLogout,
   user,
-  activePath,
+  activePath: activePathProp,
 }) => {
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // Nav highlighting follows the current route unless a layout overrides it.
+  const activePath = (activePathProp ?? location.pathname).replace(/\/+$/, "") || "/";
 
   // Review point 6: the footer card showed "DR. Priya" for every account.
   // It now reads the signed-in researcher from GET /users/me, falling back to
@@ -172,8 +182,20 @@ const SideBar = ({
   const sidebarUser = user || {
     name: currentUser.displayName,
     email: currentUser.email || "",
+    role: currentUser.role || "",
     initials: currentUser.initials,
+    avatarUrl: currentUser.avatarUrl || "",
   };
+
+  // avatarUrl is "" for most accounts; a URL that fails to load also falls
+  // back to the initials.
+  const [avatarFailed, setAvatarFailed] = useState(false);
+
+  useEffect(() => {
+    setAvatarFailed(false);
+  }, [sidebarUser.avatarUrl]);
+
+  const showAvatarImage = Boolean(sidebarUser.avatarUrl) && !avatarFailed;
 
   /* =======================================================
      RESPONSIVE BREAKPOINTS
@@ -516,10 +538,9 @@ const SideBar = ({
             icon={FolderOutlined}
             label="Projects"
             collapsed={effectiveCollapsed}
-            active={
-              activePath ===
+            active={activePath.startsWith(
               "/dashboard/active-projects"
-            }
+            )}
             onClick={() =>
               handleNavClick(
                 "/dashboard/active-projects"
@@ -568,18 +589,33 @@ const SideBar = ({
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
+            overflow: "hidden",
           }}
         >
-          <Typography
-            sx={{
-              fontFamily: FONT,
-              fontSize: "13px",
-              fontWeight: 700,
-              color: SIDEBAR_BG,
-            }}
-          >
-            {sidebarUser.initials}
-          </Typography>
+          {showAvatarImage ? (
+            <img
+              src={sidebarUser.avatarUrl}
+              alt={sidebarUser.name}
+              onError={() => setAvatarFailed(true)}
+              style={{
+                width: "100%",
+                height: "100%",
+                objectFit: "cover",
+                display: "block",
+              }}
+            />
+          ) : (
+            <Typography
+              sx={{
+                fontFamily: FONT,
+                fontSize: "13px",
+                fontWeight: 700,
+                color: SIDEBAR_BG,
+              }}
+            >
+              {sidebarUser.initials}
+            </Typography>
+          )}
         </Box>
 
         {!effectiveCollapsed && (
@@ -602,6 +638,23 @@ const SideBar = ({
               >
                 {sidebarUser.name}
               </Typography>
+
+              {sidebarUser.role && (
+                <Typography
+                  sx={{
+                    fontFamily: FONT,
+                    fontSize: "12px",
+                    color: LABEL_COLOR,
+                    lineHeight: 1.3,
+
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {sidebarUser.role}
+                </Typography>
+              )}
 
               <Typography
                 sx={{

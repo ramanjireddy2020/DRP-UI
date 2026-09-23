@@ -27,7 +27,6 @@ import {
   Navigate,
 } from "react-router-dom";
 
-import { ProjectsProvider } from "./context/ProjectsContext";
 import { CurrentUserProvider } from "./context/CurrentUserContext";
 
 
@@ -182,9 +181,7 @@ function App() {
     // signed-in researcher's name. It replaces "Dr. Priya", which was
     // hardcoded in ~25 places across the five phase screens and the shell.
     <CurrentUserProvider>
-      <ProjectsProvider>
-        <RouterProvider router={router} />
-      </ProjectsProvider>
+      <RouterProvider router={router} />
     </CurrentUserProvider>
   );
 }

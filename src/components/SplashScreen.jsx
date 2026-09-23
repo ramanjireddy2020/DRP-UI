@@ -1,10 +1,16 @@
-﻿import React, { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { getOnboardingStatus } from "../services/researchApi";
 import "./SplashScreen.css";
 
 import inovapathLogo from "./assets/inovapath-logo.png";
 
 const SPLASH_DURATION = 4800;
+const FADE_DURATION = 850;
+
+// If GET /users/me/onboarding-status has not answered by this point the
+// splash stops waiting and falls back to /welcome, same as on an error.
+const STATUS_TIMEOUT = 8000;
 
 const LogoMark = ({ size = 86 }) => {
   return (
@@ -51,16 +57,40 @@ const SplashScreen = () => {
   const [fading, setFading] = useState(false);
 
   useEffect(() => {
-    const fadeTimer = setTimeout(() => {
-      setFading(true);
-    }, SPLASH_DURATION);
+    let cancelled = false;
+    let navigationTimer;
 
-    const navigationTimer = setTimeout(() => {
-      navigate("/welcome");
-    }, SPLASH_DURATION + 850);
+    // The animation and the onboarding check run in parallel: the splash
+    // always plays for SPLASH_DURATION, then leaves as soon as the status is
+    // known (or STATUS_TIMEOUT passes). Researchers who already finished
+    // onboarding go straight to the dashboard instead of /welcome.
+    const minimumDuration = new Promise((resolve) =>
+      setTimeout(resolve, SPLASH_DURATION)
+    );
+
+    const destination = Promise.race([
+      getOnboardingStatus()
+        .then((status) =>
+          status?.completed === true ? "/dashboard" : "/welcome"
+        )
+        .catch(() => "/welcome"),
+      new Promise((resolve) =>
+        setTimeout(() => resolve("/welcome"), STATUS_TIMEOUT)
+      ),
+    ]);
+
+    Promise.all([destination, minimumDuration]).then(([path]) => {
+      if (cancelled) return;
+
+      setFading(true);
+
+      navigationTimer = setTimeout(() => {
+        navigate(path, { replace: true });
+      }, FADE_DURATION);
+    });
 
     return () => {
-      clearTimeout(fadeTimer);
+      cancelled = true;
       clearTimeout(navigationTimer);
     };
   }, [navigate]);

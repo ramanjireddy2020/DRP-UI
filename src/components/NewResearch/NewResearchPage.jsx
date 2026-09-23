@@ -4,65 +4,35 @@ import { useNavigate } from "react-router-dom";
 import {
   Box,
   Typography,
-  TextField,
   IconButton,
-  Popover,
   Button,
 } from "@mui/material";
 
 import { BG_IMAGE } from "../WelcomeScreen";
 
-import {
-  AddOutlined,
-  SearchOutlined,
-  UploadFileOutlined,
-  FolderOpenOutlined,
-  ChevronRightOutlined,
-} from "@mui/icons-material";
+import { AddOutlined } from "@mui/icons-material";
 
 import NewProjectModal from "../NewProjectModal";
+import ComposerAddPopover, { ComposerAttachments } from "../Composer/ComposerAddPopover";
+import useComposer from "../../hooks/useComposer";
 
 const FONT = "'Inter', sans-serif";
 
-const TEAL = "#0ABFBC";
-const MUTED = "#94A3B8";
-const BORDER = "#E2E8F0";
 const TEXT_DARK = "#0F172A";
-const BG = "#F8FAFC";
-
-const MOCK_PROJECTS = [
-  {
-    name: "End to End Virtual Screening",
-    dot: "#F97316",
-  },
-  {
-    name: "JAK2 – Thrombocytosis",
-    dot: TEAL,
-  },
-  {
-    name: "BRAF Melanoma Research",
-    dot: "#16A34A",
-  },
-  {
-    name: "HER2 Breast Cancer Study",
-    dot: "#D97706",
-  },
-  {
-    name: "Type 2 Diabetes – PPARG",
-    dot: TEAL,
-  },
-];
 
 const NewResearchPage = () => {
   const navigate = useNavigate();
 
   const inputRef = useRef(null);
 
-  const [query, setQuery] = useState("");
+  /*
+   * Query, module, project and attached files, plus draft autosave
+   * (POST/PATCH /sessions/draft) — shared with the HomePage composer.
+   */
+  const composer = useComposer();
+  const { query, setQuery } = composer;
+
   const [addAnchorEl, setAddAnchorEl] = useState(null);
-  const [showProjectSub, setShowProjectSub] = useState(false);
-  const [projectSearch, setProjectSearch] = useState("");
-  const [selectedProject, setSelectedProject] = useState(null);
   const [createModalOpen, setCreateModalOpen] = useState(false);
 
   /* ---------------------------------------------------------------------- */
@@ -70,12 +40,11 @@ const NewResearchPage = () => {
   /* ---------------------------------------------------------------------- */
 
   const handleSubmit = () => {
-    if (!query.trim()) return;
+    if (!query.trim() || composer.uploading) return;
 
+    // Contract: { query, module, projectId, fileIds }.
     navigate("/dashboard/new-research/workflow", {
-      state: {
-        query: query.trim(),
-      },
+      state: composer.buildWorkflowState(),
     });
   };
 
@@ -88,356 +57,6 @@ const NewResearchPage = () => {
       e.preventDefault();
       handleSubmit();
     }
-  };
-
-  /* ---------------------------------------------------------------------- */
-  /* Close popover                                                          */
-  /* ---------------------------------------------------------------------- */
-
-  const closeAddPopover = () => {
-    setAddAnchorEl(null);
-    setShowProjectSub(false);
-    setProjectSearch("");
-  };
-
-  /* ---------------------------------------------------------------------- */
-  /* Add / Project popover                                                  */
-  /* ---------------------------------------------------------------------- */
-
-  const renderAddPopover = () => {
-    const filteredProjects = MOCK_PROJECTS.filter((project) =>
-      !projectSearch
-        ? true
-        : project.name
-            .toLowerCase()
-            .includes(projectSearch.toLowerCase())
-    );
-
-    return (
-      <Popover
-        open={Boolean(addAnchorEl)}
-        anchorEl={addAnchorEl}
-        onClose={closeAddPopover}
-        anchorOrigin={{
-          vertical: "bottom",
-          horizontal: "left",
-        }}
-        transformOrigin={{
-          vertical: "top",
-          horizontal: "left",
-        }}
-        elevation={0}
-        PaperProps={{
-          sx: {
-            border: `1px solid ${BORDER}`,
-            borderRadius: "10px",
-            boxShadow: "0px 8px 24px rgba(0,0,0,0.10)",
-            mt: "8px",
-            overflow: "hidden",
-          },
-        }}
-      >
-        <Box
-          sx={{
-            display: "flex",
-            maxWidth: "100%",
-          }}
-        >
-          {/* ============================================================ */}
-          {/* MAIN MENU                                                     */}
-          {/* ============================================================ */}
-
-          <Box
-            sx={{
-              width: "220px",
-              py: "6px",
-              flexShrink: 0,
-            }}
-          >
-            {/* Upload files */}
-            <Box
-              sx={{
-                display: "flex",
-                alignItems: "center",
-                gap: "10px",
-                px: "14px",
-                py: "10px",
-                cursor: "pointer",
-
-                "&:hover": {
-                  bgcolor: BG,
-                },
-              }}
-            >
-              <UploadFileOutlined
-                sx={{
-                  fontSize: 16,
-                  color: MUTED,
-                  flexShrink: 0,
-                }}
-              />
-
-              <Typography
-                sx={{
-                  fontFamily: FONT,
-                  fontSize: "13px",
-                  fontWeight: 500,
-                  color: TEXT_DARK,
-                }}
-              >
-                Upload files or data
-              </Typography>
-            </Box>
-
-            {/* Add to project */}
-            <Box
-              onClick={() => setShowProjectSub((previous) => !previous)}
-              sx={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: "10px",
-                px: "14px",
-                py: "10px",
-                cursor: "pointer",
-
-                bgcolor: showProjectSub ? BG : "transparent",
-
-                "&:hover": {
-                  bgcolor: BG,
-                },
-              }}
-            >
-              <Box
-                sx={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "10px",
-                }}
-              >
-                <FolderOpenOutlined
-                  sx={{
-                    fontSize: 16,
-                    color: MUTED,
-                    flexShrink: 0,
-                  }}
-                />
-
-                <Typography
-                  sx={{
-                    fontFamily: FONT,
-                    fontSize: "13px",
-                    fontWeight: 500,
-                    color: TEXT_DARK,
-                  }}
-                >
-                  Add to project
-                </Typography>
-              </Box>
-
-              <ChevronRightOutlined
-                sx={{
-                  fontSize: 15,
-                  color: MUTED,
-                }}
-              />
-            </Box>
-          </Box>
-
-          {/* ============================================================ */}
-          {/* PROJECT SUBMENU                                                */}
-          {/* ============================================================ */}
-
-          {showProjectSub && (
-            <Box
-              sx={{
-                width: "220px",
-                borderLeft: `1px solid ${BORDER}`,
-                py: "12px",
-                display: "flex",
-                flexDirection: "column",
-                maxHeight: "320px",
-              }}
-            >
-              <Typography
-                sx={{
-                  fontFamily: FONT,
-                  fontSize: "11px",
-                  fontWeight: 700,
-                  color: MUTED,
-                  textTransform: "uppercase",
-                  px: "14px",
-                  mb: "8px",
-                }}
-              >
-                Select Project
-              </Typography>
-
-              {/* Project search */}
-              <Box
-                sx={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "6px",
-                  mx: "10px",
-                  mb: "6px",
-                  px: "8px",
-                  height: "32px",
-                  border: `1px solid ${BORDER}`,
-                  borderRadius: "6px",
-                  bgcolor: BG,
-                }}
-              >
-                <SearchOutlined
-                  sx={{
-                    fontSize: 13,
-                    color: MUTED,
-                    flexShrink: 0,
-                  }}
-                />
-
-                <TextField
-                  variant="standard"
-                  placeholder="Search projects..."
-                  value={projectSearch}
-                  onChange={(e) => setProjectSearch(e.target.value)}
-                  fullWidth
-                  InputProps={{
-                    disableUnderline: true,
-                  }}
-                  sx={{
-                    "& input": {
-                      fontFamily: FONT,
-                      fontSize: "12px",
-                      color: TEXT_DARK,
-                      py: 0,
-                    },
-
-                    "& input::placeholder": {
-                      color: MUTED,
-                      opacity: 1,
-                    },
-                  }}
-                />
-              </Box>
-
-              {/* Project list */}
-              <Box
-                sx={{
-                  flex: 1,
-                  overflowY: "auto",
-                  minHeight: 0,
-                }}
-              >
-                {filteredProjects.length > 0 ? (
-                  filteredProjects.map((project) => (
-                    <Box
-                      key={project.name}
-                      onClick={() => {
-                        setSelectedProject(project);
-                        setAddAnchorEl(null);
-                        setShowProjectSub(false);
-                        setProjectSearch("");
-                      }}
-                      sx={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "8px",
-                        px: "14px",
-                        py: "8px",
-                        cursor: "pointer",
-
-                        bgcolor:
-                          selectedProject?.name === project.name
-                            ? "#E6FAFA"
-                            : "transparent",
-
-                        "&:hover": {
-                          bgcolor: "#E6FAFA",
-                        },
-                      }}
-                    >
-                      <Box
-                        sx={{
-                          width: 8,
-                          height: 8,
-                          borderRadius: "50%",
-                          bgcolor: project.dot,
-                          flexShrink: 0,
-                        }}
-                      />
-
-                      <Typography
-                        sx={{
-                          fontFamily: FONT,
-                          fontSize: "12.5px",
-                          color: TEXT_DARK,
-                          whiteSpace: "nowrap",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                        }}
-                      >
-                        {project.name}
-                      </Typography>
-                    </Box>
-                  ))
-                ) : (
-                  <Box
-                    sx={{
-                      px: "14px",
-                      py: "12px",
-                    }}
-                  >
-                    <Typography
-                      sx={{
-                        fontFamily: FONT,
-                        fontSize: "12px",
-                        color: MUTED,
-                      }}
-                    >
-                      No projects found
-                    </Typography>
-                  </Box>
-                )}
-              </Box>
-
-              {/* Create project */}
-              <Box
-                sx={{
-                  display: "flex",
-                  alignItems: "center",
-                  px: "14px",
-                  py: "8px",
-                  mt: "2px",
-                  borderTop: `1px solid ${BORDER}`,
-                  cursor: "pointer",
-
-                  "&:hover": {
-                    bgcolor: BG,
-                  },
-                }}
-                onClick={() => {
-                  setAddAnchorEl(null);
-                  setShowProjectSub(false);
-                  setCreateModalOpen(true);
-                }}
-              >
-                <Typography
-                  sx={{
-                    fontFamily: FONT,
-                    fontSize: "12.5px",
-                    fontWeight: 600,
-                    color: TEAL,
-                  }}
-                >
-                  + Create new project
-                </Typography>
-              </Box>
-            </Box>
-          )}
-        </Box>
-      </Popover>
-    );
   };
 
   return (
@@ -838,11 +457,11 @@ const NewResearchPage = () => {
 
                 gap: "8px",
 
-                width: "26px",
+                flex: 1,
+
+                minWidth: 0,
 
                 height: "26px",
-
-                flexShrink: 0,
               }}
             >
               <IconButton
@@ -894,6 +513,8 @@ const NewResearchPage = () => {
                   }}
                 />
               </IconButton>
+
+              <ComposerAttachments composer={composer} />
             </Box>
 
             {/* ============================================================ */}
@@ -921,7 +542,7 @@ const NewResearchPage = () => {
             >
               <Button
                 onClick={handleSubmit}
-                disabled={!query.trim()}
+                disabled={!query.trim() || composer.uploading}
                 sx={{
                   display: "flex",
 
@@ -1008,7 +629,12 @@ const NewResearchPage = () => {
       {/* ADD POPOVER                                                        */}
       {/* ================================================================== */}
 
-      {renderAddPopover()}
+      <ComposerAddPopover
+        anchorEl={addAnchorEl}
+        onClose={() => setAddAnchorEl(null)}
+        composer={composer}
+        onCreateProject={() => setCreateModalOpen(true)}
+      />
 
       {/* ================================================================== */}
       {/* NEW PROJECT MODAL                                                  */}
@@ -1017,6 +643,10 @@ const NewResearchPage = () => {
       <NewProjectModal
         open={createModalOpen}
         onClose={() => setCreateModalOpen(false)}
+        onCreated={(project) => {
+          composer.selectProject(project);
+          composer.reloadProjects();
+        }}
       />
     </Box>
   );

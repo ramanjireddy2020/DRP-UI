@@ -1,10 +1,23 @@
-﻿import React, { useState } from "react";
-import { Box, Typography, TextField } from "@mui/material";
+﻿import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import {
+  Box,
+  Typography,
+  TextField,
+  Button,
+  CircularProgress,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+} from "@mui/material";
 import {
   ChevronLeftOutlined,
   ChevronRightOutlined,
-  PushPinOutlined,
+  DeleteOutlineOutlined,
 } from "@mui/icons-material";
+import { listSessions, deleteSession } from "../../services/api/sessions";
+import { formatUtcDateTime, buildPageList } from "../../utils/formatDate";
 
 const FONT = "'Inter', sans-serif";
 
@@ -87,62 +100,13 @@ const STATUS_DOT_COLORS = {
   Saved: "#94A3B8",
 };
 
-const SESSIONS = [
-  {
-    module: "TxKG",
-    status: "Completed",
-    title: "Type 2 Diabetes",
-    subtitle: "10 targets identified",
-    time: "15 min ago",
-    pinned: true,
-  },
-  {
-    module: "LitMineX",
-    status: "In Progress",
-    title: "JAK2 \u2013 Thrombocytosis",
-    subtitle: "Scanning 3,200 articles...",
-    time: "2 hours ago",
-  },
-  {
-    module: "ScreenSuite",
-    status: "Saved",
-    title: "JAK2 \u2013 Imatinib Binding",
-    subtitle: "Virtual screening complete",
-    time: "Yesterday",
-  },
-  {
-    module: "CurateX",
-    status: "Completed",
-    title: "BRAF \u2013 Melanoma Resistance",
-    subtitle: "Curation complete \u2022 8 candidates shortlisted",
-    time: "2 days ago",
-  },
-  {
-    module: "NovSearch",
-    status: "Saved",
-    title: "HER2 \u2013 Breast Cancer Repurposing",
-    subtitle: "Novelty assessment complete",
-    time: "3 days ago",
-  },
-  {
-    module: "TxKG",
-    status: "Completed",
-    title: "PPARG \u2013 Metabolic Syndrome",
-    subtitle: "Knowledge graph complete \u2022 15 drug interactions mapped",
-    time: "4 days ago",
-  },
-  {
-    module: "LitMineX",
-    status: "Completed",
-    title: "CDK4/6 \u2013 Triple Negative Breast Cancer",
-    subtitle: "Literature mining complete \u2022 892 articles analyzed",
-    time: "5 days ago",
-  },
-];
+/* Status filter values from the collection: Completed | In Progress | Saved. */
+const STATUS_TAGS = ["All", "Completed", "In Progress", "Saved"];
 
-const TOTAL_ITEMS = 47;
-const TOTAL_PAGES = 12;
-const PAGE_SIZE = 10;
+const WORKFLOW_ROUTE = "/dashboard/new-research/workflow";
+const SEARCH_DEBOUNCE_MS = 300;
+
+const errorText = (err, fallback) => err?.userMessage || err?.message || fallback;
 
 /* Figma's "search icon" is literally the 🔍 glyph as a text node — Width 13,
    Height 13, Inter 400/13px, color #9CA3AF — not a custom vector. Rendering
@@ -208,20 +172,119 @@ function PageButton({ children, active, onClick, disabled, "aria-label": ariaLab
 }
 
 const RecentSessionsPage = () => {
-  const [search, setSearch] = useState("");
-  const [activeModule, setActiveModule] = useState("All");
-  const [page, setPage] = useState(1);
+  const navigate = useNavigate();
 
-  const filtered = SESSIONS.filter(
-    (s) =>
-      (activeModule === "All" || s.module === activeModule) &&
-      (!search ||
-        s.title.toLowerCase().includes(search.toLowerCase()) ||
-        s.subtitle.toLowerCase().includes(search.toLowerCase()))
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [activeModule, setActiveModule] = useState("All");
+  const [activeStatus, setActiveStatus] = useState("All");
+  const [page, setPage] = useState(1);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  const [sessions, setSessions] = useState([]);
+  const [totalPages, setTotalPages] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState(null);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search.trim());
+      setPage(1);
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  // Server-side filtering and pagination: GET /sessions?search&module&status&page
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError(null);
+
+    const params = { page };
+    if (debouncedSearch) params.search = debouncedSearch;
+    if (activeModule !== "All") params.module = activeModule;
+    if (activeStatus !== "All") params.status = activeStatus;
+
+    listSessions(params)
+      .then((data) => {
+        if (!active) return;
+        setSessions(Array.isArray(data?.items) ? data.items : []);
+        setTotalPages(Math.max(1, Number(data?.totalPages) || 1));
+      })
+      .catch((err) => {
+        if (!active) return;
+        setSessions([]);
+        setError(errorText(err, "Failed to load sessions"));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [debouncedSearch, activeModule, activeStatus, page, refreshKey]);
+
+  const openSession = (sessionId) =>
+    navigate(WORKFLOW_ROUTE, { state: { sessionId } });
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteSession(deleteTarget.id);
+      setDeleteTarget(null);
+      if (sessions.length === 1 && page > 1) setPage(page - 1);
+      else setRefreshKey((k) => k + 1);
+    } catch (err) {
+      setDeleteError(errorText(err, "Failed to delete session"));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const renderChip = (tag, active, onClick) => (
+    <Box
+      key={tag}
+      onClick={onClick}
+      sx={{
+        height: "30px",
+        padding: "7px 14px",
+        borderRadius: "6px",
+        cursor: "pointer",
+        display: "flex",
+        alignItems: "center",
+        boxSizing: "border-box",
+        bgcolor: active ? CHIP_ACTIVE_BG : "#fff",
+        border: `1px solid ${active ? CHIP_ACTIVE_BG : CHIP_BORDER}`,
+        "&:hover": { bgcolor: active ? "#00A8BD" : BG },
+      }}
+    >
+      <Typography
+        sx={{
+          fontFamily: FONT,
+          fontSize: "13px",
+          fontWeight: active ? 500 : 400,
+          color: active ? "#FFFFFF" : CHIP_TEXT_INACTIVE,
+          lineHeight: 1,
+          whiteSpace: "nowrap",
+        }}
+      >
+        {tag}
+      </Typography>
+    </Box>
   );
 
-  const rangeStart = (page - 1) * PAGE_SIZE + 1;
-  const rangeEnd = Math.min(page * PAGE_SIZE, TOTAL_ITEMS);
+  const centerNote = (content) => (
+    <Box sx={{ minHeight: "180px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "10px" }}>
+      {content}
+    </Box>
+  );
 
   return (
     <Box
@@ -315,41 +378,23 @@ const RecentSessionsPage = () => {
 
             {/* filter chips — height 30, radius 6, padding 7/14/7/14 */}
             <Box sx={{ display: "flex", gap: "8px", flexWrap: "wrap", flexShrink: 0 }}>
-              {MODULE_TAGS.map((tag) => {
-                const active = activeModule === tag;
-                return (
-                  <Box
-                    key={tag}
-                    onClick={() => setActiveModule(tag)}
-                    sx={{
-                      height: "30px",
-                      padding: "7px 14px",
-                      borderRadius: "6px",
-                      cursor: "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                      boxSizing: "border-box",
-                      bgcolor: active ? CHIP_ACTIVE_BG : "#fff",
-                      border: `1px solid ${active ? CHIP_ACTIVE_BG : CHIP_BORDER}`,
-                      "&:hover": { bgcolor: active ? "#00A8BD" : BG },
-                    }}
-                  >
-                    <Typography
-                      sx={{
-                        fontFamily: FONT,
-                        fontSize: "13px",
-                        fontWeight: active ? 500 : 400,
-                        color: active ? "#FFFFFF" : CHIP_TEXT_INACTIVE,
-                        lineHeight: 1,
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {tag}
-                    </Typography>
-                  </Box>
-                );
-              })}
+              {MODULE_TAGS.map((tag) =>
+                renderChip(tag, activeModule === tag, () => {
+                  setActiveModule(tag);
+                  setPage(1);
+                })
+              )}
             </Box>
+          </Box>
+
+          {/* status filter — same chip style */}
+          <Box sx={{ flexShrink: 0, display: "flex", gap: "8px", flexWrap: "wrap", mt: "-12px" }}>
+            {STATUS_TAGS.map((tag) =>
+              renderChip(tag, activeStatus === tag, () => {
+                setActiveStatus(tag);
+                setPage(1);
+              })
+            )}
           </Box>
 
           {/* sessions-list — Fill(1120) × Hug(665), radius 10, border #E5E7EB */}
@@ -367,20 +412,48 @@ const RecentSessionsPage = () => {
             }}
           >
             <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-              {filtered.map((s, i) => {
+              {loading &&
+                centerNote(<CircularProgress size={20} sx={{ color: TEAL }} />)}
+
+              {!loading && error &&
+                centerNote(
+                  <>
+                    <Typography role="alert" sx={{ fontFamily: FONT, fontSize: "14px", color: "#DC2626" }}>
+                      Couldn&apos;t load sessions: {error}
+                    </Typography>
+                    <Button onClick={() => setRefreshKey((k) => k + 1)} sx={{ textTransform: "none", fontFamily: FONT, color: TEAL }}>
+                      Retry
+                    </Button>
+                  </>
+                )}
+
+              {!loading && !error && sessions.length === 0 &&
+                centerNote(
+                  <Typography sx={{ fontFamily: FONT, fontSize: "14px", color: TEXT_MUTED_LIGHT }}>
+                    No sessions found
+                  </Typography>
+                )}
+
+              {!loading && !error && sessions.map((s, i) => {
                 const mc = MODULE_COLORS[s.module] || { color: TEXT_MUTED_LIGHT, bg: BG };
                 const dotColor = STATUS_DOT_COLORS[s.status] || TEXT_MUTED_LIGHT;
 
                 return (
                   <Box
-                    key={i}
+                    key={s.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => openSession(s.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") openSession(s.id);
+                    }}
                     sx={{
                       /* session-card — Fill(1120) x Hug(95), padding 16/20/16/20, gap 5 (vertical) */
                       display: "flex",
                       flexDirection: "column",
                       gap: "5px",
                       padding: "16px 20px",
-                      borderBottom: i === filtered.length - 1 ? "none" : `1px solid ${ROW_BORDER}`,
+                      borderBottom: i === sessions.length - 1 ? "none" : `1px solid ${ROW_BORDER}`,
                       cursor: "pointer",
                       boxSizing: "border-box",
                       "&:hover": { bgcolor: BG },
@@ -431,28 +504,50 @@ const RecentSessionsPage = () => {
                         </Box>
                       </Box>
 
-                      {/* right cluster: pin-icon (14x14) + timestamp */}
+                      {/* right cluster: timestamp (updatedAt, UTC) + delete */}
                       <Box sx={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
-                        {s.pinned && (
-                          <PushPinOutlined
-                            sx={{ fontSize: 14, width: 14, height: 14, color: TEAL, transform: "rotate(45deg)" }}
-                          />
-                        )}
                         <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 400, color: TEXT_MUTED_LIGHT, lineHeight: 1, whiteSpace: "nowrap" }}>
-                          {s.time}
+                          {formatUtcDateTime(s.updatedAt)}
                         </Typography>
+                        <Box
+                          component="button"
+                          type="button"
+                          aria-label={`Delete session ${s.title || s.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDeleteError(null);
+                            setDeleteTarget(s);
+                          }}
+                          sx={{
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            width: "22px",
+                            height: "22px",
+                            p: 0,
+                            border: "none",
+                            borderRadius: "4px",
+                            bgcolor: "transparent",
+                            cursor: "pointer",
+                            "&:hover": { bgcolor: "#FEF2F2", "& svg": { color: "#EF4444" } },
+                          }}
+                        >
+                          <DeleteOutlineOutlined sx={{ fontSize: 15, color: TEXT_MUTED_LIGHT }} />
+                        </Box>
                       </Box>
                     </Box>
 
                     {/* title — Inter 600/15px, #111827 */}
                     <Typography sx={{ fontFamily: FONT, fontSize: "15px", fontWeight: 600, color: TITLE_COLOR, lineHeight: 1 }}>
-                      {s.title}
+                      {s.title || "Untitled session"}
                     </Typography>
 
-                    {/* subtitle — Inter 400/13px, #6B7280 */}
-                    <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 400, color: TEXT_MUTED, lineHeight: 1 }}>
-                      {s.subtitle}
-                    </Typography>
+                    {/* subtitle — Inter 400/13px, #6B7280 (API: summary) */}
+                    {s.summary && (
+                      <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 400, color: TEXT_MUTED, lineHeight: 1.3 }}>
+                        {s.summary}
+                      </Typography>
+                    )}
                   </Box>
                 );
               })}
@@ -484,32 +579,57 @@ const RecentSessionsPage = () => {
               <ChevronLeftOutlined sx={{ fontSize: 16 }} />
             </PageButton>
 
-            {[1, 2, 3].map((n) => (
-              <PageButton key={n} active={page === n} onClick={() => setPage(n)}>
-                {n}
-              </PageButton>
-            ))}
-
-            <Box sx={{ px: "4px", color: PAGE_BTN_LABEL, fontFamily: FONT, fontSize: "12px" }}>&hellip;</Box>
-
-            <PageButton active={page === TOTAL_PAGES} onClick={() => setPage(TOTAL_PAGES)}>
-              {TOTAL_PAGES}
-            </PageButton>
+            {buildPageList(page, totalPages).map((n, idx) =>
+              n === "…" ? (
+                <Box key={`gap-${idx}`} sx={{ px: "4px", color: PAGE_BTN_LABEL, fontFamily: FONT, fontSize: "12px" }}>&hellip;</Box>
+              ) : (
+                <PageButton key={n} active={page === n} onClick={() => setPage(n)}>
+                  {n}
+                </PageButton>
+              )
+            )}
 
             <PageButton
               aria-label="Next page"
-              disabled={page === TOTAL_PAGES}
-              onClick={() => setPage((p) => Math.min(TOTAL_PAGES, p + 1))}
+              disabled={page >= totalPages}
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
             >
               <ChevronRightOutlined sx={{ fontSize: 16 }} />
             </PageButton>
 
             <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 400, color: TEXT_MUTED, whiteSpace: "nowrap", ml: "8px" }}>
-              Showing {rangeStart}-{rangeEnd} of {TOTAL_ITEMS} articles
+              Page {page} of {totalPages}
             </Typography>
           </Box>
         </Box>
       </Box>
+
+      {/* Delete confirm — DELETE /sessions/{id} */}
+      <Dialog open={Boolean(deleteTarget)} onClose={() => !deleting && setDeleteTarget(null)} fullWidth maxWidth="xs">
+        <DialogTitle sx={{ fontFamily: FONT, fontWeight: 700, fontSize: "18px" }}>Delete session?</DialogTitle>
+        <DialogContent>
+          <Typography sx={{ fontFamily: FONT, fontSize: "14px", color: TITLE_COLOR }}>
+            &ldquo;{deleteTarget?.title || deleteTarget?.id}&rdquo; and its steps and messages will be deleted.
+          </Typography>
+          {deleteError && (
+            <Typography role="alert" sx={{ fontFamily: FONT, fontSize: "13px", color: "#DC2626", mt: 1 }}>
+              {deleteError}
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteTarget(null)} disabled={deleting} sx={{ textTransform: "none", fontFamily: FONT, color: TITLE_COLOR }}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleDelete}
+            disabled={deleting}
+            sx={{ textTransform: "none", fontFamily: FONT, color: "#FFFFFF", bgcolor: "#EF4444", "&:hover": { bgcolor: "#DC2626" } }}
+          >
+            {deleting ? "Deleting..." : "Delete"}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };
