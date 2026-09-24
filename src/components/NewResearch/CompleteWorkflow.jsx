@@ -2605,7 +2605,14 @@ const CompleteWorkflow = () => {
 
     order.forEach((key) => {
       const own = conversation.filter((m) => m.moduleKey === key);
-      pushMessages(own.filter((m) => !m.afterCard));
+      // TxKG's own card is the answer to the prompt that ran it. The agent
+      // text the backend attaches ahead of it ("Here are the explanations for
+      // each candidate: ...") is an unedited note that testing asked to hide,
+      // so only the user's prompt (and any error) is drawn before the card.
+      const lead = own.filter((m) => !m.afterCard);
+      pushMessages(
+        key === "txkg" ? lead.filter((m) => m.role === "user" || m.isError) : lead
+      );
       blocks.push({ kind: "module", id: `mod-${key}`, moduleKey: key });
       pushMessages(own.filter((m) => m.afterCard));
     });

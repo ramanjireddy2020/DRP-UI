@@ -138,7 +138,7 @@ const TXKGPhase = ({
   const diseaseLabel = hasLiveData ? txkg.disease : null;
   const targetCount = hasLiveData ? txkg.count : 0;
 
-  const headline = `I found ${targetCount} protein target${targetCount === 1 ? "" : "s"} associated with ${diseaseLabel || "this query"}. Here are the top candidates ranked by therapeutic relevance:`;
+  const headline = `I found ${targetCount} protein target${targetCount === 1 ? "" : "s"} associated with ${diseaseLabel || "this query"}. Here are the top targets ranked by therapeutic relevance:`;
 
   /**
    * Insights → Recommendations.
@@ -152,7 +152,7 @@ const TXKGPhase = ({
     target: t.name,
     status: t.noveltyLabel || "—",
     desc:
-      `${t.category || "Candidate"} · score ${t.score}` +
+      `${t.category || "Target"} · score ${t.score}` +
       (t.pathCount ? ` · ${t.pathCount} connecting path${t.pathCount === 1 ? "" : "s"}` : "") +
       (t.literatureHits != null ? ` · ${t.literatureHits} literature hit${t.literatureHits === 1 ? "" : "s"}` : ""),
   }));
