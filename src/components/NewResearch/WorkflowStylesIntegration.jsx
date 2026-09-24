@@ -174,7 +174,7 @@ export const AgentThinking = ({ status = "Searching biomedical databases..." }) 
         <div className="agent-avatar">
           <SparklesIcon className="icon" />
         </div>
-        <span className="agent-name">INOVAPATH TXKG AGENT</span>
+        <span className="agent-name">DRP TXKG AGENT</span>
       </div>
       <div className="status-processing">
         <div className="spinner-container">

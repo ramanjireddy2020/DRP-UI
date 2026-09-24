@@ -124,7 +124,7 @@ const TXKGPhase = ({
   /**
    * The signed-in researcher's own label for chat bubbles, and the one agent
    * name this module answers by. Both were hardcoded — "DR. PRIYA (YOU)" and
-   * "INOVAPATH TXKG AGENT".
+   * "DRP TXKG AGENT".
    */
   const agentDisplay = moduleDisplayFor('txkg') ?? { label: 'TxKG', role: null };
   // Real TxKG results only. This used to fall back to MOCK_TARGETS (a Type 2

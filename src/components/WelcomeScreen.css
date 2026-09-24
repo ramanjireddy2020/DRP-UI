@@ -336,7 +336,7 @@
 
 
 /* ============================================================
-   iNovaPath LOGO
+   Drug Repurposing Platform LOGO
    Exact Figma frame:
 
    Width  = 106px
@@ -359,7 +359,9 @@
 
   justify-content: center;
 
-  width: 106px;
+  /* Grows with the text so "Drug Repurposing Platform" isn't clipped;
+     the Figma width (106px) stays as the minimum. */
+  width: auto;
   height: 28px;
 
   min-width: 106px;
@@ -380,7 +382,7 @@
 
 
 /* ============================================================
-   iNovaPath TEXT
+   Drug Repurposing Platform TEXT
    Exact Figma:
 
    Width         = 82px
@@ -397,7 +399,7 @@
 .ws-logo-text {
   display: block;
 
-  width: 82px;
+  width: auto;
   height: 16px;
 
   margin: 0;
@@ -1370,7 +1372,7 @@
   /* Keep Figma logo dimensions on mobile */
 
   .ws-badge {
-    width: 106px;
+    width: auto;
 
     height: 28px;
 
@@ -1389,7 +1391,7 @@
 
 
   .ws-logo-text {
-    width: 82px;
+    width: auto;
 
     height: 16px;
 

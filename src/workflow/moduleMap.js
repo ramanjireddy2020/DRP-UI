@@ -15,8 +15,8 @@
 /**
  * `label` + `agentRole` are the one naming scheme every module answers with.
  *
- * Each phase screen used to write its own header — "INOVAPATH TXKG AGENT",
- * "INOVAPATH LITMINEX AGENT" — so the product name leaked into the agent's
+ * Each phase screen used to write its own header — "DRP TXKG AGENT",
+ * "DRP LITMINEX AGENT" — so the product name leaked into the agent's
  * identity and no two modules described themselves the same way. Renderers now
  * read `agentName` (see agentNameFor) and there is one place to change it.
  */

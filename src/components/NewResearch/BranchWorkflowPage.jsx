@@ -289,7 +289,7 @@ const BranchWorkflowPage = () => {
                 }} />
                 <Box sx={{ textAlign: "center" }}>
                   <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 700, color: TEAL, textTransform: "uppercase", letterSpacing: "0.5px", mb: "8px" }}>
-                    INOVAPATH TXKG AGENT
+                    DRP TXKG AGENT
                   </Typography>
                   <Typography sx={{ fontFamily: FONT, fontSize: "14px", color: TEXT_DARK }}>
                     Searching biomedical databases (NCBI, UniProt, TxKG national...
@@ -468,7 +468,7 @@ const BranchWorkflowPage = () => {
                     <Box sx={{ px: "20px", pb: "20px" }}>
                       <Box sx={{ p: "12px", mb: "16px" }}>
                         <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEAL, textTransform: "uppercase", letterSpacing: "0.5px", mb: "8px" }}>
-                          INOVAPATH DISCOVER AGENT
+                          DRP DISCOVER AGENT
                         </Typography>
                         <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: TEXT_DARK, lineHeight: 1.7 }}>
                           Here is the generated knowledge graph for Type 2 Diabetes. This map illustrates the validated and predicted relationships between JAK2, drug molecules, associated pathways, and overlapping diseases based on TxKG relations:
@@ -1076,7 +1076,7 @@ const BranchWorkflowPage = () => {
                   borderRadius: "12px", p: "20px", mb: "20px",
                 }}>
                   <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEAL, textTransform: "uppercase", letterSpacing: "0.5px", mb: "12px" }}>
-                    INOVAPATH LITERATURE AGENT
+                    DRP LITERATURE AGENT
                   </Typography>
                   <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: TEXT_DARK, lineHeight: 1.7 }}>
                     Literature mining complete. Found 124 articles across PubMed and clinical databases. Results ranked by confidence score with keyword extraction.

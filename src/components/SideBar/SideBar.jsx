@@ -37,7 +37,7 @@ const FONT = "'Inter', sans-serif";
 /* =========================================================
    LOGO
    =========================================================
-   Complete iNovaPath logo asset.
+   Complete Drug Repurposing Platform logo asset.
    Kept inline so there are no external asset dependencies.
    ========================================================= */
 
@@ -78,7 +78,7 @@ const BrandMark = ({
   >
     <img
       src={LOGO_URL}
-      alt="iNovaPath"
+      alt="Drug Repurposing Platform"
       width={size}
       height={size}
       style={{
@@ -371,7 +371,9 @@ const SideBar = ({
                   whiteSpace: "nowrap",
                 }}
               >
-                iNovaPath
+                {/* Short form: the full "Drug Repurposing Platform" doesn't
+                    fit beside the logo in the 240px rail. */}
+                DRP
               </Typography>
             )}
           </Box>

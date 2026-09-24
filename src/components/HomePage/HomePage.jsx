@@ -195,7 +195,7 @@ const HomePage = () => {
               color: "#667080",
             }}
           >
-            Start with a disease name. iNovaPath recommends ranked protein
+            Start with a disease name. Drug Repurposing Platform recommends ranked protein
             targets — you confirm before anything advances.
           </Typography>
         </Box>

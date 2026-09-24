@@ -42,7 +42,7 @@ const statusTextStyle = {
 
 
 /* ============================================================
-   iNovaPath Logo
+   Drug Repurposing Platform Logo
    Figma properties:
 
    Frame:
@@ -52,7 +52,7 @@ const statusTextStyle = {
    Padding: 6px 12px
 
    Text:
-   Content       : ◇ iNovaPath
+   Content       : ◇ Drug Repurposing Platform
    Width         : 82px
    Height        : 16px
    Font          : Inter
@@ -67,10 +67,10 @@ function NovaPathLogo() {
   return (
     <div
       className="ws-badge"
-      aria-label="iNovaPath"
+      aria-label="Drug Repurposing Platform"
     >
       <span className="ws-logo-text">
-        ◈ iNovaPath
+        ◈ Drug Repurposing Platform
       </span>
     </div>
   );
@@ -514,7 +514,7 @@ export default function WelcomeScreen({
 
           <header className="ws-hero">
 
-            {/* iNovaPath Figma logo */}
+            {/* Drug Repurposing Platform Figma logo */}
 
             <NovaPathLogo />
 
@@ -522,7 +522,7 @@ export default function WelcomeScreen({
             {/* Heading */}
 
             <h1>
-              Welcome to iNovaPath, {greetingName}!
+              Welcome to Drug Repurposing Platform, {greetingName}!
             </h1>
 
 

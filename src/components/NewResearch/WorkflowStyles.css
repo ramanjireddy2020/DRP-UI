@@ -1145,8 +1145,8 @@
 /* FIX (root cause of the text-clipping bug you saw):
    this rule previously had `width: 133px; overflow: hidden;`, sized for
    the single label "TXKG AGENT". Every agent name in the app reuses this
-   class ("INOVAPATH TXKG AGENT", "INOVAPATH LITMINEX AGENT",
-   "INOVAPATH CURATEX AGENT" — all longer), so real labels were being
+   class ("DRP TXKG AGENT", "DRP LITMINEX AGENT",
+   "DRP CURATEX AGENT" — all longer), so real labels were being
    silently cut off by the fixed width + overflow:hidden combo.
    Fixed width removed; label now sizes to its own content and the parent
    .bubble-header flex row wraps around it correctly. */

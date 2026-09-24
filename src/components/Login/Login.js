@@ -316,13 +316,13 @@ const Login = () => {
             <div className="logo-wrapper">
               <img
                 src={inovapathLogo}
-                alt="iNovaPath"
+                alt="Drug Repurposing Platform"
                 className="brand-logo"
               />
             </div>
 
             <span className="brand-name">
-              iNovaPath
+              Drug Repurposing Platform
             </span>
           </div>
 

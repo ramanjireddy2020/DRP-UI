@@ -16,7 +16,7 @@ const LogoMark = ({ size = 86 }) => {
   return (
     <img
       src={inovapathLogo}
-      alt="iNovaPath"
+      alt="Drug Repurposing Platform"
       width={size}
       height={size}
       className="splash-logo-image"
@@ -173,7 +173,7 @@ const SplashScreen = () => {
       <section className="splash-content">
 
         {/* ===================================================
-            MAIN iNovaPath LOGO
+            MAIN Drug Repurposing Platform LOGO
             =================================================== */}
 
         <div className="logo-stage">

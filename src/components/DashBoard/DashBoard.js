@@ -89,9 +89,9 @@ const SidebarInner = ({ collapsed, onToggle, onNewResearch, navigate }) => {
         }}>
           {!collapsed && (
             <Box sx={{ display: "flex", alignItems: "center", gap: "10px" }}>
-              <Box component="img" src="/logo.png" alt="iNovaPath"
+              <Box component="img" src="/logo.png" alt="Drug Repurposing Platform"
                 sx={{ width: 32, height: 32, objectFit: "cover", borderRadius: "50%", flexShrink: 0 }} />
-              <Typography sx={{ color: "#fff", fontWeight: 700, fontSize: "20px", fontFamily: FONT, letterSpacing: "-0.05em" }}>iNovaPath</Typography>
+              <Typography sx={{ color: "#fff", fontWeight: 700, fontSize: "20px", fontFamily: FONT, letterSpacing: "-0.05em" }}>DRP</Typography>
             </Box>
           )}
           <IconButton

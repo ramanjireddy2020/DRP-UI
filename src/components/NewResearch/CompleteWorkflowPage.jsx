@@ -386,7 +386,7 @@ const CompleteWorkflowPage = () => {
                       <Sparkles size={14} color={TEAL} />
                     </Box>
                     <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, lineHeight: "14px", textTransform: "uppercase", color: TEXT_DARK }}>
-                      INOVAPATH TXKG AGENT
+                      DRP TXKG AGENT
                     </Typography>
                   </Box>
                   <Box sx={{ display: "flex", alignItems: "center", gap: "10px", width: "100%" }}>

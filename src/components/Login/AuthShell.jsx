@@ -52,10 +52,10 @@ const AuthShell = ({ children }) => (
       <div className="visual-content">
         <div className="brand">
           <div className="logo-wrapper">
-            <img src={inovapathLogo} alt="iNovaPath" className="brand-logo" />
+            <img src={inovapathLogo} alt="Drug Repurposing Platform" className="brand-logo" />
           </div>
 
-          <span className="brand-name">iNovaPath</span>
+          <span className="brand-name">Drug Repurposing Platform</span>
         </div>
 
         <div className="hero-copy">
