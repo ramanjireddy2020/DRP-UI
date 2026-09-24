@@ -859,25 +859,6 @@
 }
 
 
-/* Quick start description */
-
-.ws-quick-card > p {
-  margin: 0;
-
-  font-family:
-    Inter,
-    sans-serif;
-
-  font-size: 11px;
-
-  line-height:
-    1.4;
-
-  color:
-    var(--ws-sub);
-}
-
-
 /* ============================================================
    SEARCH BOX
    ============================================================ */

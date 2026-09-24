@@ -616,12 +616,6 @@ export default function WelcomeScreen({
             </h2>
 
 
-            <p>
-              Search or select therapeutic areas to seed
-              your home dashboard view.
-            </p>
-
-
             {/* Search */}
 
             <div className="ws-search-box">
