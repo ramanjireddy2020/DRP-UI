@@ -225,7 +225,7 @@ const ChatInputBar = ({ onSend, pending = false, placeholder, hint }) => {
             }
           }}
           disabled={disabled}
-          placeholder={placeholder || "Type @ for modules or ask a research question..."}
+          placeholder={placeholder || "Type @ for agents or ask a research question..."}
           fullWidth
           multiline
           maxRows={3}
@@ -244,7 +244,7 @@ const ChatInputBar = ({ onSend, pending = false, placeholder, hint }) => {
                 gone rather than wired: POST /sessions/{id}/messages takes only
                 { message, stepId }, so an uploaded file would have nowhere to
                 go, and there is no speech endpoint. */}
-            {/* Says why the module changed, since only an @mention can do it. */}
+            {/* Transient status from the parent (e.g. "Asking the agent…"). */}
             {hint && (
               <Typography sx={{ fontFamily: FONT, fontSize: "11px", color: TEXT_MUTED }}>
                 {hint}

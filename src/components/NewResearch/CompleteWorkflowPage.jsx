@@ -420,7 +420,7 @@ const CompleteWorkflowPage = () => {
               mt: "24px",
             }}>
               <Typography sx={{ fontFamily: FONT, fontSize: "14px", lineHeight: "18px", color: "#94A3B8" }}>
-                Type @ for modules or ask a research question...
+                Type @ for agents or ask a research question...
               </Typography>
               <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
                 <Box sx={{ display: "flex", alignItems: "center", gap: "8px" }}>

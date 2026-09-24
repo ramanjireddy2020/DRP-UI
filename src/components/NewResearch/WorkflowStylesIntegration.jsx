@@ -198,7 +198,7 @@ export const ChatInputBar = ({
   onSubmit, 
   onFocus, 
   onMicClick,
-  placeholder = "Type @ for modules or ask a research question..." 
+  placeholder = "Type @ for agents or ask a research question..." 
 }) => (
   <div className="chat-input-bar-container">
     <div className="input-row">

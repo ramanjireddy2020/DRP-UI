@@ -2730,11 +2730,10 @@ const CompleteWorkflow = () => {
               <ChatInputBar
                 onSend={handleChatSubmit}
                 pending={session.pending}
-                hint={
-                  session.pending
-                    ? "Asking the agent…"
-                    : "Mention a module with @ to start a new run"
-                }
+                // Only shown while a reply is in flight. The idle hint
+                // ("Mention a module with @ to start a new run") was removed
+                // per testing; the placeholder already says to type @.
+                hint={session.pending ? "Asking the agent…" : undefined}
               />
             )}
           </Box>
