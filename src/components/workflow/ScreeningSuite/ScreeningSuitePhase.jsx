@@ -3,7 +3,6 @@ import { Box, Typography, Button, LinearProgress } from "@mui/material";
 import { FONT, TEAL, GRAY_BG } from "../workflowConstants";
 import PhaseActions from "../PhaseActions";
 import SharedAgentHeader from "../AgentHeader";
-import { useCurrentUser } from "../../../context/CurrentUserContext";
 
 /* ============================================================================
    DATA
@@ -187,63 +186,6 @@ const baseText = {
    SCREEN SUITE ICON
 ============================================================================ */
 
-
-/* ============================================================================
-   USER MESSAGE
-============================================================================ */
-
-const UserMessage = ({ subject }) => {
-  const { chatLabel: userLabel } = useCurrentUser();
-  return (
-  <Box
-    sx={{
-      display: "flex",
-      justifyContent: "flex-end",
-      mb: "16px",
-    }}
-  >
-    <Box
-      sx={{
-        width: "534px",
-        maxWidth: "100%",
-        background: "#F0FDF9",
-        borderRadius: "12px",
-        padding: "16px",
-        boxSizing: "border-box",
-      }}
-    >
-      <Typography
-        sx={{
-          ...baseText,
-          fontSize: "10px",
-          lineHeight: "12px",
-          fontWeight: 700,
-          letterSpacing: "0.7px",
-          color: TEAL,
-          textTransform: "uppercase",
-          mb: "8px",
-        }}
-      >
-        {userLabel}
-      </Typography>
-
-      <Typography
-        sx={{
-          ...baseText,
-          fontSize: "14px",
-          lineHeight: "20px",
-          color: "#334155",
-        }}
-      >
-        {/* Was a fixed "for Metformin and Pioglitazone against JAK2". */}
-        {subject
-          ? `View ScreenSuite docking status for ${subject}`
-          : "View ScreenSuite docking status"}
-      </Typography>
-    </Box>
-  </Box>
-  );
-};
 
 /* ============================================================================
    AGENT HEADER
@@ -1188,18 +1130,6 @@ const ScreeningSuitePhase = ({
   const hasHits = Array.isArray(hits) && hits.length > 0;
   const handedOff = (Array.isArray(compounds) ? compounds : []).filter(Boolean);
 
-  /**
-   * What is being docked, read off the hits rather than named in the copy.
-   * The header used to say "Metformin and Pioglitazone against JAK2" on every
-   * run.
-   */
-  const subject = hasHits
-    ? `${[...new Set(hits.map((h) => h.ligand).filter((l) => l && l !== "—"))].join(", ")} against ${
-        [...new Set(hits.map((h) => h.protein).filter((p) => p && p !== "—"))].join(", ")
-      }`
-    : handedOff.length
-    ? `${handedOff.join(", ")}${target ? ` against ${target}` : ""}`
-    : target || null;
 
   if (workflowPhase === "screensuite-loading") {
     return (
@@ -1230,8 +1160,6 @@ const ScreeningSuitePhase = ({
             },
           }}
         >
-          <UserMessage subject={subject} />
-
           <Box
             sx={{
               width: "100%",
@@ -1369,12 +1297,6 @@ const ScreeningSuitePhase = ({
           },
         }}
       >
-        {/* ================================================================
-            USER REQUEST
-        ================================================================= */}
-
-        <UserMessage subject={subject} />
-
         {/* ================================================================
             MAIN AGENT CARD
         ================================================================= */}

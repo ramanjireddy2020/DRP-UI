@@ -660,8 +660,6 @@ const ResultsActions = ({ onCompare, selectedCount = 0, onFinish, actions = {} }
  */
 const LoadingScreen = ({ progressMessage }) => (
   <>
-    <UserMessage>Search patents for this candidate</UserMessage>
-
     <Box
       sx={{
         width: "100%",
@@ -706,12 +704,6 @@ const ResultsScreen = ({
 
   return (
     <>
-      <UserMessage>
-        {/* Was a fixed "Imatinib + JAK inhibitors" string. */}
-        {subject
-          ? `Search patents for ${subject}`
-          : "Search patents for this candidate"}
-      </UserMessage>
 
       <Box
         sx={{
@@ -846,11 +838,6 @@ const ComparisonScreen = ({ rows = [], comparison, onBack, onRetry, actions = {}
 
 const DecisionScreen = ({ onContinue, onEndTask, pending = false, error = null, diseaseLabel }) => (
   <>
-    <UserMessage>
-      Complete this research task. Generate a final summary report for the
-      {diseaseLabel ? ` ${diseaseLabel} ` : " "}drug repurposing project.
-    </UserMessage>
-
     <Box
       sx={{
         width: "100%",
@@ -954,8 +941,6 @@ const SummaryScreen = ({ report, researcherName, actions = {}, onNewResearch }) 
 
   return (
   <>
-    <UserMessage>End Task</UserMessage>
-
     <Box
       sx={{
         width: "100%",

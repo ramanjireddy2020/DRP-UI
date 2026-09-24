@@ -12,10 +12,9 @@ import { moduleDisplayFor } from '../../../workflow/moduleMap';
 import { linksForSource, uniprotUrl } from '../../../workflow/sourceLinks';
 import PhaseActions from '../PhaseActions';
 import SubgraphView from '../SubgraphView';
-import { useCurrentUser } from '../../../context/CurrentUserContext';
 import { ExpandMoreOutlined, AddOutlined, CloseOutlined } from '@mui/icons-material';
 import {
-  FONT, TEAL, USER_MSG_BG, GRAY_BG, BORDER, BORDER_LIGHT,
+  FONT, TEAL, GRAY_BG, BORDER, BORDER_LIGHT,
   TEXT_DARK, TEXT_MUTED, INSIGHTS_HEADER, ACTIVE_TAB,
 } from '../workflowConstants';
 
@@ -86,7 +85,6 @@ const SectionAccordionSummary = ({ label }) => (
 
 const TXKGPhase = ({
   workflowPhase,
-  query,
   txkg,
   expandedAccordion,
   setExpandedAccordion,
@@ -128,7 +126,6 @@ const TXKGPhase = ({
    * name this module answers by. Both were hardcoded — "DR. PRIYA (YOU)" and
    * "INOVAPATH TXKG AGENT".
    */
-  const { chatLabel: userLabel } = useCurrentUser();
   const agentDisplay = moduleDisplayFor('txkg') ?? { label: 'TxKG', role: null };
   // Real TxKG results only. This used to fall back to MOCK_TARGETS (a Type 2
   // Diabetes fixture) whenever the result was empty, and those rows could be
@@ -808,14 +805,6 @@ const TXKGPhase = ({
   if (workflowPhase === 'txkg-loading') {
     return (
       <Box className="txkg-loading-content" sx={{ bgcolor: GRAY_BG }}>
-        <div className="user-message-row">
-          <div className="user-message-bubble">
-            <div className="user-bubble-header">
-              <span className="user-name">{userLabel}</span>
-            </div>
-            <div className="user-message-text">{query}</div>
-          </div>
-        </div>
         <div className="agent-thinking-row">
           <div className="thinking-bubble">
             <div className="bubble-header">
@@ -857,14 +846,6 @@ const TXKGPhase = ({
   if ((workflowPhase === 'txkg-results' || workflowPhase === 'target-selection') && !hasLiveData) {
     return (
       <Box className="txkg-results-content" sx={{ bgcolor: GRAY_BG }}>
-        <div className="user-message-row">
-          <div className="user-message-bubble">
-            <div className="user-bubble-header">
-              <span className="user-name">{userLabel}</span>
-            </div>
-            <div className="user-message-text">{query}</div>
-          </div>
-        </div>
         <Box sx={{ bgcolor: "#FFFFFF", border: `1px solid ${BORDER}`, borderRadius: "10px", p: "16px", display: "flex", flexDirection: "column", gap: "12px" }}>
           <Typography sx={{ fontFamily: FONT, fontSize: "15px", color: TEXT_DARK, lineHeight: "22px" }}>
             TxKG finished but returned no targets for this query, so there is nothing to rank or pass on to LitMineX.
@@ -882,15 +863,6 @@ const TXKGPhase = ({
   if (workflowPhase === 'txkg-results') {
     return (
       <Box className="txkg-results-content" sx={{ bgcolor: GRAY_BG }}>
-        {/* User message */}
-        <div className="user-message-row">
-          <div className="user-message-bubble">
-            <div className="user-bubble-header">
-              <span className="user-name">{userLabel}</span>
-            </div>
-            <div className="user-message-text">{query}</div>
-          </div>
-        </div>
 
         {/* TXKG result agent-message-row — Figma: 1120 × 644 */}
         <div className="agent-message-row result-row result-row-txkg">
@@ -1083,13 +1055,6 @@ const TXKGPhase = ({
   if (workflowPhase === 'target-selection') {
     return (
       <Box sx={{ p: "24px 40px 0 40px", bgcolor: GRAY_BG }}>
-        <Box sx={{ display: "flex", justifyContent: "flex-end", p: "8px 0" }}>
-          <Box sx={{ bgcolor: USER_MSG_BG, border: `1px solid ${BORDER}`, borderRadius: "12px", p: "16px", maxWidth: "680px" }}>
-            <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEAL, textTransform: "uppercase", letterSpacing: "0.5px", mb: "12px" }}>{userLabel}</Typography>
-            <Typography sx={{ fontFamily: FONT, fontSize: "15px", fontWeight: 400, color: TEXT_DARK, lineHeight: "22px" }}>{query}</Typography>
-          </Box>
-        </Box>
-
         {/* TXKG collapsed */}
         <Box sx={{ p: "4px 0" }}>
           <Accordion

@@ -268,12 +268,6 @@ const LiteminexPhase = ({
   page = 1,
   totalPages = 1,
   onPageChange,
-  /**
-   * What this step is actually about, for the request bubble. The copy used to
-   * read "Mine literature for Type 2 Diabetes drug targets" on every run, so a
-   * thrombocytosis session showed the wrong disease.
-   */
-  requestText,
   /** Article selection, lifted so the hand-off can carry it. */
   selectedArticles = [],
   onToggleArticle,
@@ -345,8 +339,6 @@ const LiteminexPhase = ({
     );
   };
 
-  // Falls back only when the parent supplied nothing.
-  const requestLabel = requestText || 'Mine literature for the selected drug targets';
 
   /* ------------------------------------------------------------------------
      LOADING
@@ -360,47 +352,6 @@ const LiteminexPhase = ({
           bgcolor: GRAY_BG,
         }}
       >
-
-        {/* User message */}
-        <Box
-          sx={{
-            bgcolor: USER_MSG_BG,
-            border: `1px solid ${BORDER}`,
-            borderRadius: '12px',
-            p: '16px',
-            mb: '8px',
-            maxWidth: '680px',
-            width: '100%',
-            marginLeft: 'auto',
-          }}
-        >
-          <Typography
-            sx={{
-              fontFamily: FONT,
-              fontSize: '11px',
-              fontWeight: 700,
-              color: TEAL,
-              textTransform: 'uppercase',
-              letterSpacing: '0.5px',
-              mb: '12px',
-            }}
-          >
-            {userLabel}
-          </Typography>
-
-          <Typography
-            sx={{
-              fontFamily: FONT,
-              fontSize: '15px',
-              fontWeight: 400,
-              color: TEXT_DARK,
-              lineHeight: '22px',
-            }}
-          >
-            {requestLabel}
-          </Typography>
-        </Box>
-
 
         {/* Agent loading card */}
         <Box
@@ -532,12 +483,6 @@ const LiteminexPhase = ({
 
   if (workflowPhase === 'litminex-results') {
 
-    const firstUserMsg = {
-      role: 'user',
-      text: requestLabel,
-    };
-
-
     return (
       <Box
         sx={{
@@ -546,55 +491,6 @@ const LiteminexPhase = ({
           overflowY: 'auto',
         }}
       >
-
-        {/* ================================================================
-            INITIAL USER MESSAGE
-            ================================================================ */}
-
-        <Box
-          sx={{
-            display: 'flex',
-            justifyContent: 'flex-end',
-            pb: '12px',
-          }}
-        >
-          <Box
-            sx={{
-              bgcolor: USER_MSG_BG,
-              border: `1px solid ${BORDER}`,
-              borderRadius: '12px',
-              p: '14px 18px',
-              maxWidth: '600px',
-            }}
-          >
-            <Typography
-              sx={{
-                fontFamily: FONT,
-                fontSize: '10px',
-                fontWeight: 700,
-                color: TEAL,
-                textTransform: 'uppercase',
-                letterSpacing: '0.06em',
-                mb: '6px',
-              }}
-            >
-              {userLabel}
-            </Typography>
-
-            <Typography
-              sx={{
-                fontFamily: FONT,
-                fontSize: '15px',
-                fontWeight: 400,
-                color: TEXT_DARK,
-                lineHeight: '22px',
-              }}
-            >
-              {firstUserMsg.text}
-            </Typography>
-          </Box>
-        </Box>
-
 
         {/* ================================================================
             MAIN RESULTS CARD

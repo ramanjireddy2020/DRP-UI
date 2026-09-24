@@ -12,7 +12,6 @@ import {
 } from "@mui/icons-material";
 import AgentHeader from "../AgentHeader";
 import PhaseActions from "../PhaseActions";
-import { useCurrentUser } from "../../../context/CurrentUserContext";
 import "./CuratexPhase.css";
 
 /** The pageSize CompleteWorkflow requests, used only for the row caption. */
@@ -135,7 +134,6 @@ const buildMatchDetails = (compound, profile) => {
 const CuratexPhase = ({
   workflowPhase,
   setWorkflowPhase,
-  chatMessages = [],
   profileData = {},
   setProfileData,
   profileEditMode,
@@ -179,7 +177,6 @@ const CuratexPhase = ({
   /** GET /agents/curatex/{jobId}/results → target, when the profile has none. */
   resultsTarget = null,
 }) => {
-  const { chatLabel: userLabel } = useCurrentUser();
   const activeCompound = selectedCompound || curateXResults?.[0];
 
   /** The API's `editable` flag. A locked profile can be reviewed and submitted, not changed. */
@@ -346,28 +343,8 @@ const CuratexPhase = ({
   // CurateX Loading
   // ---------------------------------------------------------------------------
   if (workflowPhase === "curatex-loading") {
-    // Was a fixed "…for JAK2" string. The user's own last message is what
-    // actually started this step.
-    const lastUserMessage = [...(chatMessages || [])]
-      .reverse()
-      .find((m) => m.role === "user")?.text;
-    const curatexQuery =
-      lastUserMessage || `Generate a target candidate profile for ${targetLabel}`;
-
     return (
       <Box className="curatex-page">
-        <div className="curatex-user-row">
-          <div className="curatex-user-bubble">
-            <Typography className="curatex-user-name">
-              {userLabel}
-            </Typography>
-
-            <Typography className="curatex-user-text">
-              {curatexQuery}
-            </Typography>
-          </div>
-        </div>
-
         <div className="curatex-agent-card">
           <AgentHeader moduleKey="curatex" />
 
@@ -430,22 +407,6 @@ const CuratexPhase = ({
 
     return (
       <Box className="curatex-page">
-        <div className="curatex-user-row">
-          <div className="curatex-user-bubble">
-            <Typography className="curatex-user-name">
-              {userLabel}
-            </Typography>
-
-            <Typography className="curatex-user-text">
-              {/* The target comes from the profile endpoint; these strings were
-                  hardcoded to JAK2. */}
-              {profileEditMode || isAddingParameter
-                ? `Please generate a Target Candidate Profile for ${targetLabel}.`
-                : `Generate a target candidate profile for ${targetLabel}.`}
-            </Typography>
-          </div>
-        </div>
-
         <div className="curatex-agent-card">
           <AgentHeader moduleKey="curatex" />
 
@@ -740,18 +701,6 @@ const CuratexPhase = ({
 
     return (
       <Box className="curatex-page">
-        <div className="curatex-user-row">
-          <div className="curatex-user-bubble">
-            <Typography className="curatex-user-name">
-              {userLabel}
-            </Typography>
-
-            <Typography className="curatex-user-text">
-              Submit Profile
-            </Typography>
-          </div>
-        </div>
-
         <div className="curatex-agent-card curatex-results-card">
           <AgentHeader moduleKey="curatex" />
 
