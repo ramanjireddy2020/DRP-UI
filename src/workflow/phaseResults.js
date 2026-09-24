@@ -295,12 +295,29 @@ export const CURATEX_PROFILE_FIELDS = PROFILE_FIELDS;
  * API's example only shows name and score, so those are read if present and
  * left empty otherwise — the table hides the columns when no row has them.
  */
+/**
+ * The candidate list, wherever the payload keeps it.
+ *
+ * Testing found that after Submit Profile the job reported "20 repurposing
+ * candidate(s) ranked for jak2" but no table appeared: only `items` (or a bare
+ * array) was read, so candidates sent under another key parsed to zero rows.
+ * A nested `result` (the generic job-result wrapper) is also looked into.
+ */
+const CANDIDATE_KEYS = ["items", "candidates", "compounds", "results", "ranked", "rankedCandidates", "ranked_candidates", "drugs"];
+
+const candidateList = (payload) => {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") return [];
+  for (const key of CANDIDATE_KEYS) {
+    if (Array.isArray(payload[key])) return payload[key];
+  }
+  if (payload.result && typeof payload.result === "object") return candidateList(payload.result);
+  if (payload.data && typeof payload.data === "object") return candidateList(payload.data);
+  return [];
+};
+
 export const normalizeCuratexResults = (payload, { pageSize: requested } = {}) => {
-  const items = Array.isArray(payload?.items)
-    ? payload.items
-    : Array.isArray(payload)
-    ? payload
-    : [];
+  const items = candidateList(payload);
 
   const page = Number(payload?.page) || 1;
   const pageSize = derivePageSize(payload, items.filter(Boolean).length, requested);
@@ -309,14 +326,18 @@ export const normalizeCuratexResults = (payload, { pageSize: requested } = {}) =
     .filter(Boolean)
     .map((c, index) => {
       if (!c) return null;
-      const name = c.name ?? c.compound ?? c.drug ?? null;
+      const name =
+        c.name ?? c.compound ?? c.drug ?? c.drug_name ?? c.drugName ?? c.compound_name ??
+        c.compoundName ?? c.pref_name ?? c.molecule_name ?? null;
       if (!name) return null;
 
       const matched = c.matchedProps ?? c.matched_props ?? c.matched ?? [];
       const mismatched = c.mismatchedProps ?? c.mismatched_props ?? c.mismatched ?? [];
       const asText = (v) => (Array.isArray(v) ? v.join(", ") : String(v ?? ""));
 
-      const rawScore = c.score ?? c.matchScore ?? c.match_score;
+      const rawScore =
+        c.score ?? c.matchScore ?? c.match_score ?? c.total_score ?? c.totalScore ??
+        c.final_score ?? c.composite_score ?? c.weighted_score;
       const scoreNum = Number(rawScore);
 
       return {
@@ -341,8 +362,8 @@ export const normalizeCuratexResults = (payload, { pageSize: requested } = {}) =
   return {
     hasData: compounds.length > 0,
     compounds,
-    target: payload?.target ?? null,
-    total: Number(payload?.totalCompounds ?? payload?.total ?? compounds.length) || compounds.length,
+    target: payload?.target ?? payload?.result?.target ?? null,
+    total: Number(payload?.totalCompounds ?? payload?.total ?? payload?.count ?? compounds.length) || compounds.length,
     page,
     pageSize,
     totalPages: Number(payload?.totalPages) || 1,

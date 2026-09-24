@@ -48,8 +48,18 @@ const FETCHERS = {
 
   "curatex-profile": async (jobId) => normalizeCuratexProfile(await curatexApi.getProfile(jobId)),
 
-  "curatex-results": async (jobId, { page, pageSize = RESULTS_PAGE_SIZE }) =>
-    normalizeCuratexResults(await curatexApi.getResults(jobId, { page, pageSize }), { pageSize }),
+  "curatex-results": async (jobId, { page, pageSize = RESULTS_PAGE_SIZE }) => {
+    const fromResults = normalizeCuratexResults(
+      await curatexApi.getResults(jobId, { page, pageSize }),
+      { pageSize }
+    );
+    if (fromResults.hasData) return fromResults;
+    // The results endpoint came back empty although the job finished: fall
+    // back to the job's own result, which is where the "N candidate(s)
+    // ranked" summary comes from, rather than showing an empty table.
+    const fromJob = normalizeCuratexResults(await getJobResult(jobId).catch(() => null), { pageSize });
+    return fromJob.hasData ? fromJob : fromResults;
+  },
 
   screensuite: async (jobId) => normalizeDockingHits(await screensuiteApi.getHits(jobId)),
 
