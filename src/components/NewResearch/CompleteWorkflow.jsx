@@ -37,6 +37,7 @@ import ChatInputBar from "../workflow/ChatInputBar";
 import PipelinePhase from "../workflow/PipelinePhase";
 import ConversationTimeline from "../workflow/ConversationTimeline";
 import ModuleResultCard from "../workflow/ModuleResultCard";
+import ProteinTargetPickerDialog from "../workflow/ProteinTargetPickerDialog";
 import { useCurrentUser } from "../../context/CurrentUserContext";
 import './WorkflowStyles.css';
 
@@ -2154,25 +2155,31 @@ const CompleteWorkflow = () => {
    * "RunnerError: No reviewed human UniProt entry matched 'Create drug profile
    * for JAK2'. Use the gene symbol". A structured `selections` payload cannot
    * produce that error.
+   *
+   * It also used to forward the LitMineX step's targetIds without asking. When
+   * LitMineX had been started on the disease, that was ["thrombocytosis"],
+   * which fails the same UniProt lookup. The button now opens a picker and
+   * CurateX gets the one protein target the researcher chooses.
    */
-  const handleContinueToCurateX = useCallback(() => {
-    // Whatever went into LitMineX is already symbol-form; fall back to
-    // re-deriving from the TxKG table if the step carries nothing.
+  const [curatexPickerOpen, setCuratexPickerOpen] = useState(false);
+
+  /** A sensible default for the picker: the first carried target that isn't the disease. */
+  const curatexDefaultTarget = useMemo(() => {
     const fromStep = session.steps.litminex?.data?.selections?.targetIds;
-    const targetIds = Array.isArray(fromStep) && fromStep.length
-      ? fromStep
-      : toGeneNames(selectedTargets, txkgResult.targets).targetIds;
+    const carried = [
+      ...(Array.isArray(fromStep) ? fromStep : []),
+      ...toGeneNames(selectedTargets, txkgResult.targets).targetIds,
+    ];
+    const disease = String(txkgResult.disease ?? "").trim().toLowerCase();
+    return carried.find((id) => id && String(id).trim().toLowerCase() !== disease) ?? null;
+  }, [session.steps.litminex, selectedTargets, txkgResult.targets, txkgResult.disease]);
 
-    if (!targetIds.length) {
-      session.setStepError(
-        "There is no target to build a drug profile for. Go back to TxKG and select one.",
-        "litminex"
-      );
-      return;
-    }
+  const handleContinueToCurateX = useCallback(() => setCuratexPickerOpen(true), []);
 
-    session.handOff("curatex", buildSelections("curatex", { targetIds }));
-  }, [session, selectedTargets, txkgResult.targets]);
+  const handleConfirmCurateXTarget = useCallback((symbol) => {
+    setCuratexPickerOpen(false);
+    session.handOff("curatex", buildSelections("curatex", { targetIds: [symbol] }));
+  }, [session]);
 
   /** The article the detail panel is showing, enriched from /articles/{id}. */
   const [articleDetail, setArticleDetail] = useState(null);
@@ -2740,6 +2747,15 @@ const CompleteWorkflow = () => {
         </Box>
       </Box>
 
+      <ProteinTargetPickerDialog
+        open={curatexPickerOpen}
+        targets={txkgResult.targets}
+        initialSymbol={curatexDefaultTarget}
+        disease={txkgResult.disease}
+        pending={session.pending}
+        onCancel={() => setCuratexPickerOpen(false)}
+        onConfirm={handleConfirmCurateXTarget}
+      />
       <ArticleDetailPanel />
       <CompoundDetailDialog />
       <ShareModal open={showShareDialog} onClose={() => setShowShareDialog(false)} />
