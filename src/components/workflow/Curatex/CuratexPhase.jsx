@@ -381,26 +381,28 @@ const CuratexPhase = ({
           </div>
 
           <div className="curatex-loading-steps">
-            {/* Step wording updated per testing feedback. */}
+            {/* Step wording updated per testing feedback.
+
+                No step is ticked while the job runs. The first two used to be
+                hard-coded "done", so a blue completion tick showed before
+                CurateX had done anything. The job reports one progress message
+                (shown above), not per-step status, so the list only marks
+                where the run starts and what follows. */}
             {[
-              { label: "Scanning compound databases...", state: "done" },
-              { label: "Analysing compounds...", state: "done" },
-              { label: "Creating ideal candidate profile...", state: "active" },
+              { label: "Scanning compound databases...", state: "active" },
+              { label: "Analysing compounds...", state: "pending" },
+              { label: "Creating ideal candidate profile...", state: "pending" },
             ].map((step, index) => (
               <div className="curatex-loading-step" key={index}>
-                {step.state === "done" ? (
-                  <span className="curatex-step-dot curatex-step-dot--done">✓</span>
-                ) : (
+                {step.state === "active" ? (
                   <span className="curatex-step-dot curatex-step-dot--active">
                     <span className="curatex-spinner" />
                   </span>
+                ) : (
+                  <span className="curatex-step-dot curatex-step-dot--pending" />
                 )}
 
-                <Typography
-                  className={`curatex-loading-step-text ${
-                    step.state === "done" ? "is-done" : "is-active"
-                  }`}
-                >
+                <Typography className={`curatex-loading-step-text is-${step.state}`}>
                   {step.label}
                 </Typography>
               </div>

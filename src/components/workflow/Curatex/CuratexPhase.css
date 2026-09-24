@@ -189,13 +189,15 @@
   line-height: 12px;
 }
 
-.curatex-step-dot--done {
-  color: #00bcd4;
-  background: #dcfce7;
-}
-
 .curatex-step-dot--active {
   background: #fef9c3;
+}
+
+/* Not started yet: a hollow grey dot, no tick. */
+.curatex-step-dot--pending {
+  box-sizing: border-box;
+  border: 1.5px solid #cbd5e1;
+  background: transparent;
 }
 
 .curatex-spinner {
@@ -221,12 +223,12 @@
   line-height: 16px !important;
 }
 
-.curatex-loading-step-text.is-done {
+.curatex-loading-step-text.is-active {
   color: #374151 !important;
 }
 
-.curatex-loading-step-text.is-active {
-  color: #6b7280 !important;
+.curatex-loading-step-text.is-pending {
+  color: #9ca3af !important;
 }
 
 /* --------------------------------------------------------------------------

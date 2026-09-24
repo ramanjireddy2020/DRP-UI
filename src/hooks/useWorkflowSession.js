@@ -906,7 +906,10 @@ const useWorkflowSession = () => {
         const phase = step.phase ?? "";
 
         const isFailed = Boolean(step.error) || phase.endsWith("-error");
-        const isRunning = phase.endsWith("-loading");
+        // CurateX's second job (compound scoring) runs in "curatex-submitted",
+        // which doesn't end in "-loading"; without it CurateX showed a
+        // completed tick while scoring was still in flight.
+        const isRunning = phase.endsWith("-loading") || phase === "curatex-submitted";
         const isCompleted =
           step.visited && !isFailed && !isRunning && Boolean(step.phase);
 
