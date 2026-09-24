@@ -223,7 +223,8 @@ const PLPTable = ({ onOpenReport, hits }) => {
     showProteinLigand && "110px",
     showProteinValue && "80px",
     "minmax(150px, 1fr)",
-    "76px",
+    // Fits the "INTERACTION PROFILE" button (was 76px for "PLP REPORT").
+    "112px",
   ]
     .filter(Boolean)
     .join(" ");
@@ -324,7 +325,8 @@ const PLPTable = ({ onOpenReport, hits }) => {
               onClick={() => onOpenReport(row)}
               sx={{
                 minWidth: "76px",
-                width: "76px",
+                width: "auto",
+                whiteSpace: "nowrap",
                 height: "21px",
                 padding: "5px 8px",
                 background: TEAL,
@@ -342,7 +344,7 @@ const PLPTable = ({ onOpenReport, hits }) => {
                 },
               }}
             >
-              PLP REPORT
+              INTERACTION PROFILE
             </Button>
           </Box>
         ))}
@@ -712,12 +714,12 @@ const ProteinVisualization = () => {
 };
 
 /* ============================================================================
-   EXPANDED PLP REPORT
+   EXPANDED INTERACTION PROFILE
 ============================================================================ */
 
 /* Retained but NOT rendered: these read the residueInteractions /
    hydrogenBonds / recommendations fixtures, and the API exposes no endpoint
-   for any of them (the collection lists the PLP report, 3D view and download
+   for any of them (the collection lists the interaction profile, 3D view and download
    bundles as unavailable on this deployment). Kept so the markup is ready if
    those endpoints appear, rather than deleted and rebuilt from scratch. */
 // eslint-disable-next-line no-unused-vars
@@ -763,7 +765,7 @@ const ExpandedPLPReport = () => {
             color: TEAL,
           }}
         >
-          JAK2 - Expanded PLP Report (Mode 1, -8.045 kcal/mol)
+          JAK2 - Expanded Interaction Profile (Mode 1, -8.045 kcal/mol)
         </Typography>
       </Box>
 
@@ -890,7 +892,7 @@ const ExpandedPLPReport = () => {
 
 /* Retained but NOT rendered: these read the residueInteractions /
    hydrogenBonds / recommendations fixtures, and the API exposes no endpoint
-   for any of them (the collection lists the PLP report, 3D view and download
+   for any of them (the collection lists the interaction profile, 3D view and download
    bundles as unavailable on this deployment). Kept so the markup is ready if
    those endpoints appear, rather than deleted and rebuilt from scratch. */
 // eslint-disable-next-line no-unused-vars
@@ -945,7 +947,7 @@ const ActionButtons = ({ expanded, actions = {} }) => {
           },
         }}
       >
-        Export PLP Report
+        Export Interaction Profile
       </Button>
 
       <Button sx={normalButton}>Create Bundle</Button>
@@ -961,7 +963,7 @@ const ActionButtons = ({ expanded, actions = {} }) => {
 
 /* Retained but NOT rendered: these read the residueInteractions /
    hydrogenBonds / recommendations fixtures, and the API exposes no endpoint
-   for any of them (the collection lists the PLP report, 3D view and download
+   for any of them (the collection lists the interaction profile, 3D view and download
    bundles as unavailable on this deployment). Kept so the markup is ready if
    those endpoints appear, rather than deleted and rebuilt from scratch. */
 // eslint-disable-next-line no-unused-vars
@@ -1098,7 +1100,7 @@ const OverallRecommendation = () => {
  *
  * ⚠️ Docking cannot complete on this deployment: PyMOL and Vina are not
  * installable on Databricks Apps, so /agents/screensuite/screen fails. The
- * PLP report, the residue/hydrogen-bond breakdowns, the 3D viewer and the
+ * interaction profile, the residue/hydrogen-bond breakdowns, the 3D viewer and the
  * download bundles have no endpoint in the API at all.
  *
  * So everything below the affinity table is fixture-backed with nothing to
@@ -1330,7 +1332,7 @@ const ScreeningSuitePhase = ({
               : loading
               ? "Loading docking hits…"
               : hasHits
-              ? `Docking complete. ${hits.length} hit${hits.length === 1 ? "" : "s"} returned. Select a protein to view its detailed PLP Report:`
+              ? `Docking complete. ${hits.length} hit${hits.length === 1 ? "" : "s"} returned. Select a protein to view its detailed interaction profile:`
               : "Docking returned no hits."}
           </Typography>
 
@@ -1356,7 +1358,7 @@ const ScreeningSuitePhase = ({
             />
           )}
 
-          {/* The expanded PLP report, residue interactions, hydrogen bonds,
+          {/* The expanded interaction profile, residue interactions, hydrogen bonds,
               the 3D viewer, the download bundles and the overall
               recommendation are NOT rendered.
 
@@ -1380,7 +1382,7 @@ const ScreeningSuitePhase = ({
               <Typography
                 sx={{ ...baseText, fontSize: "13px", fontWeight: 600, marginBottom: "6px" }}
               >
-                No PLP report for {selectedReport.protein}
+                No interaction profile for {selectedReport.protein}
               </Typography>
               <Typography sx={{ ...baseText, fontSize: "12px", lineHeight: "18px", color: "#64748B" }}>
                 The affinity above is the full extent of what this deployment
@@ -1408,7 +1410,7 @@ const ScreeningSuitePhase = ({
               <Typography sx={{ ...baseText, fontSize: "12px", lineHeight: "18px", color: "#64748B" }}>
                 {unavailable && unavailableMessage
                   ? unavailableMessage
-                  : "No binding affinities were returned for this run, so there is no PLP report, 3D view or download bundle to show."}
+                  : "No binding affinities were returned for this run, so there is no interaction profile, 3D view or download bundle to show."}
               </Typography>
             </Box>
           )}

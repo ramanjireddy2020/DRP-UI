@@ -7,7 +7,7 @@ import unwrap from "../unwrap";
  * ⚠️ This module CANNOT SUCCEED on the current deployment. The collection says
  * so twice: PyMOL and Vina are not installable on Databricks Apps, so
  * screensuite.screen fails, and a full pipeline run finishes 4 of 5 stages.
- * The PLP report, the 3D viewer and the download bundles have no endpoint at
+ * The interaction profile, the 3D viewer and the download bundles have no endpoint at
  * all.
  *
  * So the screening phase must render a real failure, not a spinner that never
@@ -23,7 +23,7 @@ export const SCREENSUITE_UNAVAILABLE = true;
 
 export const SCREENSUITE_UNAVAILABLE_MESSAGE =
   "Docking is not available on this deployment — PyMOL and Vina cannot be " +
-  "installed on Databricks Apps. The binding-affinity table, PLP report and " +
+  "installed on Databricks Apps. The binding-affinity table, interaction profile and " +
   "3D view will stay empty until the agent runs on a host that has them.";
 
 /**
