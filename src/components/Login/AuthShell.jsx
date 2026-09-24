@@ -72,11 +72,7 @@ const AuthShell = ({ children }) => (
         </div>
 
         <div className="feature-row">
-          <Feature
-            icon="⌬"
-            title="AI-Powered Analysis"
-            text="Gen AI powered Reasoning"
-          />
+          <Feature icon="⌬" title="Gen AI powered Reasoning" />
 
           <Feature icon="〽" title="Real-time Insights" />
 

@@ -343,11 +343,7 @@ const Login = () => {
 
           {/* Features */}
           <div className="feature-row">
-            <Feature
-              icon="⌬"
-              title="AI-Powered Analysis"
-              text="Gen AI powered Reasoning"
-            />
+            <Feature icon="⌬" title="Gen AI powered Reasoning" />
 
             <Feature
               icon="〽"
