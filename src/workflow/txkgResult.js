@@ -66,7 +66,10 @@ export const normalizeTarget = (t, index) => {
 
   const longName = t.fullName ?? t.full_name ?? t.name ?? "";
   const symbol = t.geneName ?? t.gene_name ?? t.name ?? id;
-  const rawScore = t.correctedScore ?? t.corrected_score ?? t.score ?? null;
+  // The score column is the API's `score`. It used to prefer `correctedScore`,
+  // which testing flagged: the table should show the value labelled "score".
+  // The corrected score is only a fallback for a payload that carries no score.
+  const rawScore = t.score ?? t.correctedScore ?? t.corrected_score ?? null;
 
   return {
     // --- fields the existing render code reads ---
