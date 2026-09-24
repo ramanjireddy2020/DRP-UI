@@ -381,10 +381,11 @@ const CuratexPhase = ({
           </div>
 
           <div className="curatex-loading-steps">
+            {/* Step wording updated per testing feedback. */}
             {[
-              { label: "Analyzing target profile parameters...", state: "done" },
               { label: "Scanning compound databases...", state: "done" },
-              { label: "Matching candidates against criteria...", state: "active" },
+              { label: "Analysing compounds...", state: "done" },
+              { label: "Creating ideal candidate profile...", state: "active" },
             ].map((step, index) => (
               <div className="curatex-loading-step" key={index}>
                 {step.state === "done" ? (
