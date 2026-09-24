@@ -3,7 +3,9 @@ import { Box, Typography, Button, CircularProgress } from "@mui/material";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import { FONT, TEAL, GRAY_BG, BORDER, TEXT_DARK, TEXT_MUTED } from "./workflowConstants";
 import KnowledgeGraphCanvas, { GraphLegend } from "./KnowledgeGraphCanvas";
-import { buildLegend } from "./subgraphStyle";
+import { buildLegend, normalizeGraph, styleForType } from "./subgraphStyle";
+import { uniprotUrl } from "../../workflow/sourceLinks";
+import { looksLikeAccession } from "../../workflow/selections";
 import { openSubgraphInNewTab } from "./subgraphHandoff";
 
 /**
@@ -37,6 +39,26 @@ const SubgraphView = ({
 }) => {
   const hasGraph = Boolean(graph?.nodes?.length);
   const legend = useMemo(() => buildLegend(graph), [graph]);
+
+  /**
+   * The protein nodes in the graph, with how many edges each has.
+   *
+   * These replace the "DRUG CANDIDATES — 0 candidates" stat: TxKG finds
+   * protein targets, not drugs, so testing asked for the proteins drawn in the
+   * graph to be listed instead.
+   */
+  const proteins = useMemo(() => {
+    const { nodes, edges } = normalizeGraph(graph);
+    const degree = new Map();
+    edges.forEach((e) => {
+      degree.set(e.source, (degree.get(e.source) || 0) + 1);
+      degree.set(e.target, (degree.get(e.target) || 0) + 1);
+    });
+    return nodes
+      .filter((n) => styleForType(n.type).label === "Protein / Gene")
+      .map((n) => ({ id: String(n.id), label: n.label, connections: degree.get(n.id) || 0 }))
+      .sort((a, b) => b.connections - a.connections);
+  }, [graph]);
   const [openFailed, setOpenFailed] = useState(false);
 
   const openLargerView = () => {
@@ -163,7 +185,7 @@ const SubgraphView = ({
       >
         {[
           { label: "RELATIONSHIPS FOUND", value: stats?.relationshipsFound, unit: "relations" },
-          { label: "DRUG CANDIDATES", value: stats?.drugCandidates, unit: "candidates" },
+          { label: "PROTEINS", value: proteins.length, unit: proteins.length === 1 ? "protein" : "proteins" },
           { label: "PATHWAY CONNECTIONS", value: stats?.pathwayConnections, unit: "connections" },
         ].map((stat, i, arr) => (
           <React.Fragment key={stat.label}>
@@ -186,6 +208,42 @@ const SubgraphView = ({
           </React.Fragment>
         ))}
       </Box>
+
+      {proteins.length > 0 && (
+        <Box sx={{ mt: "12px", border: `1px solid ${BORDER}`, borderRadius: "8px", overflow: "hidden" }}>
+          <Box sx={{ display: "grid", gridTemplateColumns: "1fr 120px 100px", gap: "8px", p: "8px 12px", bgcolor: GRAY_BG }}>
+            {["Protein", "UniProt ID", "Connections"].map((h) => (
+              <Typography key={h} sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#475569", textTransform: "uppercase" }}>
+                {h}
+              </Typography>
+            ))}
+          </Box>
+          <Box sx={{ maxHeight: 240, overflowY: "auto" }}>
+            {proteins.map((p) => (
+              <Box
+                key={p.id}
+                sx={{ display: "grid", gridTemplateColumns: "1fr 120px 100px", gap: "8px", p: "8px 12px", borderTop: `1px solid ${BORDER}` }}
+              >
+                <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: TEXT_DARK }}>{p.label}</Typography>
+                {looksLikeAccession(p.id) ? (
+                  <Typography
+                    component="a"
+                    href={uniprotUrl(p.id)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    sx={{ fontFamily: FONT, fontSize: "13px", color: TEAL, textDecoration: "none", "&:hover": { textDecoration: "underline" } }}
+                  >
+                    {p.id}
+                  </Typography>
+                ) : (
+                  <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: TEXT_MUTED }}>{p.id}</Typography>
+                )}
+                <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: TEXT_DARK }}>{p.connections}</Typography>
+              </Box>
+            ))}
+          </Box>
+        </Box>
+      )}
     </>
   );
 };
