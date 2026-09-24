@@ -18,14 +18,50 @@ import "./CuratexPhase.css";
 const CURATEX_PAGE_SIZE = 10;
 
 /**
- * A weight on the API's own scale. The profile returns e.g. `weight: 1.0`,
- * which used to render as "1%" next to fake 10-20% placeholders.
+ * Weights are whole numbers that total 100 (testing: the researcher should
+ * enter 10, 20, … and the total should come to 100).
  */
+const WEIGHT_TOTAL = 100;
+
 const formatWeight = (weight) => {
   if (weight == null || weight === "") return "—";
   const n = Number(weight);
-  if (!Number.isFinite(n)) return String(weight);
-  return Number.isInteger(n) ? n.toFixed(1) : String(n);
+  return Number.isFinite(n) ? String(Math.round(n)) : String(weight);
+};
+
+/** Whole-number part only (12.5 → 12), digits only, capped at 100. */
+const cleanWeightInput = (raw) => {
+  const digits = String(raw ?? "").split(/[.,]/)[0].replace(/\D/g, "");
+  return digits === "" ? "" : String(Math.min(Number(digits), WEIGHT_TOTAL));
+};
+
+/**
+ * The profile's weights as whole numbers totalling 100.
+ *
+ * The profile currently returns weights on a 1.0 scale. They are scaled in
+ * proportion (so their relative importance is unchanged) and rounded with the
+ * largest-remainder method so the rounded values still add up to exactly 100.
+ * Weights that already total 100 as whole numbers are left alone.
+ */
+const toPercentWeights = (weights) => {
+  const entries = Object.entries(weights ?? {}).map(([k, v]) => [k, Number(v)]);
+  const valid = entries.filter(([, v]) => Number.isFinite(v) && v >= 0);
+  const sum = valid.reduce((acc, [, v]) => acc + v, 0);
+  if (!valid.length || sum <= 0) return Object.fromEntries(valid);
+  if (sum === WEIGHT_TOTAL && valid.every(([, v]) => Number.isInteger(v))) return Object.fromEntries(valid);
+
+  const scaled = valid.map(([k, v]) => {
+    const exact = (v / sum) * WEIGHT_TOTAL;
+    return { k, floor: Math.floor(exact), rest: exact - Math.floor(exact) };
+  });
+  let left = WEIGHT_TOTAL - scaled.reduce((acc, r) => acc + r.floor, 0);
+  [...scaled].sort((a, b) => b.rest - a.rest).forEach((r) => {
+    if (left > 0) {
+      r.floor += 1;
+      left -= 1;
+    }
+  });
+  return Object.fromEntries(scaled.map((r) => [r.k, r.floor]));
 };
 
 /** Header/row grid for the compound table, with or without the property columns. */
@@ -203,7 +239,7 @@ const CuratexPhase = ({
     if (weightsSeededRef.current) return;
     if (!profile?.weights || !Object.keys(profile.weights).length) return;
     weightsSeededRef.current = true;
-    setWeights(profile.weights);
+    setWeights(toPercentWeights(profile.weights));
   }, [profile]);
   /**
    * Parameters being added, not yet saved. A list, so the researcher can keep
@@ -311,12 +347,19 @@ const CuratexPhase = ({
    * scale; a blank weight defaults to 1.0, the scale the profile itself uses.
    * (This used to default to 10 on a percent scale, about 10x too large.)
    */
-  const weightOf = (row) => (row.weight.trim() === "" ? 1 : Number(row.weight));
+  // A blank weight is 0; the total check below makes the researcher rebalance.
+  const weightOf = (row) => (row.weight.trim() === "" ? 0 : Number(row.weight));
   const isBlankRow = (row) => !row.name.trim() && !row.value.trim() && !row.weight.trim();
   const isValidRow = (row) =>
     row.name.trim() !== "" && Number.isFinite(weightOf(row)) && weightOf(row) >= 0;
   // Untouched blank rows are ignored on save; anything half-filled blocks it.
   const newParamsValid = newParams.every((row) => isBlankRow(row) || isValidRow(row));
+
+  /** Existing weights plus the new rows that will be saved. Must equal 100. */
+  const weightTotal =
+    Object.values(weights).reduce((acc, v) => acc + (Number(v) || 0), 0) +
+    newParams.filter((row) => !isBlankRow(row) && isValidRow(row)).reduce((acc, row) => acc + weightOf(row), 0);
+  const weightsBalanced = weightTotal === WEIGHT_TOTAL;
 
   const handleSaveChanges = () => {
     const toAdd = newParams.filter((row) => !isBlankRow(row) && isValidRow(row));
@@ -496,13 +539,12 @@ const CuratexPhase = ({
                       <TextField
                         value={weights[key] ?? ""}
                         onChange={(event) =>
-                          setWeights((prev) => ({ ...prev, [key]: event.target.value }))
+                          setWeights((prev) => ({ ...prev, [key]: cleanWeightInput(event.target.value) }))
                         }
-                        placeholder="—"
+                        placeholder="0"
                         size="small"
                         variant="standard"
-                        type="number"
-                        inputProps={{ step: 0.1, min: 0, "aria-label": `Weight for ${propertyLabel(key)}` }}
+                        inputProps={{ inputMode: "numeric", "aria-label": `Weight for ${propertyLabel(key)}` }}
                         className="curatex-new-weight-input"
                         InputProps={{ disableUnderline: true }}
                       />
@@ -551,12 +593,11 @@ const CuratexPhase = ({
                   <div className="curatex-weight-field curatex-weight-field--new">
                     <TextField
                       value={row.weight}
-                      onChange={(e) => updateNewParam(row.id, "weight", e.target.value)}
-                      placeholder="1.0"
+                      onChange={(e) => updateNewParam(row.id, "weight", cleanWeightInput(e.target.value))}
+                      placeholder="0"
                       size="small"
                       variant="standard"
-                      type="number"
-                      inputProps={{ step: 0.1, min: 0, "aria-label": "Weight for the new parameter" }}
+                      inputProps={{ inputMode: "numeric", "aria-label": "Weight for the new parameter" }}
                       className="curatex-new-weight-input"
                       InputProps={{ disableUnderline: true }}
                     />
@@ -583,8 +624,22 @@ const CuratexPhase = ({
             {/* Said once, plainly: only weights reach the scorer. */}
             {rows.length > 0 && (
               <Typography className="curatex-body-text" sx={{ fontSize: "11px", color: "#94A3B8", mt: "8px" }}>
-                Weights are on the API's own scale. Only weights are sent when scoring — the
-                API has no field for criterion values, so values are shown as returned.
+                Weights are whole numbers and must total {WEIGHT_TOTAL}. Only weights are sent when
+                scoring — the API has no field for criterion values, so values are shown as returned.
+              </Typography>
+            )}
+
+            {rows.length > 0 && (
+              <Typography
+                role="status"
+                className="curatex-body-text"
+                sx={{ fontSize: "12px", fontWeight: 600, mt: "6px", color: weightsBalanced ? "#059669" : "#DC2626" }}
+              >
+                Total weight: {weightTotal} / {WEIGHT_TOTAL}
+                {!weightsBalanced &&
+                  (weightTotal < WEIGHT_TOTAL
+                    ? ` — add ${WEIGHT_TOTAL - weightTotal} more`
+                    : ` — remove ${weightTotal - WEIGHT_TOTAL}`)}
               </Typography>
             )}
 
@@ -607,7 +662,7 @@ const CuratexPhase = ({
                 <Button
                   variant="contained"
                   onClick={handleSaveChanges}
-                  disabled={!newParamsValid}
+                  disabled={!newParamsValid || !weightsBalanced}
                   className="curatex-primary-button"
                 >
                   Save Changes
@@ -630,7 +685,7 @@ const CuratexPhase = ({
                     criteria above them. */}
                 <Button
                   variant="contained"
-                  disabled={!profile?.hasData}
+                  disabled={!profile?.hasData || !weightsBalanced}
                   onClick={() => {
                     if (onSubmitProfile) {
                       // The LOCAL weights, not the profile's — a deleted or
