@@ -3,98 +3,100 @@
  * (SubgraphView) and its full-size view in a new tab (SubgraphFullView).
  */
 
-/** Node colours by type, matching the palette the static picture used. */
+/**
+ * Node colours by type.
+ *
+ * Testing asked for the graph to be colour-coded from the JSON, with proteins,
+ * disease, pathways and biological processes each in their own colour and the
+ * same colours in the legend. Pathway and biological process used to share a
+ * teal, so the two were indistinguishable. Matching is on a normalised type
+ * ("gene/protein", "biological_process", "Biological Process" all work).
+ */
 const TYPE_COLORS = [
-  { match: "disease hub", label: "Disease (query)", color: "#1F2433", radius: 26 },
-  { match: "disease", label: "Disease", color: "#F25966", radius: 12 },
-  { match: "gene", label: "Gene / Protein", color: "#F28C33", radius: 15 },
-  { match: "protein", label: "Gene / Protein", color: "#F28C33", radius: 15 },
-  { match: "drug", label: "Drug / Compound", color: "#8C4DBF", radius: 14 },
-  { match: "compound", label: "Drug / Compound", color: "#8C4DBF", radius: 14 },
-  { match: "pathway", label: "Pathway", color: "#149E99", radius: 14 },
-  { match: "biological_process", label: "Biological process", color: "#149E99", radius: 13 },
-  { match: "molecular_function", label: "Molecular function", color: "#3B82F6", radius: 13 },
+  { match: "disease", label: "Disease", color: "#F25966", radius: 16 },
+  { match: "gene", label: "Protein / Gene", color: "#F28C33", radius: 14 },
+  { match: "protein", label: "Protein / Gene", color: "#F28C33", radius: 14 },
+  { match: "pathway", label: "Pathway", color: "#149E99", radius: 13 },
+  { match: "biologicalprocess", label: "Biological process", color: "#3B82F6", radius: 12 },
+  { match: "molecularfunction", label: "Molecular function", color: "#EAB308", radius: 12 },
+  { match: "cellularcomponent", label: "Cellular component", color: "#A3A3A3", radius: 12 },
+  { match: "drug", label: "Drug / Compound", color: "#8C4DBF", radius: 13 },
+  { match: "compound", label: "Drug / Compound", color: "#8C4DBF", radius: 13 },
 ];
 
-const FALLBACK_STYLE = { label: "Other", color: "#64748B", radius: 12 };
+const FALLBACK_STYLE = { label: "Other", color: "#64748B", radius: 11 };
 
-/** The hub is drawn dark on a dark canvas, so it gets a light ring. */
-export const HUB_COLOR = "#1F2433";
-export const HUB_STROKE = "#00BCD4";
-export const HUB_RADIUS = 26;
+/** The query disease: drawn in the disease colour, larger, with a ring. */
+export const HUB_STROKE = "#FFFFFF";
+export const HUB_RADIUS = 24;
+
+const squash = (value) => String(value ?? "").toLowerCase().replace(/[\s_\-/]+/g, "");
 
 export const styleForType = (type) => {
-  const text = String(type ?? "").toLowerCase();
+  const text = squash(type);
   return TYPE_COLORS.find((entry) => text.includes(entry.match)) ?? FALLBACK_STYLE;
 };
 
 /**
- * The API's `legend`. The collection shows it as an object (empty in the
- * example), so both a { label: colour } map and a [{ label, color }] list are
- * read. A value that is not a colour is shown as the entry's description.
+ * Nodes and edges in one shape, whatever the subgraph JSON calls its fields.
+ *
+ * The canvas used to read `node.type` / `node.label` / `edge.source` only; a
+ * payload using `node_type`, `name`, `from`/`to` etc. rendered every node grey
+ * as "Other". Edges whose ends are objects (a pre-resolved graph) are reduced
+ * to ids.
  */
-const isColour = (value) =>
-  typeof value === "string" && /^(#[0-9a-f]{3,8}|rgba?\(|hsla?\()/i.test(value.trim());
+const idOf = (end) => (end && typeof end === "object" ? end.id ?? end.name ?? null : end ?? null);
 
-const readApiLegend = (legend) => {
-  if (Array.isArray(legend)) {
-    return legend
-      .map((entry) =>
-        entry && typeof entry === "object"
-          ? {
-              label: entry.label ?? entry.type ?? entry.name ?? null,
-              color: entry.color ?? entry.colour ?? null,
-            }
-          : entry
-          ? { label: String(entry), color: null }
-          : null
-      )
-      .filter((entry) => entry?.label);
-  }
-  if (legend && typeof legend === "object") {
-    return Object.entries(legend).map(([label, value]) => {
-      if (value && typeof value === "object") {
-        return { label: value.label ?? label, color: value.color ?? value.colour ?? null };
-      }
-      return isColour(value)
-        ? { label, color: value }
-        : { label: value ? `${label}: ${value}` : label, color: null };
-    });
-  }
-  return [];
+export const normalizeGraph = (graph) => {
+  const nodes = (graph?.nodes ?? [])
+    .filter(Boolean)
+    .map((n) => ({
+      ...n,
+      id: n.id ?? n.node_id ?? n.nodeId ?? n.name,
+      label: n.label ?? n.name ?? n.node_name ?? n.nodeName ?? n.id,
+      type: n.type ?? n.node_type ?? n.nodeType ?? n.category ?? n.group ?? n.kind ?? null,
+    }))
+    .filter((n) => n.id != null);
+
+  const edges = (graph?.edges ?? graph?.links ?? [])
+    .filter(Boolean)
+    .map((e) => ({
+      ...e,
+      source: idOf(e.source ?? e.from ?? e.src ?? e.source_id),
+      target: idOf(e.target ?? e.to ?? e.dst ?? e.target_id),
+      label: e.label ?? e.edge_label ?? e.edgeLabel ?? e.relation ?? e.type ?? null,
+    }))
+    .filter((e) => e.source != null && e.target != null);
+
+  return { nodes, edges };
 };
 
 /**
- * Legend entries for a graph.
+ * Legend entries for a graph: one per node type actually drawn, in the same
+ * colours the canvas uses.
  *
- * Testing reported "no legend": the API's `legend` usually comes back empty,
- * and the legend was only drawn from that. When it is empty, build one from
- * the node types actually present so every colour on the canvas is explained.
+ * It used to prefer the API's `legend`, whose colours the canvas never used,
+ * so the key could disagree with the picture (and it was usually empty).
  */
 export const buildLegend = (graph) => {
-  const fromApi = readApiLegend(graph?.legend).map((entry) => ({
-    label: entry.label,
-    color: entry.color || styleForType(entry.label).color,
-  }));
-  if (fromApi.length) return fromApi;
-
   const seen = new Map();
-  (graph?.nodes ?? []).forEach((node) => {
-    const style = String(node.type ?? "").toLowerCase().includes("hub")
-      ? { label: "Disease (query)", color: HUB_COLOR }
-      : styleForType(node.type);
+  normalizeGraph(graph).nodes.forEach((node) => {
+    const style = styleForType(node.type);
     if (!seen.has(style.label)) seen.set(style.label, style.color);
   });
   return [...seen].map(([label, color]) => ({ label, color }));
 };
 
 /**
- * The hub — whichever node the API marks as the disease hub, else the most
- * connected one. Drawn larger so the query disease is easy to find.
+ * The hub — whichever node the API marks as the disease hub, else a disease
+ * node, else the most connected one. Drawn larger so the query disease is
+ * easy to find.
  */
 export const findHubId = (nodes, edges) => {
   if (!nodes.length) return null;
-  const explicit = nodes.find((n) => String(n.type ?? "").toLowerCase().includes("hub"));
+  const explicit =
+    nodes.find((n) => String(n.type ?? "").toLowerCase().includes("hub")) ??
+    nodes.find((n) => styleForType(n.type).label === "Disease");
   if (explicit) return explicit.id;
 
   const degree = new Map();

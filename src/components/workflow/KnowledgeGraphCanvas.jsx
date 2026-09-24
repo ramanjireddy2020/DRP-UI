@@ -6,7 +6,7 @@ import ZoomInIcon from "@mui/icons-material/ZoomIn";
 import ZoomOutIcon from "@mui/icons-material/ZoomOut";
 import CenterFocusStrongIcon from "@mui/icons-material/CenterFocusStrong";
 import { FONT, TEXT_MUTED } from "./workflowConstants";
-import { styleForType, findHubId, HUB_COLOR, HUB_STROKE, HUB_RADIUS } from "./subgraphStyle";
+import { styleForType, findHubId, normalizeGraph, HUB_STROKE, HUB_RADIUS } from "./subgraphStyle";
 
 /**
  * Interactive knowledge-graph canvas.
@@ -71,15 +71,12 @@ const KnowledgeGraphCanvas = ({ graph, height = 420, onNodeClick }) => {
   // Links pointing at a node that isn't in the payload would crash the layout,
   // so they are dropped.
   const data = useMemo(() => {
-    const rawNodes = graph?.nodes ?? [];
-    const rawEdges = graph?.edges ?? [];
-    const hubId = findHubId(rawNodes, rawEdges);
-    const ids = new Set(rawNodes.map((n) => n.id));
+    const { nodes, edges } = normalizeGraph(graph);
+    const hubId = findHubId(nodes, edges);
+    const ids = new Set(nodes.map((n) => n.id));
     return {
-      nodes: rawNodes.map((n) => ({ ...n, __hub: n.id === hubId })),
-      links: rawEdges
-        .filter((e) => ids.has(e.source) && ids.has(e.target))
-        .map((e) => ({ ...e })),
+      nodes: nodes.map((n) => ({ ...n, __hub: n.id === hubId })),
+      links: edges.filter((e) => ids.has(e.source) && ids.has(e.target)),
     };
   }, [graph]);
 
@@ -119,7 +116,7 @@ const KnowledgeGraphCanvas = ({ graph, height = 420, onNodeClick }) => {
     const radius = radiusOf(node);
     ctx.beginPath();
     ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI);
-    ctx.fillStyle = node.__hub ? HUB_COLOR : styleForType(node.type).color;
+    ctx.fillStyle = styleForType(node.type).color;
     ctx.fill();
     if (node.__hub) {
       ctx.lineWidth = 2 / globalScale;
@@ -229,9 +226,6 @@ export const GraphLegend = ({ entries }) =>
               height: 10,
               borderRadius: "50%",
               bgcolor: entry.color,
-              // The hub colour is near-black; outline it so it reads on white.
-              border: entry.color === HUB_COLOR ? `2px solid ${HUB_STROKE}` : "none",
-              boxSizing: "border-box",
             }}
           />
           <Typography sx={{ fontFamily: FONT, fontSize: "11px", color: TEXT_MUTED }}>{entry.label}</Typography>
