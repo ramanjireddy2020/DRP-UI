@@ -16,6 +16,7 @@ import RecentSessionsPage from "./components/RecentSessions/RecentSessionsPage";
 
 import NewResearchPage from "./components/NewResearch/NewResearchPage";
 import CompleteWorkflow from "./components/NewResearch/CompleteWorkflow";
+import SubgraphFullView from "./components/workflow/SubgraphFullView";
 
 import ResearchLayout from "./components/ResearchLayout/ResearchLayout";
 import MainLayout from "./components/Layout/MainLayout";
@@ -95,6 +96,18 @@ const router = createBrowserRouter([
     element: (
       <RequireAuth>
         <CompleteWorkflow />
+      </RequireAuth>
+    ),
+  },
+
+
+  // Full-window knowledge graph, opened in a new tab from the SUBGRAPH card.
+  // Outside MainLayout so the graph gets the whole viewport.
+  {
+    path: "/dashboard/subgraph-view",
+    element: (
+      <RequireAuth>
+        <SubgraphFullView />
       </RequireAuth>
     ),
   },
