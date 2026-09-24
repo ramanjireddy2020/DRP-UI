@@ -181,14 +181,25 @@ const TXKGPhase = ({
       .map((s) => s.trim())
       .join(" → ");
 
-  /** The #1 target is shown as its own featured card, so these start at rank 2. */
-  const featuredTarget = targets[0] ?? null;
-
-  const metapathRows = targets.slice(1, 5).map((t) => ({
-    name: t.name,
-    path: t.connectionTypes.length ? prettyPath(t.connectionTypes[0]) : "No sourced path",
-    score: t.score,
-  }));
+  /**
+   * Meta-path traversals: which target rows are expanded.
+   *
+   * Testing reported the paths opened only for the first target: rank 1 was a
+   * fixed card listing every path, while ranks 2–5 were plain rows showing
+   * just their first path with nothing to click. Every target is now an
+   * expandable row. Rank 1 starts open; this holds the names the user has
+   * toggled away from that default, so it survives re-renders and resets
+   * naturally when a new target list arrives.
+   */
+  const [toggledMetapathTargets, setToggledMetapathTargets] = useState(() => new Set());
+  const isMetapathOpen = (name, index) => (index === 0) !== toggledMetapathTargets.has(name);
+  const toggleMetapathTarget = (name) =>
+    setToggledMetapathTargets((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
 
   const sourceRows = (() => {
     if (!hasLiveData) return [];
@@ -626,6 +637,70 @@ const TXKGPhase = ({
     );
   };
 
+  /** Top five targets, each expandable to list all of its sourced meta-paths. */
+  const renderMetapathTraversals = () => (
+    <Box sx={{ flex: 1, display: "flex", flexDirection: "column", gap: "6px" }}>
+      <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#111827", lineHeight: "16px" }}>
+        Meta-Path Traversals
+      </Typography>
+      {targets.slice(0, 5).map((t, i) => {
+        const open = isMetapathOpen(t.name, i);
+        const paths = t.connectionTypes.map(prettyPath);
+        return (
+          <Box
+            key={`${t.name}-${i}`}
+            sx={{ display: "flex", flexDirection: "column", borderRadius: "8px", bgcolor: open ? "#F9FAFB" : "transparent", borderBottom: open ? "none" : `1px solid ${BORDER}` }}
+          >
+            <Box
+              component="button"
+              type="button"
+              onClick={() => toggleMetapathTarget(t.name)}
+              aria-expanded={open}
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                p: "8px 12px",
+                width: "100%",
+                border: "none",
+                background: "none",
+                cursor: "pointer",
+                textAlign: "left",
+                fontFamily: FONT,
+              }}
+            >
+              <ExpandMoreOutlined
+                sx={{ width: 18, height: 18, color: "#94A3B8", flexShrink: 0, transform: open ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}
+              />
+              <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 600, color: "#111827", lineHeight: "15px", minWidth: 44 }}>
+                {t.name}
+              </Typography>
+              {/* Collapsed rows preview the first path and how many more there are. */}
+              <Typography sx={{ flex: 1, fontFamily: FONT, fontSize: "11px", color: "#6B7280", lineHeight: "13px", visibility: open ? "hidden" : "visible" }}>
+                {paths.length ? paths[0] : "No sourced path"}
+                {paths.length > 1 ? ` (+${paths.length - 1} more)` : ""}
+              </Typography>
+              <Box sx={{ display: "flex", alignItems: "center", p: "3px 8px", bgcolor: i === 0 ? "#00BCD4" : "#D1FAE5", borderRadius: "8px" }}>
+                <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: i === 0 ? "#FFFFFF" : "#059669", lineHeight: "13px" }}>
+                  {t.score}
+                </Typography>
+              </Box>
+            </Box>
+            {open && (
+              <Box sx={{ display: "flex", flexDirection: "column", gap: "6px", p: "0 12px 10px 38px" }}>
+                {(paths.length ? paths : ["No sourced path for this target"]).map((path, j) => (
+                  <Typography key={j} sx={{ fontFamily: FONT, fontSize: "11px", color: "#6B7280", lineHeight: 1.35 }}>
+                    • {path}
+                  </Typography>
+                ))}
+              </Box>
+            )}
+          </Box>
+        );
+      })}
+    </Box>
+  );
+
   /** Scores and traversals from the meta-path analysis, when it has run. */
   const renderMetapathResults = () => {
     const data = metapath?.data;
@@ -953,37 +1028,7 @@ const TXKGPhase = ({
                   ranked targets already rendered in the results table above,
                   which made the panel read as two different scores for the
                   same target. */}
-                <Box sx={{ flex: 1, display: "flex", flexDirection: "column", gap: "6px" }}>
-                  <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#111827", lineHeight: "16px" }}>Meta-Path Traversals</Typography>
-                  <Box sx={{ display: "flex", flexDirection: "column", p: "10px 12px", gap: "6px", bgcolor: "#F9FAFB", borderRadius: "8px" }}>
-                    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                      <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#111827", lineHeight: "16px" }}>
-                        {featuredTarget?.name}
-                      </Typography>
-                      <Box sx={{ display: "flex", alignItems: "center", p: "3px 8px", bgcolor: "#00BCD4", borderRadius: "8px" }}>
-                        <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#FFFFFF", lineHeight: "13px" }}>
-                          {featuredTarget?.score}
-                        </Typography>
-                      </Box>
-                    </Box>
-                    {/* Each sourced connection type for the top-ranked target. */}
-                    {(featuredTarget?.connectionTypes?.length
-                      ? featuredTarget.connectionTypes.map(prettyPath)
-                      : ["No sourced path for this target"]
-                    ).map((path, i) => (
-                      <Typography key={i} sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 400, color: "#6B7280", lineHeight: 1.35 }}>• {path}</Typography>
-                    ))}
-                  </Box>
-                  {metapathRows.map((item, i) => (
-                    <Box key={i} sx={{ display: "flex", alignItems: "center", p: "6px 12px", gap: "8px", borderBottom: `1px solid ${BORDER}` }}>
-                      <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 500, color: "#111827", lineHeight: "15px" }}>{item.name}</Typography>
-                      <Typography sx={{ flex: 1, fontFamily: FONT, fontSize: "11px", fontWeight: 400, color: "#6B7280", lineHeight: "13px" }}>{item.path}</Typography>
-                      <Box sx={{ display: "flex", alignItems: "center", p: "3px 8px", bgcolor: "#D1FAE5", borderRadius: "8px" }}>
-                        <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#059669", lineHeight: "13px" }}>{item.score}</Typography>
-                      </Box>
-                    </Box>
-                  ))}
-                </Box>
+                {renderMetapathTraversals()}
               </Box>
               {renderMetapathResults()}
               <PhaseActions {...actions} />
@@ -1179,23 +1224,7 @@ const TXKGPhase = ({
                   ranked targets already rendered in the results table above,
                   which made the panel read as two different scores for the
                   same target. */}
-                <Box sx={{ flex: 1 }}>
-                  <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#111827", mb: "8px" }}>Meta-Path Traversals</Typography>
-                  {targets.slice(0, 5).map((t, i) => ({
-                    n: t.name,
-                    p: t.connectionTypes.length
-                      ? t.connectionTypes.map(prettyPath).join(" / ")
-                      : "No sourced path",
-                    s: t.score,
-                    teal: i === 0,
-                  })).map((item, i) => (
-                    <Box key={i} sx={{ display: "flex", alignItems: "center", p: "6px 10px", gap: "8px", borderBottom: `1px solid ${BORDER}` }}>
-                      <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 500, color: "#111827", minWidth: 44 }}>{item.n}</Typography>
-                      <Typography sx={{ flex: 1, fontFamily: FONT, fontSize: "11px", color: "#6B7280" }}>{item.p}</Typography>
-                      <Box sx={{ p: "3px 8px", bgcolor: item.teal ? "#00BCD4" : "#D1FAE5", borderRadius: "8px" }}><Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: item.teal ? "#FFFFFF" : "#059669" }}>{item.s}</Typography></Box>
-                    </Box>
-                  ))}
-                </Box>
+                {renderMetapathTraversals()}
               </Box>
               {renderMetapathResults()}
               <Box sx={{ display: "flex", gap: "12px", mt: "12px" }}>
