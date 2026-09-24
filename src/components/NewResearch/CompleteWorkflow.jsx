@@ -122,6 +122,18 @@ const useModuleJob = (
   return job;
 };
 
+/**
+ * A job's progress line, unless it claims the job is finished while the job is
+ * in fact still running (a status word, not progress). Testing saw the status
+ * bar read "completed" during CurateX scoring.
+ */
+const liveProgress = (job) => {
+  const text = job?.progressMessage;
+  if (!text) return null;
+  if (!job.isDone && /^\s*(completed?|done|finished|success(ful)?)\.?\s*$/i.test(text)) return null;
+  return text;
+};
+
 const CompleteWorkflow = () => {
   const location = useLocation();
   const navigate = useNavigate();
@@ -956,7 +968,7 @@ const CompleteWorkflow = () => {
         case 'litminex-results': return { badge: 2, title: "Literature mining",         count: countOf(articleCount), dotColor: "#00BCD4", statusText: articleCount == null ? (litminex.loading ? "Loading articles…" : "Results ready") : `${plural(articleCount, "article")} found` };
         case 'curatex-loading':  return { badge: 3, title: "Compound screening",        count: "", dotColor: "#FFC107", statusText: running || "Analyzing..." };
         case 'curatex-profile':  return { badge: 3, title: "Target profile",            count: "",      dotColor: "#00BCD4", statusText: "Profile ready" };
-        case 'curatex-submitted':return { badge: 3, title: "Compound screening",        count: "", dotColor: "#FFC107", statusText: compoundsJob.progressMessage || "Scoring compounds..." };
+        case 'curatex-submitted':return { badge: 3, title: "Compound screening",        count: "", dotColor: "#FFC107", statusText: liveProgress(compoundsJob) || "Scoring compounds..." };
         case 'curatex-results':  return { badge: 3, title: "Compound screening",        count: countOf(compoundCount), dotColor: "#00BCD4", statusText: compoundCount == null ? "Results ready" : `${plural(compoundCount, "compound")} scored` };
         case 'screensuite-loading': return { badge: 4, title: "Docking initialization", count: "", dotColor: "#FFC107", statusText: running || "Pipeline starting" };
         case 'screensuite-results': return { badge: 4, title: "Docking results", count: countOf(hitCount), dotColor: "#00BCD4", statusText: hitCount == null ? "Docking complete" : `${plural(hitCount, "docking hit")}` };
@@ -2503,7 +2515,14 @@ const CompleteWorkflow = () => {
           setSelectedCompound={setSelectedCompound}
           setShowCompoundDetail={setShowCompoundDetail}
           setActiveStep={setActiveStep}
-          progressMessage={curatexJob.progressMessage || compoundsJob.progressMessage}
+          // Each CurateX phase reports its OWN job. Both used to be read as
+          // `profileJob || compoundsJob`, so while scoring ran the finished
+          // profile job's last line ("completed") was shown instead.
+          progressMessage={
+            phase === "curatex-submitted"
+              ? liveProgress(compoundsJob)
+              : liveProgress(curatexJob) || liveProgress(compoundsJob)
+          }
           profile={curatexProfile.data}
           profileLoading={curatexProfile.loading}
           profileError={curatexProfile.error}
