@@ -313,11 +313,16 @@ function reducer(state, action) {
     case "APPEND_MESSAGES": {
       const key = action.key ?? state.activeKey;
       const module = MODULE_BY_KEY[key];
+      // Said while the module's card was already on screen, i.e. typed in the
+      // chat box underneath it. The timeline draws these AFTER the card; see
+      // timelineBlocks in CompleteWorkflow.
+      const afterCard = Boolean(key && state.steps[key]?.visited);
       const stamped = action.messages.map((message, offset) => ({
         id: `m${state.seq + offset + 1}`,
         moduleKey: key ?? null,
         stepIndex: module ? module.index : null,
         at: Date.now(),
+        afterCard,
         ...message,
       }));
 

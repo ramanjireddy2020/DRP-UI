@@ -164,11 +164,21 @@ const ConversationTimeline = ({
     stickToBottom.current = distance <= NEAR_BOTTOM_PX;
   });
 
+  // When the researcher sends a message, always bring it into view, even if
+  // they had scrolled up into a module card to read it before typing.
+  const lastUserMessageId = [...blocks]
+    .reverse()
+    .find((b) => b.kind === "message" && b.message.role === "user")?.id;
+  const seenUserMessageId = useRef(lastUserMessageId);
+
   useEffect(() => {
     const el = scrollerRef.current;
-    if (!el || !stickToBottom.current) return;
+    if (!el) return;
+    const userJustSent = lastUserMessageId !== seenUserMessageId.current;
+    seenUserMessageId.current = lastUserMessageId;
+    if (!userJustSent && !stickToBottom.current) return;
     el.scrollTop = el.scrollHeight;
-  }, [blocks, pending]);
+  }, [blocks, pending, lastUserMessageId]);
 
   const onScroll = () => {
     const el = scrollerRef.current;

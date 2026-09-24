@@ -2595,12 +2595,19 @@ const CompleteWorkflow = () => {
       .filter((m) => !m.moduleKey || !order.includes(m.moduleKey))
       .forEach((m) => blocks.push({ kind: "message", id: `msg-${m.id}`, message: m }));
 
-    order.forEach((key) => {
-      conversation
-        .filter((m) => m.moduleKey === key)
-        .forEach((m) => blocks.push({ kind: "message", id: `msg-${m.id}`, message: m }));
+    // A module's messages used to ALL go before its card. Testing found text
+    // typed in the chat while on CurateX "did not show up": it was tagged to
+    // CurateX and so drawn above the (tall, expanded) CurateX card, out of
+    // view. Messages that led to the module still come first; anything said
+    // once the card was on screen (`afterCard`) now follows it.
+    const pushMessages = (list) =>
+      list.forEach((m) => blocks.push({ kind: "message", id: `msg-${m.id}`, message: m }));
 
+    order.forEach((key) => {
+      const own = conversation.filter((m) => m.moduleKey === key);
+      pushMessages(own.filter((m) => !m.afterCard));
       blocks.push({ kind: "module", id: `mod-${key}`, moduleKey: key });
+      pushMessages(own.filter((m) => m.afterCard));
     });
 
     return blocks;
