@@ -205,10 +205,14 @@ const CuratexPhase = ({
     weightsSeededRef.current = true;
     setWeights(profile.weights);
   }, [profile]);
-  const [isAddingParameter, setIsAddingParameter] = useState(false);
-  const [newParamName, setNewParamName] = useState("");
-  const [newParamValue, setNewParamValue] = useState("");
-  const [newParamWeight, setNewParamWeight] = useState("");
+  /**
+   * Parameters being added, not yet saved. A list, so the researcher can keep
+   * adding rows: testing found only one could be added at a time — each extra
+   * one meant Save Changes, Edit, Add Parameter again.
+   */
+  const [newParams, setNewParams] = useState([]);
+  const newParamSeq = useRef(0);
+  const isAddingParameter = newParams.length > 0;
   const [expandedRow, setExpandedRow] = useState(0);
 
   const closeLegacyCompoundDetail = () => {
@@ -270,8 +274,14 @@ const CuratexPhase = ({
   };
 
   const handleAddParameterClick = () => {
-    setIsAddingParameter(true);
+    newParamSeq.current += 1;
+    setNewParams((prev) => [...prev, { id: newParamSeq.current, name: "", value: "", weight: "" }]);
   };
+
+  const updateNewParam = (id, field, value) =>
+    setNewParams((prev) => prev.map((row) => (row.id === id ? { ...row, [field]: value } : row)));
+
+  const discardNewParam = (id) => setNewParams((prev) => prev.filter((row) => row.id !== id));
 
   const handleDeleteParameter = (key) => {
     if (!profileData || !setProfileData) return;
@@ -291,10 +301,7 @@ const CuratexPhase = ({
       setWeights(editSnapshotRef.current.weights);
       editSnapshotRef.current = null;
     }
-    setIsAddingParameter(false);
-    setNewParamName("");
-    setNewParamValue("");
-    setNewParamWeight("");
+    setNewParams([]);
     setProfileEditMode?.(false);
   };
 
@@ -304,29 +311,32 @@ const CuratexPhase = ({
    * scale; a blank weight defaults to 1.0, the scale the profile itself uses.
    * (This used to default to 10 on a percent scale, about 10x too large.)
    */
-  const newWeightNumber = newParamWeight.trim() === "" ? 1 : Number(newParamWeight);
-  const newParamValid =
-    newParamName.trim() !== "" && Number.isFinite(newWeightNumber) && newWeightNumber >= 0;
+  const weightOf = (row) => (row.weight.trim() === "" ? 1 : Number(row.weight));
+  const isBlankRow = (row) => !row.name.trim() && !row.value.trim() && !row.weight.trim();
+  const isValidRow = (row) =>
+    row.name.trim() !== "" && Number.isFinite(weightOf(row)) && weightOf(row) >= 0;
+  // Untouched blank rows are ignored on save; anything half-filled blocks it.
+  const newParamsValid = newParams.every((row) => isBlankRow(row) || isValidRow(row));
 
   const handleSaveChanges = () => {
-    if (isAddingParameter && newParamValid) {
-      const key = newParamName
-        .trim()
-        .replace(/[^A-Za-z0-9]+(.)/g, (_, c) => c.toUpperCase())
-        .replace(/^./, (c) => c.toLowerCase());
-
-      setProfileData?.({ ...profileData, [key]: newParamValue.trim() });
-      setWeights((prev) => ({
-        ...prev,
-        [key]: newWeightNumber,
-      }));
+    const toAdd = newParams.filter((row) => !isBlankRow(row) && isValidRow(row));
+    if (toAdd.length) {
+      const nextProfile = { ...profileData };
+      const nextWeights = {};
+      toAdd.forEach((row) => {
+        const key = row.name
+          .trim()
+          .replace(/[^A-Za-z0-9]+(.)/g, (_, c) => c.toUpperCase())
+          .replace(/^./, (c) => c.toLowerCase());
+        nextProfile[key] = row.value.trim();
+        nextWeights[key] = weightOf(row);
+      });
+      setProfileData?.(nextProfile);
+      setWeights((prev) => ({ ...prev, ...nextWeights }));
     }
     editSnapshotRef.current = null;
 
-    setIsAddingParameter(false);
-    setNewParamName("");
-    setNewParamValue("");
-    setNewParamWeight("");
+    setNewParams([]);
     setProfileEditMode?.(false);
   };
 
@@ -395,7 +405,7 @@ const CuratexPhase = ({
   // ---------------------------------------------------------------------------
   if (workflowPhase === "curatex-profile") {
     const subtitle = isAddingParameter
-      ? "Adding new parameter — fill in the name and value below"
+      ? "Adding parameters — fill in each new row, add more if needed, then save changes."
       : profileEditMode
       ? "Editing mode — adjust the weights below, then save changes."
       : editable
@@ -518,11 +528,11 @@ const CuratexPhase = ({
                 </React.Fragment>
               ))}
 
-              {isAddingParameter && (
-                <>
+              {newParams.map((row) => (
+                <React.Fragment key={`new-${row.id}`}>
                   <TextField
-                    value={newParamName}
-                    onChange={(e) => setNewParamName(e.target.value)}
+                    value={row.name}
+                    onChange={(e) => updateNewParam(row.id, "name", e.target.value)}
                     placeholder="Parameter name..."
                     size="small"
                     fullWidth
@@ -530,8 +540,8 @@ const CuratexPhase = ({
                   />
 
                   <TextField
-                    value={newParamValue}
-                    onChange={(e) => setNewParamValue(e.target.value)}
+                    value={row.value}
+                    onChange={(e) => updateNewParam(row.id, "value", e.target.value)}
                     placeholder="Value (for reference, not sent)"
                     size="small"
                     fullWidth
@@ -540,8 +550,8 @@ const CuratexPhase = ({
 
                   <div className="curatex-weight-field curatex-weight-field--new">
                     <TextField
-                      value={newParamWeight}
-                      onChange={(e) => setNewParamWeight(e.target.value)}
+                      value={row.weight}
+                      onChange={(e) => updateNewParam(row.id, "weight", e.target.value)}
                       placeholder="1.0"
                       size="small"
                       variant="standard"
@@ -555,18 +565,13 @@ const CuratexPhase = ({
                   <IconButton
                     size="small"
                     className="curatex-profile-delete"
-                    aria-label="Discard the new parameter"
-                    onClick={() => {
-                      setIsAddingParameter(false);
-                      setNewParamName("");
-                      setNewParamValue("");
-                      setNewParamWeight("");
-                    }}
+                    aria-label="Discard this new parameter"
+                    onClick={() => discardNewParam(row.id)}
                   >
                     <DeleteOutlineOutlined className="curatex-trash-icon" />
                   </IconButton>
-                </>
-              )}
+                </React.Fragment>
+              ))}
             </div>
 
             {!profileLoading && !profileError && rows.length === 0 && (
@@ -583,7 +588,9 @@ const CuratexPhase = ({
               </Typography>
             )}
 
-            {showInputs && profileEditMode && !isAddingParameter && (
+            {/* Stays available while rows are being added, so several
+                parameters can be added before saving. */}
+            {showInputs && profileEditMode && (
               <Button
                 startIcon={<AddOutlined />}
                 onClick={handleAddParameterClick}
@@ -600,7 +607,7 @@ const CuratexPhase = ({
                 <Button
                   variant="contained"
                   onClick={handleSaveChanges}
-                  disabled={isAddingParameter && !newParamValid}
+                  disabled={!newParamsValid}
                   className="curatex-primary-button"
                 >
                   Save Changes
