@@ -977,8 +977,11 @@ const CompleteWorkflow = () => {
 
     /**
      * "All changes saved" was static text. It now reflects the session's real
-     * state: the PATCH in flight, its failure, or the status the server
-     * reports. Hidden when there is no session.
+     * state: the PATCH in flight, its failure, or a saved session.
+     *
+     * It used to fall back to the server's raw status otherwise, which read
+     * "Session completed" at every stage of a run; testing asked for that to
+     * go, so nothing is shown unless there is save feedback to give.
      */
     const saveIndicator =
       saveState.status === "saving"
@@ -987,8 +990,6 @@ const CompleteWorkflow = () => {
         ? { color: "#DC2626", text: `Not saved: ${saveState.error}` }
         : session.sessionStatus === "Saved"
         ? { color: "#22C55E", text: "Session saved" }
-        : session.sessionId && session.sessionStatus
-        ? { color: "#94A3B8", text: `Session ${String(session.sessionStatus).toLowerCase()}` }
         : null;
     /**
      * The last breadcrumb is just the module's name.
