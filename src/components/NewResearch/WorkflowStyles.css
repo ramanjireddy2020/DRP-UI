@@ -212,6 +212,8 @@
 }
 
 .tab-artifacts {
+  /* Clickable tab: hand cursor, not the text I-beam. */
+  cursor: pointer;
   display: flex;
   flex-direction: row;
   align-items: center;
@@ -269,6 +271,8 @@
 }
 
 .tab-lineage {
+  /* Clickable tab: hand cursor, not the text I-beam. */
+  cursor: pointer;
   display: flex;
   flex-direction: row;
   align-items: center;
