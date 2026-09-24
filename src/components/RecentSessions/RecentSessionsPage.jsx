@@ -79,7 +79,8 @@ const TEXT_MUTED = "#6B7280"; // subtitle / status label
 const TEXT_MUTED_LIGHT = "#9CA3AF"; // timestamp / placeholder / search icon
 const BG = "#F8FAFC";
 
-const MODULE_TAGS = ["All", "TxKG", "LitMineX", "ScreenSuite", "CurateX", "NovSearch"];
+// Pipeline order. CurateX was listed after ScreenSuite, although it runs first.
+const MODULE_TAGS = ["All", "TxKG", "LitMineX", "CurateX", "ScreenSuite", "NovSearch"];
 
 /* Text colors confirmed directly from Figma dev-mode ("Colors" panel per badge).
    Background tints are estimated as a light wash of the text color where the
