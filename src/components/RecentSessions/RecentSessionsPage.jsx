@@ -15,6 +15,7 @@ import {
   ChevronLeftOutlined,
   ChevronRightOutlined,
   DeleteOutlineOutlined,
+  SearchOutlined,
 } from "@mui/icons-material";
 import { listSessions, deleteSession } from "../../services/api/sessions";
 import { formatUtcDateTime, buildPageList } from "../../utils/formatDate";
@@ -58,8 +59,8 @@ const TEAL = "#00BCD4";
    page (active)    Fixed 32x32, radius 4, border 1.5px #00BCD4, transparent bg
    "showing" text   Inter 400/12px, #6B7280
 
-   search icon      confirmed as the literal "🔍" glyph (not a vector), boxed at 13x13,
-                     Inter 400/13px, color #9CA3AF
+   search icon      Figma used the literal "🔍" glyph; replaced with the MUI
+                     SearchOutlined icon in teal per testing feedback
    ------------------------------------------------------------------------ */
 const TOPNAV_BORDER = "#EAECF0";
 const BREADCRUMB_COLOR = "#3D4451";
@@ -67,7 +68,6 @@ const CARD_BORDER = "#E2E8F0";
 const PAGE_TITLE_COLOR = "#111827";
 const SUBTITLE_COLOR = "#6B7280";
 const SEARCH_BORDER = "#E0E5EB";
-const SEARCH_ICON_COLOR = "#9CA3AF";
 const CHIP_ACTIVE_BG = "#00BCD4";
 const CHIP_BORDER = "#E5E8ED";
 const CHIP_TEXT_INACTIVE = "#4B5563";
@@ -108,28 +108,10 @@ const SEARCH_DEBOUNCE_MS = 300;
 
 const errorText = (err, fallback) => err?.userMessage || err?.message || fallback;
 
-/* Figma's "search icon" is literally the 🔍 glyph as a text node — Width 13,
-   Height 13, Inter 400/13px, color #9CA3AF — not a custom vector. Rendering
-   it as the same character keeps it pixel-identical to the design. */
+/* Search icon. Figma used the literal 🔍 emoji, which testing flagged as out
+   of place; this is the MUI icon in the app's teal instead. */
 function SearchIcon() {
-  return (
-    <Box
-      component="span"
-      sx={{
-        width: "13px",
-        height: "13px",
-        fontSize: "13px",
-        lineHeight: 1,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        flexShrink: 0,
-        color: SEARCH_ICON_COLOR,
-      }}
-    >
-      🔍
-    </Box>
-  );
+  return <SearchOutlined sx={{ fontSize: 16, color: TEAL, flexShrink: 0 }} aria-hidden="true" />;
 }
 
 const PAGE_BTN_BG = "#F1F5F9"; // btn-prev / btn-next / inactive page numbers
