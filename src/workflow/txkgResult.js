@@ -100,6 +100,12 @@ export const normalizeTarget = (t, index) => {
     literatureHits: t.literatureHits ?? t.literature_hits ?? null,
     patentHits: t.patentHits ?? t.patent_hits ?? null,
     connectionTypes: Array.isArray(t.connectionTypes) ? t.connectionTypes : [],
+    // Actual paths for this target (node names + edge labels), when the
+    // payload includes them. connectionTypes above are only the path types.
+    traversals: [t.metapaths, t.traversals, t.paths]
+      .find((list) => Array.isArray(list) && list.some((row) => row && typeof row === "object"))
+      ?.map(normalizeTraversal)
+      .filter(Boolean) ?? [],
     supportingSources: Array.isArray(t.supportingSources) ? t.supportingSources : [],
     pathCount: t.path_count ?? t.pathCount ?? (Array.isArray(t.connectionTypes) ? t.connectionTypes.length : null),
     customAdded: t.customAdded ?? t.custom_added ?? false,
@@ -231,6 +237,65 @@ const pathText = (value) => {
   return value == null ? "" : String(value);
 };
 
+/** "PROTEIN_DISEASE_ASSOCIATION" → "Protein disease association". */
+const relationText = (value) =>
+  String(value ?? "")
+    .toLowerCase()
+    .replace(/_/g, " ")
+    .replace(/^./, (c) => c.toUpperCase());
+
+/**
+ * One meta-path traversal: the actual nodes walked and the relation on each hop.
+ *
+ * Testing found traversals rendered as "gene/protein → biological_process →
+ * gene/protein" — the node TYPES — instead of the node names the backend
+ * returns. A row looks like:
+ *   { node_names: ["Thrombocytosis", "Tyrosine-protein kinase JAK2", "hsa04935", …],
+ *     node_types: ["disease", "gene/protein", "pathway", …],
+ *     edges: ["PROTEIN_DISEASE_ASSOCIATION", …],
+ *     edge_labels: ["Protein Disease Association", …],
+ *     intermediate, intermediate_name, hop_count, context_weight }
+ * Older shapes (a `path` string or array) are still read.
+ *
+ * @returns {{ steps: {name, type}[], edgeLabels: string[], target, targetName,
+ *   hopCount, contextWeight, text } | null}
+ */
+export const normalizeTraversal = (row) => {
+  if (row == null) return null;
+
+  let steps = [];
+  let edgeLabels = [];
+
+  if (typeof row === "string") {
+    steps = row.split("→").map((name) => ({ name: name.trim(), type: null })).filter((s) => s.name);
+  } else if (typeof row === "object") {
+    const names = row.node_names ?? row.nodeNames;
+    const types = row.node_types ?? row.nodeTypes ?? [];
+    if (Array.isArray(names) && names.length) {
+      steps = names.map((name, i) => ({ name: String(name), type: types[i] ?? null }));
+    } else {
+      const text = pathText(row.path ?? row.nodes ?? row.traversal ?? row.metapath);
+      steps = text.split("→").map((name) => ({ name: name.trim(), type: null })).filter((s) => s.name);
+    }
+    const labels = row.edge_labels ?? row.edgeLabels;
+    edgeLabels = Array.isArray(labels) && labels.length
+      ? labels.map(String)
+      : Array.isArray(row.edges) ? row.edges.map(relationText) : [];
+  }
+
+  if (!steps.length) return null;
+
+  return {
+    steps,
+    edgeLabels,
+    target: row.target ?? row.target_id ?? row.targetId ?? null,
+    targetName: row.target_name ?? row.targetName ?? steps[steps.length - 1].name,
+    hopCount: row.hop_count ?? row.hopCount ?? Math.max(steps.length - 1, 0),
+    contextWeight: row.context_weight ?? row.contextWeight ?? null,
+    text: steps.map((s) => s.name).join(" → "),
+  };
+};
+
 export const normalizeMetapath = ({ analysis, scores, traversals } = {}) => {
   const statsSource =
     analysis && typeof analysis === "object" && !Array.isArray(analysis)
@@ -259,13 +324,7 @@ export const normalizeMetapath = ({ analysis, scores, traversals } = {}) => {
     .filter(Boolean);
 
   const traversalRows = listFrom(traversals, ["traversals", "items", "paths", "results"])
-    .map((row) => {
-      if (typeof row === "string") return { name: null, path: row };
-      if (!row || typeof row !== "object") return null;
-      const path = pathText(row.path ?? row.nodes ?? row.traversal ?? row.metapath);
-      if (!path) return null;
-      return { name: row.target ?? row.name ?? null, path };
-    })
+    .map(normalizeTraversal)
     .filter(Boolean);
 
   return {

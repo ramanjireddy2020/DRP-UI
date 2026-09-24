@@ -12,6 +12,7 @@ import { moduleDisplayFor } from '../../../workflow/moduleMap';
 import { linksForSource, uniprotUrl } from '../../../workflow/sourceLinks';
 import PhaseActions from '../PhaseActions';
 import SubgraphView from '../SubgraphView';
+import { styleForType } from '../subgraphStyle';
 import { ExpandMoreOutlined, AddOutlined, CloseOutlined } from '@mui/icons-material';
 import {
   FONT, TEAL, GRAY_BG, BORDER, BORDER_LIGHT,
@@ -80,6 +81,53 @@ const SectionAccordionSummary = ({ label }) => (
     <Typography sx={{ flex: 1, fontFamily: FONT, fontSize: "12px", fontWeight: 700, color: "#1E293B", textTransform: "uppercase" }}>
       {label}
     </Typography>
+  </Box>
+);
+
+/**
+ * One meta-path as it was walked: node names, coloured by node type (same
+ * colours as the subgraph), with the relation written on each arrow.
+ * Replaces the "gene/protein → biological_process → gene/protein" type strings.
+ */
+const PathChain = ({ traversal }) => (
+  <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px 6px" }}>
+    {traversal.steps.map((step, i) => (
+      <React.Fragment key={i}>
+        {i > 0 && (
+          <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", px: "2px" }}>
+            {traversal.edgeLabels[i - 1] && (
+              <Typography sx={{ fontFamily: FONT, fontSize: "9px", color: "#94A3B8", lineHeight: "11px", whiteSpace: "nowrap" }}>
+                {traversal.edgeLabels[i - 1]}
+              </Typography>
+            )}
+            <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: "#94A3B8", lineHeight: "12px" }}>→</Typography>
+          </Box>
+        )}
+        <Box
+          title={step.type || undefined}
+          sx={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "4px",
+            p: "2px 8px",
+            borderRadius: "10px",
+            border: `1px solid ${BORDER}`,
+            bgcolor: "#FFFFFF",
+          }}
+        >
+          {step.type && <Box sx={{ width: 7, height: 7, borderRadius: "50%", bgcolor: styleForType(step.type).color, flexShrink: 0 }} />}
+          <Typography sx={{ fontFamily: FONT, fontSize: "11px", color: "#111827", lineHeight: "14px" }}>{step.name}</Typography>
+        </Box>
+      </React.Fragment>
+    ))}
+    {(traversal.hopCount != null || traversal.contextWeight != null) && (
+      <Typography sx={{ fontFamily: FONT, fontSize: "10px", color: "#94A3B8", ml: "4px" }}>
+        {[
+          traversal.hopCount != null && `${traversal.hopCount} hop${traversal.hopCount === 1 ? "" : "s"}`,
+          traversal.contextWeight != null && `context weight ${traversal.contextWeight}`,
+        ].filter(Boolean).join(" · ")}
+      </Typography>
+    )}
   </Box>
 );
 
@@ -634,6 +682,20 @@ const TXKGPhase = ({
     );
   };
 
+  /**
+   * Node-level paths for one target: from the target itself when the TxKG
+   * payload carries them, else the meta-path analysis traversals that end at
+   * (or name) this target.
+   */
+  const traversalsFor = (t) => {
+    if (t.traversals?.length) return t.traversals;
+    const rows = metapath?.data?.traversals ?? [];
+    const names = [t.id, t.name, t.fullName, t.geneName].filter(Boolean).map((v) => String(v).toLowerCase());
+    return rows.filter((row) =>
+      [row.target, row.targetName].some((v) => v != null && names.includes(String(v).toLowerCase()))
+    );
+  };
+
   /** Top five targets, each expandable to list all of its sourced meta-paths. */
   const renderMetapathTraversals = () => (
     <Box sx={{ flex: 1, display: "flex", flexDirection: "column", gap: "6px" }}>
@@ -642,6 +704,8 @@ const TXKGPhase = ({
       </Typography>
       {targets.slice(0, 5).map((t, i) => {
         const open = isMetapathOpen(t.name, i);
+        const real = traversalsFor(t);
+        // Fallback when no node-level paths are available yet: the path types.
         const paths = t.connectionTypes.map(prettyPath);
         return (
           <Box
@@ -674,8 +738,9 @@ const TXKGPhase = ({
               </Typography>
               {/* Collapsed rows preview the first path and how many more there are. */}
               <Typography sx={{ flex: 1, fontFamily: FONT, fontSize: "11px", color: "#6B7280", lineHeight: "13px", visibility: open ? "hidden" : "visible" }}>
-                {paths.length ? paths[0] : "No sourced path"}
-                {paths.length > 1 ? ` (+${paths.length - 1} more)` : ""}
+                {real.length
+                  ? `${real[0].text}${real.length > 1 ? ` (+${real.length - 1} more)` : ""}`
+                  : `${paths.length ? paths[0] : "No sourced path"}${paths.length > 1 ? ` (+${paths.length - 1} more)` : ""}`}
               </Typography>
               <Box sx={{ display: "flex", alignItems: "center", p: "3px 8px", bgcolor: i === 0 ? "#00BCD4" : "#D1FAE5", borderRadius: "8px" }}>
                 <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: i === 0 ? "#FFFFFF" : "#059669", lineHeight: "13px" }}>
@@ -684,12 +749,23 @@ const TXKGPhase = ({
               </Box>
             </Box>
             {open && (
-              <Box sx={{ display: "flex", flexDirection: "column", gap: "6px", p: "0 12px 10px 38px" }}>
-                {(paths.length ? paths : ["No sourced path for this target"]).map((path, j) => (
-                  <Typography key={j} sx={{ fontFamily: FONT, fontSize: "11px", color: "#6B7280", lineHeight: 1.35 }}>
-                    • {path}
-                  </Typography>
-                ))}
+              <Box sx={{ display: "flex", flexDirection: "column", gap: "8px", p: "0 12px 10px 38px" }}>
+                {real.length ? (
+                  real.map((traversal, j) => <PathChain key={j} traversal={traversal} />)
+                ) : (
+                  <>
+                    {paths.length > 0 && (
+                      <Typography sx={{ fontFamily: FONT, fontSize: "10px", color: "#94A3B8" }}>
+                        Path types. Run meta-path analysis to see the actual nodes.
+                      </Typography>
+                    )}
+                    {(paths.length ? paths : ["No sourced path for this target"]).map((path, j) => (
+                      <Typography key={j} sx={{ fontFamily: FONT, fontSize: "11px", color: "#6B7280", lineHeight: 1.35 }}>
+                        • {path}
+                      </Typography>
+                    ))}
+                  </>
+                )}
               </Box>
             )}
           </Box>
@@ -721,9 +797,9 @@ const TXKGPhase = ({
           <>
             <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#111827", lineHeight: "16px", mt: "8px" }}>Analysed traversals</Typography>
             {data.traversals.slice(0, 25).map((row, i) => (
-              <Typography key={i} sx={{ fontFamily: FONT, fontSize: "11px", color: "#6B7280", lineHeight: 1.35 }}>
-                • {row.name ? `${row.name}: ` : ""}{row.path}
-              </Typography>
+              <Box key={i} sx={{ py: "4px", borderBottom: `1px solid ${BORDER}` }}>
+                <PathChain traversal={row} />
+              </Box>
             ))}
           </>
         )}
