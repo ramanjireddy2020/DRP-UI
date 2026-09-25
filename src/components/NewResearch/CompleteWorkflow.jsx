@@ -2,10 +2,11 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import ArtifactsPage from "./ArtifactsPage";
 import LineagePage from "./LineagePage";
 import ShareModal from "../ShareModal/ShareModal";
+import ArticleDetailPanel from "./ArticleDetailPanel";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   Box, Typography, Button,
-  TextField, IconButton, Dialog, DialogTitle,
+  IconButton, Dialog, DialogTitle,
   DialogContent, DialogActions
 } from "@mui/material";
 import { ExpandMoreOutlined, CloseOutlined } from "@mui/icons-material";
@@ -22,21 +23,26 @@ import { moduleForPhase, isErrorPhase, isLoadingPhase, MODULE_BY_KEY } from "../
 import { normalizeTxkgResult, normalizeMetapath } from "../../workflow/txkgResult";
 import { getArtifacts } from "../../services/api/sessions";
 import { toGeneNames, buildSelections } from "../../workflow/selections";
-import { toApiWeights } from "../../workflow/phaseResults";
+import { toApiWeights, toApiValues } from "../../workflow/phaseResults";
+import { withProductWording } from "../../workflow/wording";
+import { buildSessionReport } from "../../workflow/sessionReport";
 import curatexApi from "../../services/api/curatex";
 import litminexApi from "../../services/api/litminex";
 import txkgApi from "../../services/api/txkg";
 import usePhaseActions from "../../hooks/usePhaseActions";
-import { pubmedUrl } from "../../workflow/sourceLinks";
 import {
   SCREENSUITE_UNAVAILABLE,
   SCREENSUITE_UNAVAILABLE_MESSAGE,
 } from "../../services/api/screensuite";
 import PhaseError from "../workflow/PhaseError";
+import PdbPicker from "../workflow/ScreeningSuite/PdbPicker";
+import { readPdbShortlist } from "../../workflow/pdbShortlist";
 import ChatInputBar from "../workflow/ChatInputBar";
 import PipelinePhase from "../workflow/PipelinePhase";
 import ConversationTimeline from "../workflow/ConversationTimeline";
 import ModuleResultCard from "../workflow/ModuleResultCard";
+import ArchivedRunCard from "../workflow/ArchivedRunCard";
+import BranchDialog from "../workflow/BranchDialog";
 import ProteinTargetPickerDialog from "../workflow/ProteinTargetPickerDialog";
 import { useCurrentUser } from "../../context/CurrentUserContext";
 import './WorkflowStyles.css';
@@ -127,6 +133,9 @@ const useModuleJob = (
  * in fact still running (a status word, not progress). Testing saw the status
  * bar read "completed" during CurateX scoring.
  */
+/** Modules whose automatic lead-in agent text is hidden; see timelineBlocks. */
+const CARD_IS_THE_ANSWER = new Set(["txkg", "curatex"]);
+
 const liveProgress = (job) => {
   const text = job?.progressMessage;
   if (!text) return null;
@@ -445,6 +454,52 @@ const CompleteWorkflow = () => {
     enabled: novsearchStep?.phase === "novelty-results",
   });
 
+  /** Every module's results, for the end-of-session report (NovSearch summary). */
+  const sessionReport = useMemo(
+    () =>
+      buildSessionReport({
+        txkg: txkgResult,
+        litminex: litminex.data,
+        curatexTarget: curatexResults.data?.target || curatexProfile.data?.target || null,
+        curatex: curatexResults.data,
+        docking: screensuite.data,
+        novelty: novsearch.data,
+      }),
+    [txkgResult, litminex.data, curatexResults.data, curatexProfile.data, screensuite.data, novsearch.data]
+  );
+
+  /**
+   * What each earlier run found, for its ArchivedRunCard.
+   *
+   * The result hooks follow a module's CURRENT job, so a run's data is gone
+   * once the module runs again. The last section seen per module is kept in a
+   * ref; when a run is superseded, that section (still the old run's, because
+   * the new job has not loaded yet) is stored against it. The snapshot effect
+   * is declared before the ref update so it reads the previous render's data.
+   */
+  const lastSectionByKey = useRef({});
+  const [runSnapshots, setRunSnapshots] = useState({});
+  useEffect(() => {
+    const latest = {};
+    session.runs.forEach((r) => {
+      latest[r.key] = r.id;
+    });
+    const superseded = session.runs.filter((r) => latest[r.key] !== r.id && !(r.id in runSnapshots));
+    if (!superseded.length) return;
+    setRunSnapshots((prev) => {
+      const next = { ...prev };
+      superseded.forEach((r) => {
+        next[r.id] = lastSectionByKey.current[r.key] ?? null;
+      });
+      return next;
+    });
+  }, [session.runs, runSnapshots]);
+  useEffect(() => {
+    sessionReport.sections.forEach((section) => {
+      lastSectionByKey.current[section.key] = section;
+    });
+  }, [sessionReport]);
+
   const pipelineStep = session.steps.pipeline;
   const pipeline = usePhaseResults("pipeline", pipelineStep?.jobId, {
     enabled: pipelineStep?.phase === "pipeline-results",
@@ -478,32 +533,52 @@ const CompleteWorkflow = () => {
     return step.jobId;
   };
 
+  /**
+   * Branching (git-style): a card's Branch button opens BranchDialog; the
+   * branch is posted as a step with `fromStepId`, named, and listed in the
+   * header's branch menu next to Main.
+   */
+  const [branchSource, setBranchSource] = useState(null);
+  const [branchCreated, setBranchCreated] = useState(null);
+  const [branchState, setBranchState] = useState({ pending: false, error: null });
+  const [branches, setBranches] = useState([]);
+  const requestBranch = useCallback((source) => {
+    setBranchCreated(null);
+    setBranchState({ pending: false, error: null });
+    setBranchSource(source);
+  }, []);
+
   const txkgActions = usePhaseActions({
     session,
+    onRequestBranch: requestBranch,
     moduleKey: "txkg",
     jobId: completedJobId("txkg"),
     moduleLabel: MODULE_BY_KEY.txkg?.label,
   });
   const litminexActions = usePhaseActions({
     session,
+    onRequestBranch: requestBranch,
     moduleKey: "litminex",
     jobId: completedJobId("litminex"),
     moduleLabel: MODULE_BY_KEY.litminex?.label,
   });
   const curatexActions = usePhaseActions({
     session,
+    onRequestBranch: requestBranch,
     moduleKey: "curatex",
     jobId: compoundsJobId && compoundsJob.isDone ? compoundsJobId : completedJobId("curatex"),
     moduleLabel: MODULE_BY_KEY.curatex?.label,
   });
   const screensuiteActions = usePhaseActions({
     session,
+    onRequestBranch: requestBranch,
     moduleKey: "screensuite",
     jobId: completedJobId("screensuite"),
     moduleLabel: MODULE_BY_KEY.screensuite?.label,
   });
   const novsearchActions = usePhaseActions({
     session,
+    onRequestBranch: requestBranch,
     moduleKey: "novsearch",
     jobId: completedJobId("novsearch"),
     moduleLabel: MODULE_BY_KEY.novsearch?.label,
@@ -959,6 +1034,8 @@ const CompleteWorkflow = () => {
     const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
     const running = activeJob.progressMessage || null;
 
+    // Every CurateX phase is titled "Drug Curation", matching "Literature
+    // mining" for LitMineX; it read "Target profile" / "Compound screening".
     const getTabInfo = () => {
       switch (workflowPhase) {
         case 'txkg-loading':    return { badge: 1, title: "Target identification query", count: "", dotColor: "#FFC107", statusText: running || "Searching databases" };
@@ -966,10 +1043,10 @@ const CompleteWorkflow = () => {
         case 'target-selection': return { badge: 1, title: "Target selection",          count: countOf(targetTotal || null), dotColor: "#00BCD4", statusText: `${selectedTargets.length} selected \u2022 ${Math.max(targetTotal - selectedTargets.filter((id) => txkgResult.targets.some((t) => t.id === id)).length, 0)} available` };
         case 'litminex-loading': return { badge: 2, title: "Literature mining",         count: "", dotColor: "#FFC107", statusText: running || "Searching databases" };
         case 'litminex-results': return { badge: 2, title: "Literature mining",         count: countOf(articleCount), dotColor: "#00BCD4", statusText: articleCount == null ? (litminex.loading ? "Loading articles…" : "Results ready") : `${plural(articleCount, "article")} found` };
-        case 'curatex-loading':  return { badge: 3, title: "Compound screening",        count: "", dotColor: "#FFC107", statusText: running || "Analyzing..." };
-        case 'curatex-profile':  return { badge: 3, title: "Target profile",            count: "",      dotColor: "#00BCD4", statusText: "Profile ready" };
-        case 'curatex-submitted':return { badge: 3, title: "Compound screening",        count: "", dotColor: "#FFC107", statusText: liveProgress(compoundsJob) || "Scoring compounds..." };
-        case 'curatex-results':  return { badge: 3, title: "Compound screening",        count: countOf(compoundCount), dotColor: "#00BCD4", statusText: compoundCount == null ? "Results ready" : `${plural(compoundCount, "compound")} scored` };
+        case 'curatex-loading':  return { badge: 3, title: "Drug Curation",        count: "", dotColor: "#FFC107", statusText: withProductWording(running) || "Analyzing..." };
+        case 'curatex-profile':  return { badge: 3, title: "Drug Curation",            count: "",      dotColor: "#00BCD4", statusText: "Profile ready" };
+        case 'curatex-submitted':return { badge: 3, title: "Drug Curation",        count: "", dotColor: "#FFC107", statusText: withProductWording(liveProgress(compoundsJob)) || "Scoring compounds..." };
+        case 'curatex-results':  return { badge: 3, title: "Drug Curation",        count: countOf(compoundCount), dotColor: "#00BCD4", statusText: compoundCount == null ? "Results ready" : `${plural(compoundCount, "compound")} scored` };
         case 'screensuite-loading': return { badge: 4, title: "Docking initialization", count: "", dotColor: "#FFC107", statusText: running || "Pipeline starting" };
         case 'screensuite-results': return { badge: 4, title: "Docking results", count: countOf(hitCount), dotColor: "#00BCD4", statusText: hitCount == null ? "Docking complete" : `${plural(hitCount, "docking hit")}` };
         case 'novelty-results':  return { badge: 5, title: "Novelty search",   count: countOf(patentCount), dotColor: "#00BCD4", statusText: patentCount == null ? "Report ready" : `${plural(patentCount, "patent")} found` };
@@ -985,7 +1062,14 @@ const CompleteWorkflow = () => {
     // endpoint that lists them, so only the main path is shown.
     const BRANCHES = [
       { id: "main", label: "Main", sub: "Main research path" },
+      ...branches.map((b) => ({
+        id: b.id,
+        label: b.name,
+        sub: b.description || [MODULE_BY_KEY[b.moduleKey]?.label, b.target].filter(Boolean).join(" · "),
+        branch: b,
+      })),
     ];
+    const selectedBranchLabel = BRANCHES.find((b) => b.id === selectedBranch)?.label || "Main";
 
     /**
      * "All changes saved" was static text. It now reflects the session's real
@@ -1146,7 +1230,7 @@ const CompleteWorkflow = () => {
                   <circle cx="3" cy="9" r="1.5" stroke="#64748B" strokeWidth="1.2" />
                   <path d="M3 4.5V7.5M3 4.5C5 4.5 7.5 4 7.5 3" stroke="#64748B" strokeWidth="1.2" strokeLinecap="round" />
                 </svg>
-                <span className="name">Main</span>
+                <span className="name">{selectedBranchLabel}</span>
                 <svg className="chevron" width="12" height="12" viewBox="0 0 12 12" fill="none">
                   <path d="M3 4.5L6 7.5L9 4.5" stroke="#64748B" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
@@ -1175,7 +1259,11 @@ const CompleteWorkflow = () => {
                     <div
                       key={branch.id}
                       className="branch-item"
-                      onClick={() => { setSelectedBranch(branch.id); setBranchOpen(false); }}
+                      onClick={() => {
+                        setSelectedBranch(branch.id);
+                        setBranchOpen(false);
+                        if (branch.branch) scrollToModule(branch.branch.moduleKey);
+                      }}
                       style={{ cursor: "pointer" }}
                     >
                       {selectedBranch === branch.id ? (
@@ -1696,238 +1784,6 @@ const CompleteWorkflow = () => {
   // wired PhaseActions button on each card now.
 
   /**
-   * Article Detail Side Panel.
-   *
-   * Items 21 and 22. The abstract was a fixed paragraph about Metformin and
-   * JAK2, the authors defaulted to "Chen, S. et al.", "View on PubMed Central"
-   * was a Typography with no href, and both buttons had no onClick. All four
-   * now come from GET /articles/{id} and its sibling endpoints.
-   */
-  const ArticleDetailPanel = () => {
-    if (!showArticleDetail || !selectedArticle) return null;
-
-    // The list row is shown immediately; the full record is MERGED over it.
-    // Replacing the row with the detail meant an empty `keywords: []` from
-    // GET /articles/{id} hid the keywords the row already had.
-    const article = { ...selectedArticle };
-    if (articleDetail && typeof articleDetail === "object") {
-      Object.entries(articleDetail).forEach(([key, value]) => {
-        if (value == null) return;
-        if (typeof value === "string" && !value.trim()) return;
-        if (Array.isArray(value) && !value.length) return;
-        article[key] = value;
-      });
-    }
-
-    const keywords = Array.isArray(article.keywords)
-      ? article.keywords
-      : typeof article.keywords === "string"
-      ? article.keywords.split(",").map((k) => k.trim()).filter(Boolean)
-      : article.keywordList || [];
-
-    // The article's pmcLink; failing that, GET /articles/{id}/pmc-link; and
-    // only then the PubMed record derived from the article id.
-    const externalUrl = article.pmcLink || articlePmc?.url || pubmedUrl(article.id);
-    const externalLabel = article.pmcLink
-      ? "View on PubMed Central"
-      : articlePmc?.url
-      ? `View on ${articlePmc.provider || "PubMed Central"}`
-      : "View on PubMed";
-
-    return (
-      <Box sx={{
-        position: "fixed",
-        right: 0,
-        top: 0,
-        width: "380px",
-        height: "100vh",
-        bgcolor: "#FFFFFF",
-        borderLeft: `1px solid ${BORDER}`,
-        boxShadow: "-4px 0 24px rgba(0,0,0,0.08)",
-        zIndex: 1300,
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-      }}>
-        <Box sx={{ flex: 1, overflowY: "auto", p: "28px 28px 32px", display: "flex", flexDirection: "column", gap: "20px" }}>
-          <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
-            <IconButton size="small" onClick={() => setShowArticleDetail(false)} sx={{ color: "#6B7280" }}>
-              <CloseOutlined sx={{ fontSize: 18 }} />
-            </IconButton>
-          </Box>
-
-          <Typography sx={{ fontFamily: FONT, fontSize: "22px", fontWeight: 700, color: "#111827", lineHeight: "28px", mt: "-8px" }}>
-            Article Detail
-          </Typography>
-
-          <Box>
-            <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.06em", mb: "8px" }}>
-              ARTICLE TITLE
-            </Typography>
-            <Typography sx={{ fontFamily: FONT, fontSize: "15px", fontWeight: 700, color: "#111827", lineHeight: "22px" }}>
-              {article.title}
-            </Typography>
-          </Box>
-
-          <Box sx={{ display: "flex", gap: "40px" }}>
-            <Box>
-              <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 500, color: "#6B7280", mb: "4px" }}>Authors</Typography>
-              {/* Was hardcoded "Chen, S. et al." whenever the row had none. */}
-              <Typography sx={{ fontFamily: FONT, fontSize: "14px", color: "#111827" }}>
-                {article.authors || article.author || (articleBusy === "detail" ? "Loading…" : "Not listed")}
-              </Typography>
-            </Box>
-            <Box>
-              <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 500, color: "#6B7280", mb: "4px" }}>Year</Typography>
-              <Typography sx={{ fontFamily: FONT, fontSize: "14px", color: "#111827" }}>{article.year || "—"}</Typography>
-            </Box>
-          </Box>
-
-          <Box>
-            <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.06em", mb: "8px" }}>
-              ABSTRACT
-            </Typography>
-            <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: "#374151", lineHeight: 1.6 }}>
-              {article.abstract
-                || (articleBusy === "detail" ? "Loading the abstract…" : "No abstract was returned for this article.")}
-            </Typography>
-          </Box>
-
-          {keywords.length > 0 && (
-            <Box>
-              <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.06em", mb: "8px" }}>
-                KEYWORDS
-              </Typography>
-              <Box sx={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-                {keywords.map((kw, i) => (
-                  <Box key={i} sx={{ px: "10px", py: "5px", bgcolor: "#F3F4F6", borderRadius: "4px" }}>
-                    <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 500, color: "#374151" }}>{kw}</Typography>
-                  </Box>
-                ))}
-              </Box>
-            </Box>
-          )}
-
-          <Box>
-            <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.06em", mb: "8px" }}>
-              FULL TEXT
-            </Typography>
-            {/* Item 21: a real anchor. This was a Typography with a pointer
-                cursor and no href, so it looked like a link and did nothing. */}
-            {externalUrl ? (
-              <Typography
-                component="a"
-                href={externalUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                sx={{ fontFamily: FONT, fontSize: "14px", fontWeight: 500, color: TEAL, textDecoration: "none", "&:hover": { textDecoration: "underline" } }}
-              >
-                ↗ {externalLabel}
-              </Typography>
-            ) : (
-              <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: TEXT_MUTED }}>
-                No full-text link was returned for this article.
-              </Typography>
-            )}
-          </Box>
-
-          {/* Item 22: article chat. */}
-          <Box>
-            <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.06em", mb: "8px" }}>
-              ASK ABOUT THIS PAPER
-            </Typography>
-
-            {articleChat.length > 0 && (
-              <Box sx={{ display: "flex", flexDirection: "column", gap: "8px", mb: "10px" }}>
-                {articleChat.map((msg, i) => (
-                  <Box
-                    key={i}
-                    sx={{
-                      p: "10px 12px",
-                      borderRadius: "8px",
-                      bgcolor: msg.role === "user" ? "#F0FDFC" : "#F8FAFC",
-                      border: `1px solid ${BORDER}`,
-                    }}
-                  >
-                    <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: msg.isError ? "#DC2626" : "#374151", lineHeight: 1.6 }}>
-                      {msg.content}
-                    </Typography>
-                    {/* The reply's citations were stored but never shown. */}
-                    {Array.isArray(msg.citations) && msg.citations.length > 0 && (
-                      <Box sx={{ mt: "6px", display: "flex", flexDirection: "column", gap: "2px" }}>
-                        <Typography sx={{ fontFamily: FONT, fontSize: "10px", fontWeight: 600, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                          Citations
-                        </Typography>
-                        {msg.citations.map((citation, ci) => {
-                          const text =
-                            typeof citation === "string"
-                              ? citation
-                              : citation?.title || citation?.text || citation?.source || citation?.id || citation?.pmid || "";
-                          const href = typeof citation === "object" ? citation?.url || citation?.link || null : null;
-                          if (!text && !href) return null;
-                          return href ? (
-                            <Typography key={ci} component="a" href={href} target="_blank" rel="noopener noreferrer" sx={{ fontFamily: FONT, fontSize: "11px", color: TEAL, textDecoration: "none", "&:hover": { textDecoration: "underline" } }}>
-                              [{ci + 1}] {text || href} ↗
-                            </Typography>
-                          ) : (
-                            <Typography key={ci} sx={{ fontFamily: FONT, fontSize: "11px", color: "#6B7280" }}>
-                              [{ci + 1}] {String(text)}
-                            </Typography>
-                          );
-                        })}
-                      </Box>
-                    )}
-                  </Box>
-                ))}
-              </Box>
-            )}
-
-            <TextField
-              placeholder="e.g. How does it modulate JAK2 signaling?"
-              fullWidth
-              size="small"
-              multiline
-              maxRows={3}
-              disabled={articleBusy === "chat"}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  const value = e.target.value;
-                  e.target.value = "";
-                  handleAskArticle(value);
-                }
-              }}
-              sx={{ "& .MuiOutlinedInput-root": { fontFamily: FONT, fontSize: "13px", borderRadius: "8px" } }}
-            />
-            <Typography sx={{ fontFamily: FONT, fontSize: "11px", color: TEXT_MUTED, mt: "4px" }}>
-              {articleBusy === "chat" ? "Asking…" : "Press Enter to ask"}
-            </Typography>
-          </Box>
-
-          {articleNotice && (
-            <Typography
-              role={articleNotice.isError ? "alert" : "status"}
-              sx={{ fontFamily: FONT, fontSize: "12px", color: articleNotice.isError ? "#DC2626" : "#059669" }}
-            >
-              {articleNotice.text}
-            </Typography>
-          )}
-
-          {/* Item 22: both buttons had no onClick at all. */}
-          <Button
-            fullWidth
-            onClick={handleSaveArticle}
-            disabled={articleBusy === "save"}
-            sx={{ bgcolor: TEAL, color: "#FFFFFF", textTransform: "none", fontFamily: FONT, fontSize: "14px", fontWeight: 600, p: "12px 24px", borderRadius: "8px", "&:hover": { bgcolor: "#089B98" }, "&.Mui-disabled": { bgcolor: "#E2E8F0", color: "#94A3B8" } }}
-          >
-            {articleBusy === "save" ? "Saving…" : "Save Article"}
-          </Button>
-        </Box>
-      </Box>
-    );
-  };
-
-  /**
    * Compound Detail Dialog (Figma Image 15).
    *
    * Every compound used to open the same Metformin write-up — AMPK mechanism,
@@ -2091,7 +1947,7 @@ const CompleteWorkflow = () => {
    * scoring is CurateX's second job, and it has to carry the weights the
    * researcher just edited. It used to set six hardcoded compound rows.
    */
-  const handleSubmitProfile = useCallback(async (editedWeights) => {
+  const handleSubmitProfile = useCallback(async (editedWeights, editedValues) => {
     const target =
       curatexProfile.data?.target ||
       toGeneNames(selectedTargets, txkgResult.targets).targetIds[0] ||
@@ -2114,6 +1970,9 @@ const CompleteWorkflow = () => {
         // The researcher's edits, translated from the form's field names back
         // to the criterion names the scorer keys on.
         weights: toApiWeights(editedWeights, curatexProfile.data),
+        // The edited target values: the endpoint accepts them now, so a
+        // changed value re-shapes the ranking instead of being ignored.
+        values: toApiValues(editedValues, curatexProfile.data),
         numResults: 20,
       });
 
@@ -2238,12 +2097,20 @@ const CompleteWorkflow = () => {
 
     Promise.all([
       litminexApi.getArticle(selectedArticle.id),
-      litminexApi.getArticleChatHistory(selectedArticle.id).catch(() => []),
+      litminexApi.getArticleChatHistory(selectedArticle.id, session.sessionId).catch(() => []),
     ])
       .then(([detail, history]) => {
         if (!mounted) return;
         setArticleDetail(detail);
-        setArticleChat(Array.isArray(history) ? history : []);
+        // Only this session's thread. Entries that name another session are
+        // dropped client-side as well, in case the server ignores the filter.
+        const list = Array.isArray(history) ? history : [];
+        setArticleChat(
+          list.filter((m) => {
+            const owner = m?.sessionId ?? m?.session_id;
+            return !owner || owner === session.sessionId;
+          })
+        );
         setArticleBusy(null);
         if (!detail?.pmcLink && !rowPmcLink) lookUpPmc();
       })
@@ -2262,7 +2129,7 @@ const CompleteWorkflow = () => {
     };
     // The row's pmcLink is read once per opened article.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showArticleDetail, selectedArticle?.id]);
+  }, [showArticleDetail, selectedArticle?.id, session.sessionId]);
 
   /** Item 22: bookmark the article. */
   const handleSaveArticle = useCallback(async () => {
@@ -2300,10 +2167,15 @@ const CompleteWorkflow = () => {
       setArticleNotice(null);
 
       try {
-        const reply = await litminexApi.askArticle(selectedArticle.id, question.trim());
+        const reply = await litminexApi.askArticle(selectedArticle.id, question.trim(), session.sessionId);
         setArticleChat((prev) => [
           ...prev,
-          { role: reply?.role || "agent", content: reply?.content || "", citations: reply?.citations ?? [] },
+          {
+            role: reply?.role || "agent",
+            // The whole answer, whichever field it arrives in.
+            content: reply?.content || reply?.answer || reply?.response || reply?.message || "",
+            citations: reply?.citations ?? [],
+          },
         ]);
       } catch (err) {
         setArticleChat((prev) => [
@@ -2318,7 +2190,7 @@ const CompleteWorkflow = () => {
         setArticleBusy(null);
       }
     },
-    [selectedArticle]
+    [selectedArticle, session.sessionId]
   );
 
   /**
@@ -2378,6 +2250,54 @@ const CompleteWorkflow = () => {
     [session.goToModule]
   );
 
+  /** Post the branch: the same module, from the branched step, maybe on a new target. */
+  const handleCreateBranch = useCallback(
+    async ({ name, description, target }) => {
+      if (!branchSource) return;
+      const { moduleKey, stepId, selections } = branchSource;
+      const current = selections?.targetIds?.[0] ?? selections?.target ?? "";
+      const changed = target && target.toUpperCase() !== String(current).toUpperCase();
+
+      let branchSelections = selections ?? {};
+      if (changed) {
+        const symbol = target.toUpperCase();
+        branchSelections =
+          moduleKey === "litminex" || moduleKey === "curatex"
+            ? buildSelections(moduleKey, { targetIds: [symbol] })
+            : { ...branchSelections, target: symbol };
+      }
+
+      setBranchState({ pending: true, error: null });
+      const result = await session.handOff(moduleKey, branchSelections, stepId);
+      if (!result) {
+        setBranchState({ pending: false, error: "The branch could not be created." });
+        return;
+      }
+      const branch = {
+        id: `branch-${result.stepId || Date.now()}`,
+        name,
+        description,
+        target: changed ? target.toUpperCase() : current || null,
+        moduleKey: result.moduleKey,
+        stepId: result.stepId ?? null,
+      };
+      setBranches((prev) => [...prev, branch]);
+      setBranchState({ pending: false, error: null });
+      setBranchCreated(branch);
+    },
+    [branchSource, session]
+  );
+
+  const goToBranch = useCallback(
+    (branch) => {
+      setSelectedBranch(branch.id);
+      setBranchSource(null);
+      setBranchCreated(null);
+      scrollToModule(branch.moduleKey);
+    },
+    [scrollToModule]
+  );
+
   /**
    * One module's own output.
    *
@@ -2399,6 +2319,30 @@ const CompleteWorkflow = () => {
   const renderModuleBody = (moduleKey) => {
     const step = session.steps[moduleKey];
     const phase = step?.phase || "";
+
+    // ScreenSuite may stop to ask which PDB structure to dock against (e.g.
+    // 7F7W, 8C09, 8C0A). That is a choice, not a failure, so it is shown as a
+    // picker whether it arrives in the results or as the step's message.
+    if (moduleKey === "screensuite" && !isLoadingPhase(phase)) {
+      const options = [
+        screensuite.data?.pdbOptions,
+        readPdbShortlist(step?.data?.summary),
+        readPdbShortlist(step?.error),
+      ].find((list) => Array.isArray(list) && list.length) ?? [];
+      if (options.length && !screensuite.data?.hasData) {
+        const selections = step?.data?.selections ?? {};
+        return (
+          <PdbPicker
+            target={selections.target ?? null}
+            options={options}
+            pending={session.pending}
+            onPick={(pdbId) =>
+              session.handOff("screensuite", { ...buildSelections("screensuite", selections), pdbId })
+            }
+          />
+        );
+      }
+    }
 
     if (isErrorPhase(phase) || step?.error) {
       const info = errorInfoFor(moduleKey);
@@ -2518,11 +2462,11 @@ const CompleteWorkflow = () => {
           // Each CurateX phase reports its OWN job. Both used to be read as
           // `profileJob || compoundsJob`, so while scoring ran the finished
           // profile job's last line ("completed") was shown instead.
-          progressMessage={
+          progressMessage={withProductWording(
             phase === "curatex-submitted"
               ? liveProgress(compoundsJob)
               : liveProgress(curatexJob) || liveProgress(compoundsJob)
-          }
+          )}
           profile={curatexProfile.data}
           profileLoading={curatexProfile.loading}
           profileError={curatexProfile.error}
@@ -2573,6 +2517,7 @@ const CompleteWorkflow = () => {
           onRetry={novsearch.reload}
           actions={novsearchActions}
           onEndTask={handleEndTask}
+          sessionReport={sessionReport}
         />
       );
     }
@@ -2605,14 +2550,11 @@ const CompleteWorkflow = () => {
   const timelineBlocks = useMemo(() => {
     const blocks = [];
     const conversation = session.conversation;
-
-    const order = [];
-    session.activationOrder.forEach((key) => {
-      if (!order.includes(key)) order.push(key);
-    });
+    const runs = session.runs;
+    const keysWithRuns = new Set(runs.map((r) => r.key));
 
     conversation
-      .filter((m) => !m.moduleKey || !order.includes(m.moduleKey))
+      .filter((m) => !m.moduleKey || !keysWithRuns.has(m.moduleKey))
       .forEach((m) => blocks.push({ kind: "message", id: `msg-${m.id}`, message: m }));
 
     // A module's messages used to ALL go before its card. Testing found text
@@ -2623,22 +2565,41 @@ const CompleteWorkflow = () => {
     const pushMessages = (list) =>
       list.forEach((m) => blocks.push({ kind: "message", id: `msg-${m.id}`, message: m }));
 
-    order.forEach((key) => {
-      const own = conversation.filter((m) => m.moduleKey === key);
-      // TxKG's own card is the answer to the prompt that ran it. The agent
-      // text the backend attaches ahead of it ("Here are the explanations for
-      // each candidate: ...") is an unedited note that testing asked to hide,
-      // so only the user's prompt (and any error) is drawn before the card.
+    // One block per RUN, not per module: running a module again adds a new
+    // card below and the earlier run stays above it (testing). Messages go
+    // with the run they were said in; ones with no run (restored from the
+    // server) belong to that module's first run.
+    const firstRunOf = {};
+    const latestRunOf = {};
+    runs.forEach((r) => {
+      if (!firstRunOf[r.key]) firstRunOf[r.key] = r.id;
+      latestRunOf[r.key] = r.id;
+    });
+
+    runs.forEach((run) => {
+      const own = conversation.filter(
+        (m) => m.moduleKey === run.key && (m.runId ? m.runId === run.id : firstRunOf[run.key] === run.id)
+      );
+      // The card is the answer to the prompt that ran the module. For TxKG
+      // and CurateX the backend attaches automatic agent text ahead of it:
+      // TxKG's unedited "Here are the explanations for each candidate: ...",
+      // and CurateX's "20 repurposing candidate(s) ranked ..." — shown before
+      // the profile had even been submitted. Testing asked for both to go, so
+      // only the user's prompt (and any error) is drawn before those cards.
       const lead = own.filter((m) => !m.afterCard);
       pushMessages(
-        key === "txkg" ? lead.filter((m) => m.role === "user" || m.isError) : lead
+        CARD_IS_THE_ANSWER.has(run.key) ? lead.filter((m) => m.role === "user" || m.isError) : lead
       );
-      blocks.push({ kind: "module", id: `mod-${key}`, moduleKey: key });
+      blocks.push(
+        latestRunOf[run.key] === run.id
+          ? { kind: "module", id: `mod-${run.key}`, moduleKey: run.key }
+          : { kind: "archived", id: `run-${run.id}`, moduleKey: run.key, runId: run.id }
+      );
       pushMessages(own.filter((m) => m.afterCard));
     });
 
     return blocks;
-  }, [session.conversation, session.activationOrder]);
+  }, [session.conversation, session.runs]);
 
   /** Status chip for one module's card, from the rail the session already builds. */
   const cardStatusFor = (moduleKey) => {
@@ -2698,6 +2659,9 @@ const CompleteWorkflow = () => {
         blocks={timelineBlocks}
         pending={session.pending}
         scrollAnchors={moduleAnchors}
+        renderArchivedRun={(block) => (
+          <ArchivedRunCard moduleKey={block.moduleKey} snapshot={runSnapshots[block.runId]} />
+        )}
         renderModule={(moduleKey) => (
           <ModuleResultCard
             moduleKey={moduleKey}
@@ -2790,7 +2754,30 @@ const CompleteWorkflow = () => {
         onCancel={() => setCuratexPickerOpen(false)}
         onConfirm={handleConfirmCurateXTarget}
       />
-      <ArticleDetailPanel />
+      <BranchDialog
+        source={branchSource}
+        created={branchCreated}
+        pending={branchState.pending}
+        error={branchState.error}
+        onCreate={handleCreateBranch}
+        onGoToBranch={goToBranch}
+        onClose={() => {
+          setBranchSource(null);
+          setBranchCreated(null);
+        }}
+      />
+      <ArticleDetailPanel
+        open={showArticleDetail}
+        selectedArticle={selectedArticle}
+        articleDetail={articleDetail}
+        articlePmc={articlePmc}
+        articleBusy={articleBusy}
+        articleChat={articleChat}
+        articleNotice={articleNotice}
+        onClose={() => setShowArticleDetail(false)}
+        onSave={handleSaveArticle}
+        onAsk={handleAskArticle}
+      />
       <CompoundDetailDialog />
       <ShareModal open={showShareDialog} onClose={() => setShowShareDialog(false)} />
     </Box>

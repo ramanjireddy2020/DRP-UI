@@ -7,7 +7,7 @@ import { geneNameForTarget } from "../../workflow/selections";
 import { FONT, TEAL, BORDER, TEXT_DARK, TEXT_MUTED } from "./workflowConstants";
 
 /**
- * Asks which protein target CurateX should build a drug profile for.
+ * Asks which protein target CurateX should build an ideal candidate profile for.
  *
  * Testing found "Continue to CurateX" never asked: it forwarded whatever the
  * LitMineX step carried, and when LitMineX had been started on the disease
@@ -77,7 +77,7 @@ const ProteinTargetPickerDialog = ({
       </DialogTitle>
       <DialogContent>
         <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: TEXT_MUTED, mb: "12px", lineHeight: 1.5 }}>
-          CurateX builds a drug profile for one protein target
+          CurateX builds an ideal candidate profile for one protein target
           {disease ? `, not the disease (${disease})` : ""}. Choose the target to continue with.
         </Typography>
 

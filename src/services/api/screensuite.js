@@ -16,10 +16,12 @@ import unwrap from "../unwrap";
  */
 
 /**
- * True once the deployment is expected to fail docking. Kept as a named export
- * rather than inlined so there is one thing to delete when docking works.
+ * True while the deployment is expected to fail docking. Now false: the
+ * backend no longer returns the "cannot run" / PyMOL / Vina failure — it
+ * returns a PDB structure shortlist to pick from (see PdbPicker). With this
+ * true, the UI itself printed "ScreenSuite cannot run on this deployment".
  */
-export const SCREENSUITE_UNAVAILABLE = true;
+export const SCREENSUITE_UNAVAILABLE = false;
 
 export const SCREENSUITE_UNAVAILABLE_MESSAGE =
   "Docking is not available on this deployment — PyMOL and Vina cannot be " +

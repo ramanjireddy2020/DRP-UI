@@ -123,6 +123,19 @@ const humanize = (key) =>
  * property, the cell says so rather than borrowing one.
  */
 const buildMatchDetails = (compound, profile) => {
+  // The API returns a per-criterion `breakdown` for each compound. It never
+  // sent matchedProps / mismatchedProps, which is what this used to be built
+  // from, so every row read "Not returned".
+  if (Array.isArray(compound?.breakdown) && compound.breakdown.length) {
+    return compound.breakdown.map((b) => ({
+      label: b.label,
+      target: b.target ?? "—",
+      value: b.value ?? "Not returned",
+      status: b.status,
+      source: b.source ?? null,
+    }));
+  }
+
   const criteria = Array.isArray(profile?.criteria) ? profile.criteria : [];
   if (!criteria.length) return [];
 
@@ -403,7 +416,7 @@ const CuratexPhase = ({
 
           <Typography className="curatex-body-text curatex-loading-description">
             {progressMessage ||
-              `Searching for candidate compounds matching your ${targetLabel} target profile...`}
+              `Searching for candidate compounds matching your ${targetLabel} ideal candidate profile...`}
           </Typography>
 
           <div className="curatex-progress-track">
@@ -444,7 +457,7 @@ const CuratexPhase = ({
   }
 
   // ---------------------------------------------------------------------------
-  // CurateX Target Product Profile (view / edit / add-parameter)
+  // CurateX ideal candidate profile (view / edit / add-parameter)
   // ---------------------------------------------------------------------------
   if (workflowPhase === "curatex-profile") {
     const subtitle = isAddingParameter
@@ -467,8 +480,8 @@ const CuratexPhase = ({
             {profileError
               ? profileError
               : profileLoading
-              ? "Building the target product profile…"
-              : `I've generated a Target Product Profile for ${targetLabel}. Review and adjust the parameters below, then submit to find matching candidates.`}
+              ? "Building the ideal candidate profile…"
+              : `I've generated an ideal candidate profile for ${targetLabel}. Review and adjust the parameters below, then submit to find matching candidates.`}
           </Typography>
 
           {profileError && onRetryProfile && (
@@ -495,7 +508,7 @@ const CuratexPhase = ({
 
           <div className="curatex-profile-card">
             <Typography className="curatex-profile-title">
-              Target Product Profile - {targetLabel}
+              Ideal Candidate Profile - {targetLabel}
             </Typography>
 
             <Typography className="curatex-profile-subtitle">
@@ -527,12 +540,24 @@ const CuratexPhase = ({
                     {propertyLabel(key)}
                   </Typography>
 
-                  {/* Criterion values are read-only: POST
-                      /agents/curatex/compounds has no field for them, so an
-                      edited value would silently have no effect. */}
-                  <Typography className="curatex-profile-value">
-                    {value === "" || value == null ? "—" : String(value)}
-                  </Typography>
+                  {/* Criterion values are editable in edit mode: POST
+                      /agents/curatex/compounds now accepts `values` as well as
+                      weights (it used to take weights only). */}
+                  {showInputs ? (
+                    <TextField
+                      value={value ?? ""}
+                      onChange={(event) => setProfileData?.({ ...profileData, [key]: event.target.value })}
+                      placeholder="Value or range"
+                      size="small"
+                      fullWidth
+                      inputProps={{ "aria-label": `Target value for ${propertyLabel(key)}` }}
+                      className="curatex-profile-input"
+                    />
+                  ) : (
+                    <Typography className="curatex-profile-value">
+                      {value === "" || value == null ? "—" : String(value)}
+                    </Typography>
+                  )}
 
                   <div className="curatex-weight-field">
                     {showInputs ? (
@@ -584,7 +609,7 @@ const CuratexPhase = ({
                   <TextField
                     value={row.value}
                     onChange={(e) => updateNewParam(row.id, "value", e.target.value)}
-                    placeholder="Value (for reference, not sent)"
+                    placeholder="Value or range"
                     size="small"
                     fullWidth
                     className="curatex-profile-input curatex-new-param-input"
@@ -624,8 +649,8 @@ const CuratexPhase = ({
             {/* Said once, plainly: only weights reach the scorer. */}
             {rows.length > 0 && (
               <Typography className="curatex-body-text" sx={{ fontSize: "11px", color: "#94A3B8", mt: "8px" }}>
-                Weights are whole numbers and must total {WEIGHT_TOTAL}. Only weights are sent when
-                scoring — the API has no field for criterion values, so values are shown as returned.
+                Weights are whole numbers and must total {WEIGHT_TOTAL}. Both the target values and the
+                weights are used when scoring.
               </Typography>
             )}
 
@@ -692,7 +717,7 @@ const CuratexPhase = ({
                       // added parameter only exists here, and passing the
                       // API's original copy would score against criteria the
                       // researcher had already changed.
-                      onSubmitProfile(weights);
+                      onSubmitProfile(weights, profileData);
                       return;
                     }
                     setWorkflowPhase("curatex-submitted");
@@ -774,8 +799,8 @@ const CuratexPhase = ({
               : resultsLoading
               ? "Loading scored candidates…"
               : curateXResults.length
-              ? `Scored ${total || curateXResults.length} candidate${(total || curateXResults.length) === 1 ? "" : "s"} against your ${targetLabel} target product profile. Here are the top candidates:`
-              : `No candidates were returned for your ${targetLabel} target product profile.`}
+              ? `Scored ${total || curateXResults.length} candidate${(total || curateXResults.length) === 1 ? "" : "s"} against your ${targetLabel} ideal candidate profile. Here are the top candidates:`
+              : `No candidates were returned for your ${targetLabel} ideal candidate profile.`}
           </Typography>
 
           {resultsError && onRetryResults && (
@@ -871,7 +896,7 @@ const CuratexPhase = ({
                       <div className="curatex-match-details-heading">
                         <Typography className="curatex-match-details-title">
                           Match Details — {compound.name}
-                          {targetName ? ` vs ${targetName} Target Profile` : ""}
+                          {targetName ? ` vs ${targetName} Ideal Candidate Profile` : ""}
                         </Typography>
 
                         <Button
@@ -1095,10 +1120,34 @@ const CuratexPhase = ({
           Source References
         </Typography>
 
-        <Typography className="curatex-body-text" sx={{ fontSize: "13px", color: "#64748B" }}>
-          Not available from the API — CurateX returns a score per compound but no
-          per-property source values or references.
-        </Typography>
+        {/* The API now returns where each value came from (`fieldSources`)
+            and links to the supporting records (`evidenceLinks`). This used
+            to say the references were not available. */}
+        {compound?.fieldSources?.length || compound?.evidenceLinks?.length ? (
+          <Box sx={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+            {(compound.fieldSources ?? []).map((fs, i) => (
+              <Typography key={`fs-${i}`} className="curatex-body-text" sx={{ fontSize: "13px", color: "#334155" }}>
+                <strong>{fs.field}</strong>: {fs.source}
+              </Typography>
+            ))}
+            {(compound.evidenceLinks ?? []).map((link, i) => (
+              <Typography
+                key={`ev-${i}`}
+                component="a"
+                href={link.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                sx={{ fontSize: "13px", color: "#00A3B8", textDecoration: "none", "&:hover": { textDecoration: "underline" } }}
+              >
+                ↗ {link.label}
+              </Typography>
+            ))}
+          </Box>
+        ) : (
+          <Typography className="curatex-body-text" sx={{ fontSize: "13px", color: "#64748B" }}>
+            No source references were returned for this compound.
+          </Typography>
+        )}
       </Box>
     );
   }
@@ -1132,7 +1181,7 @@ const CuratexPhase = ({
 
               <CompoundSection
                 title="Match Score"
-                text={`${compound.score} — rank ${compound.rank ?? "—"} of ${total || curateXResults.length} scored candidates${targetName ? ` against the ${targetName} target profile` : ""}.`}
+                text={`${compound.score} — rank ${compound.rank ?? "—"} of ${total || curateXResults.length} scored candidates${targetName ? ` against the ${targetName} ideal candidate profile` : ""}.`}
               />
 
               {(compound.chemblId || compound.smiles) && (

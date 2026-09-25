@@ -1,3 +1,6 @@
+import { readDefinitions } from "./txkgResult";
+import { readPdbShortlist } from "./pdbShortlist";
+
 /**
  * Mapping each module's results endpoint onto the props its phase component
  * already reads.
@@ -197,8 +200,54 @@ const humanize = (name) =>
  * keep their meaning) or the criterion's own name. `fieldToCriterion` maps each
  * row key back to the API's name for POST /agents/curatex/compounds.
  */
+/**
+ * The profile's criteria as [{ name, value, weight }], wherever they are.
+ *
+ * Testing got a profile response but the table said "The profile returned no
+ * criteria": only a top-level `criteria[]` with `name` was read. The list is
+ * also looked for under profile / result / data, under parameters /
+ * properties / rows, and as a { criterionName: { value, weight } } map, with
+ * the common alternative field names.
+ */
+const CRITERIA_KEYS = ["criteria", "parameters", "properties", "rows", "items", "profile"];
+
+const criterionRow = (c, fallbackName) => {
+  if (c == null) return null;
+  if (typeof c !== "object") return { name: fallbackName, value: c, weight: null };
+  const name = c.name ?? c.criterion ?? c.label ?? c.parameter ?? c.property ?? c.key ?? fallbackName;
+  const value =
+    c.value ?? c.target ?? c.targetValue ?? c.target_value ?? c.range ?? c.goodValue ?? c.good_value ??
+    c.ideal ?? c.criterionValue ?? c.criterion_value ?? "";
+  const weight = c.weight ?? c.defaultWeight ?? c.default_weight ?? null;
+  return name == null || name === "" ? null : { ...c, name: String(name), value, weight };
+};
+
+const findCriteria = (payload, depth = 0) => {
+  if (!payload || typeof payload !== "object" || depth > 3) return [];
+  if (Array.isArray(payload)) return payload.map((c) => criterionRow(c)).filter(Boolean);
+
+  for (const key of CRITERIA_KEYS) {
+    const value = payload[key];
+    if (Array.isArray(value) && value.length) return value.map((c) => criterionRow(c)).filter(Boolean);
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const nested = findCriteria(value, depth + 1);
+      if (nested.length) return nested;
+      // A keyed map: { molecularWeight: { value, weight }, ... }
+      const entries = Object.entries(value).filter(([, v]) => v && typeof v === "object" && !Array.isArray(v));
+      if (entries.length && entries.every(([, v]) => "value" in v || "weight" in v || "range" in v)) {
+        return entries.map(([k, v]) => criterionRow(v, k)).filter(Boolean);
+      }
+    }
+  }
+  for (const key of ["result", "data"]) {
+    const nested = findCriteria(payload[key], depth + 1);
+    if (nested.length) return nested;
+  }
+  return [];
+};
+
 export const normalizeCuratexProfile = (payload) => {
-  const criteria = Array.isArray(payload?.criteria) ? payload.criteria : [];
+  const criteria = findCriteria(payload);
 
   /** Row key → criterion value, in the API's order. */
   const profileData = {};
@@ -239,8 +288,8 @@ export const normalizeCuratexProfile = (payload) => {
   });
 
   return {
-    hasData: criteria.length > 0 || Boolean(payload?.target),
-    target: payload?.target ?? null,
+    hasData: criteria.length > 0 || Boolean(payload?.target ?? payload?.result?.target),
+    target: payload?.target ?? payload?.result?.target ?? payload?.profile?.target ?? null,
     profileData,
     labels,
     criteria,
@@ -285,6 +334,22 @@ export const toApiWeights = (formWeights, profile) => {
   return out;
 };
 
+/**
+ * The profile form's criterion values, keyed by the API's criterion names,
+ * for POST /agents/curatex/compounds. The endpoint now accepts `values`
+ * alongside `weights`, so an edited target value changes the ranking.
+ */
+export const toApiValues = (formValues, profile) => {
+  if (!formValues || typeof formValues !== "object") return {};
+  const map = profile?.fieldToCriterion ?? {};
+  const out = {};
+  Object.entries(formValues).forEach(([key, value]) => {
+    if (value == null || String(value).trim() === "") return;
+    out[map[key] ?? key] = value;
+  });
+  return out;
+};
+
 export const CURATEX_PROFILE_FIELDS = PROFILE_FIELDS;
 
 /**
@@ -316,6 +381,70 @@ const candidateList = (payload) => {
   return [];
 };
 
+/**
+ * A compound's per-criterion `breakdown`, as a list or a { criterion: {...} }
+ * map → [{ label, target, value, status, source }]. `status` is "match",
+ * "mismatch" or "unknown", from a status word, a boolean or a 0–1 score.
+ */
+const readBreakdown = (raw) => {
+  const entries = Array.isArray(raw)
+    ? raw.map((b) => [b?.criterion ?? b?.name ?? b?.label ?? b?.field, b])
+    : raw && typeof raw === "object"
+    ? Object.entries(raw)
+    : [];
+  return entries
+    .filter(([name, b]) => name && b != null)
+    .map(([name, b]) => {
+      const row = typeof b === "object" ? b : { value: b };
+      const flag = row.status ?? row.match ?? row.matched ?? row.passed ?? row.pass;
+      const score = Number(row.score ?? row.subscore ?? row.sub_score);
+      const status =
+        typeof flag === "boolean"
+          ? flag ? "match" : "mismatch"
+          : /^(match|pass|met|within|in[_ ]?range|good)/i.test(String(flag ?? ""))
+          ? "match"
+          : /^(mismatch|fail|miss|outside|out[_ ]?of[_ ]?range|bad)/i.test(String(flag ?? ""))
+          ? "mismatch"
+          : Number.isFinite(score)
+          ? score >= 0.5 ? "match" : "mismatch"
+          : "unknown";
+      return {
+        label: row.label ?? humanize(name),
+        target: row.target ?? row.targetValue ?? row.target_value ?? row.criterion_value ?? row.range ?? "—",
+        value: row.value ?? row.actual ?? row.observed ?? row.compoundValue ?? row.compound_value ?? "Not returned",
+        status,
+        source: row.source ?? null,
+      };
+    });
+};
+
+/** `fieldSources` as a list or map → [{ field, source }]. */
+const readFieldSources = (raw) => {
+  const entries = Array.isArray(raw)
+    ? raw.map((f) => [f?.field ?? f?.criterion ?? f?.name, f?.source ?? f?.sources ?? f?.database])
+    : raw && typeof raw === "object"
+    ? Object.entries(raw)
+    : [];
+  return entries
+    .filter(([field, source]) => field && source)
+    .map(([field, source]) => ({
+      field: humanize(field),
+      source: Array.isArray(source) ? source.join(", ") : typeof source === "object" ? source.name ?? source.label ?? JSON.stringify(source) : String(source),
+    }));
+};
+
+/** `evidenceLinks` → [{ label, url }]. Strings are treated as bare URLs. */
+const readEvidenceLinks = (raw) =>
+  (Array.isArray(raw) ? raw : [])
+    .map((l) =>
+      typeof l === "string"
+        ? { label: l, url: l }
+        : l && (l.url || l.href || l.link)
+        ? { label: l.label ?? l.title ?? l.source ?? l.url ?? l.href ?? l.link, url: l.url ?? l.href ?? l.link }
+        : null
+    )
+    .filter((l) => l && /^https?:\/\//i.test(l.url));
+
 export const normalizeCuratexResults = (payload, { pageSize: requested } = {}) => {
   const items = candidateList(payload);
 
@@ -335,9 +464,11 @@ export const normalizeCuratexResults = (payload, { pageSize: requested } = {}) =
       const mismatched = c.mismatchedProps ?? c.mismatched_props ?? c.mismatched ?? [];
       const asText = (v) => (Array.isArray(v) ? v.join(", ") : String(v ?? ""));
 
+      // The API sends the composite score as camelCase `compositeScore`; only
+      // `composite_score` was read, so the score column showed "—".
       const rawScore =
-        c.score ?? c.matchScore ?? c.match_score ?? c.total_score ?? c.totalScore ??
-        c.final_score ?? c.composite_score ?? c.weighted_score;
+        c.score ?? c.compositeScore ?? c.composite_score ?? c.matchScore ?? c.match_score ??
+        c.total_score ?? c.totalScore ?? c.final_score ?? c.weighted_score;
       const scoreNum = Number(rawScore);
 
       return {
@@ -355,6 +486,10 @@ export const normalizeCuratexResults = (payload, { pageSize: requested } = {}) =
         rawScore: Number.isFinite(scoreNum) ? scoreNum : null,
         smiles: c.smiles ?? null,
         chemblId: c.chemblId ?? c.chembl_id ?? null,
+        // Per-criterion comparison, its sources and supporting links.
+        breakdown: readBreakdown(c.breakdown),
+        fieldSources: readFieldSources(c.fieldSources ?? c.field_sources),
+        evidenceLinks: readEvidenceLinks(c.evidenceLinks ?? c.evidence_links),
       };
     })
     .filter(Boolean);
@@ -412,7 +547,11 @@ export const normalizeDockingHits = (payload) => {
     })
     .filter(Boolean);
 
-  return { hasData: hits.length > 0, hits };
+  // A shortlist of PDB structures to choose from, instead of hits, when the
+  // target maps to several structures.
+  const pdbOptions = payload && typeof payload === "object" && !Array.isArray(payload) ? readPdbShortlist(payload) : [];
+
+  return { hasData: hits.length > 0, hits, pdbOptions };
 };
 
 /* -------------------------------------------------------------------------- */
@@ -428,14 +567,26 @@ export const normalizeDockingHits = (payload) => {
  * `patentId` and a float.
  */
 export const normalizeNoveltyReport = (payload) => {
-  const rows = Array.isArray(payload?.patents) ? payload.patents : [];
+  const source = payload?.result && typeof payload.result === "object" && !payload?.patents ? payload.result : payload;
+  const rows = Array.isArray(source?.patents)
+    ? source.patents
+    : Array.isArray(source?.items)
+    ? source.items
+    : Array.isArray(source?.results)
+    ? source.results
+    : [];
 
   const patents = rows
     .map((p) => {
       if (!p) return null;
       const id = p.patentId ?? p.patent_id ?? p.id ?? null;
       if (!id) return null;
-      const relevance = Number(p.relevance);
+      // Testing saw no relevance score: only `relevance` was read. The
+      // common alternative names are accepted too.
+      const relevance = Number(
+        p.relevance ?? p.relevance_score ?? p.relevanceScore ?? p.score ?? p.similarity ??
+        p.similarity_score ?? p.relevancy ?? NaN
+      );
       return {
         id,
         title: p.title ?? "Untitled patent",
@@ -448,13 +599,15 @@ export const normalizeNoveltyReport = (payload) => {
     .filter(Boolean);
 
   return {
-    hasData: patents.length > 0 || Boolean(payload?.assessment),
-    target: payload?.target ?? null,
-    disease: payload?.disease ?? null,
-    assessment: payload?.assessment ?? null,
-    recommendations: Array.isArray(payload?.recommendations) ? payload.recommendations : [],
+    hasData: patents.length > 0 || Boolean(source?.assessment),
+    target: source?.target ?? null,
+    disease: source?.disease ?? null,
+    assessment: source?.assessment ?? null,
+    recommendations: Array.isArray(source?.recommendations) ? source.recommendations : [],
+    // What the relevance score means, when the API says.
+    scoreDefinitions: readDefinitions(source?.scoreDefinitions ?? source?.score_definitions),
     patents,
-    total: Number(payload?.totalPatents ?? patents.length) || patents.length,
+    total: Number(source?.totalPatents ?? source?.total ?? patents.length) || patents.length,
   };
 };
 
@@ -503,6 +656,7 @@ const phaseResults = {
   normalizeArticlePreview,
   normalizeCuratexProfile,
   toApiWeights,
+  toApiValues,
   normalizeCuratexResults,
   normalizeDockingHits,
   normalizeNoveltyReport,

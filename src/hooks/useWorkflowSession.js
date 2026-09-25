@@ -75,6 +75,14 @@ const initialState = {
   /** Order in which the supervisor activated modules. */
   activationOrder: [],
   /**
+   * Every run of every module, in the order they started: { id, key, stepId,
+   * jobId }. A module started again with a NEW step appends a run instead of
+   * reusing its card, so earlier results stay above it and the thread stays
+   * linear (testing). A Rerun of the same step replaces in place.
+   */
+  runs: [],
+  runSeq: 0,
+  /**
    * Append-only conversation. Each entry carries the module it belongs to, so
    * the thread can be sliced per step without ever dropping a message.
    */
@@ -233,6 +241,27 @@ function reducer(state, action) {
 
       const existing = state.steps[key];
 
+      // A new run when the module has never run, or when it is started again
+      // on a different step. Rerun (`replace`) keeps the current run.
+      const runsForKey = state.runs.filter((r) => r.key === key);
+      const latestRun = runsForKey[runsForKey.length - 1] ?? null;
+      const startsNewRun =
+        !latestRun ||
+        (!action.replace && stepId && existing.stepId && stepId !== existing.stepId);
+
+      let runs = state.runs;
+      let runSeq = state.runSeq;
+      if (startsNewRun) {
+        runSeq += 1;
+        runs = [...runs, { id: `run${runSeq}`, key, stepId: stepId ?? null, jobId: jobId ?? null }];
+      } else if (stepId !== undefined || jobId !== undefined) {
+        runs = runs.map((r) =>
+          r.id === latestRun.id
+            ? { ...r, stepId: stepId ?? r.stepId, jobId: jobId !== undefined ? jobId : r.jobId }
+            : r
+        );
+      }
+
       const next = withStep(state, key, {
         visited: true,
         phase: phase ?? existing.phase ?? module.loadingPhase,
@@ -246,6 +275,8 @@ function reducer(state, action) {
 
       return {
         ...next,
+        runs,
+        runSeq,
         activeKey: key,
         activationOrder: state.activationOrder.includes(key)
           ? state.activationOrder
@@ -317,12 +348,15 @@ function reducer(state, action) {
       // chat box underneath it. The timeline draws these AFTER the card; see
       // timelineBlocks in CompleteWorkflow.
       const afterCard = Boolean(key && state.steps[key]?.visited);
+      // The run this was said in, so it stays with that run's card.
+      const runId = [...state.runs].reverse().find((r) => r.key === key)?.id ?? null;
       const stamped = action.messages.map((message, offset) => ({
         id: `m${state.seq + offset + 1}`,
         moduleKey: key ?? null,
         stepIndex: module ? module.index : null,
         at: Date.now(),
         afterCard,
+        runId,
         ...message,
       }));
 
@@ -857,6 +891,8 @@ const useWorkflowSession = () => {
         phase: MODULE_BY_KEY[landedKey].loadingPhase,
         jobId: parsed.jobId,
         stepId: parsed.stepId,
+        // A rerun replaces the run in place rather than adding a new card.
+        replace: true,
       });
 
       return { ...parsed, moduleKey: landedKey };
@@ -938,6 +974,7 @@ const useWorkflowSession = () => {
     lastSupervisorResponse: state.lastSupervisorResponse,
     steps: state.steps,
     activationOrder: state.activationOrder,
+    runs: state.runs,
     conversation: state.conversation,
     pending: state.pending,
     title: state.title,

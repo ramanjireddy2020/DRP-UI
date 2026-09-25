@@ -109,3 +109,59 @@ export const findHubId = (nodes, edges) => {
     nodes[0]
   ).id;
 };
+
+/**
+ * Actual paths between two nodes of the subgraph, as named steps with the
+ * relation on each hop — the same shape normalizeTraversal() returns.
+ *
+ * Used for a target's meta-path traversals when no analysis traversal names
+ * it, so the list shows real node names (from the graph the user is looking
+ * at) instead of the path TYPES ("gene/protein → biological_process").
+ * Undirected, simple paths only, shortest first.
+ */
+export const pathsBetween = (graph, fromId, toId, { maxHops = 3, limit = 3 } = {}) => {
+  const { nodes, edges } = normalizeGraph(graph);
+  if (fromId == null || toId == null || fromId === toId) return [];
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  if (!byId.has(fromId) || !byId.has(toId)) return [];
+
+  const adjacent = new Map();
+  edges.forEach((e) => {
+    if (!adjacent.has(e.source)) adjacent.set(e.source, []);
+    if (!adjacent.has(e.target)) adjacent.set(e.target, []);
+    adjacent.get(e.source).push({ to: e.target, label: e.label });
+    adjacent.get(e.target).push({ to: e.source, label: e.label });
+  });
+
+  const found = [];
+  // Breadth-first over partial paths, so shorter paths come out first.
+  let frontier = [{ ids: [fromId], labels: [] }];
+  for (let hop = 0; hop < maxHops && found.length < limit; hop += 1) {
+    const next = [];
+    frontier.forEach((path) => {
+      const last = path.ids[path.ids.length - 1];
+      (adjacent.get(last) ?? []).forEach(({ to, label }) => {
+        if (path.ids.includes(to)) return;
+        const extended = { ids: [...path.ids, to], labels: [...path.labels, label] };
+        if (to === toId) found.push(extended);
+        else next.push(extended);
+      });
+    });
+    // Keep the search bounded on dense graphs.
+    frontier = next.slice(0, 500);
+  }
+
+  return found.slice(0, limit).map(({ ids, labels }) => {
+    const steps = ids.map((id) => ({ name: String(byId.get(id)?.label ?? id), type: byId.get(id)?.type ?? null }));
+    const edgeLabels = labels.map((l) => (l == null ? "" : String(l)));
+    return {
+      steps,
+      edgeLabels,
+      target: toId,
+      targetName: steps[steps.length - 1].name,
+      hopCount: steps.length - 1,
+      contextWeight: null,
+      text: steps.map((s) => s.name).join(" → "),
+    };
+  });
+};

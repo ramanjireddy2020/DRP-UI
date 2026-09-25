@@ -32,10 +32,25 @@ export const createPdfExport = async (resultId) =>
 export const resolveDownloadUrl = (downloadUrl) => {
   if (!downloadUrl) return null;
 
-  // Already absolute — trust it.
-  if (/^https?:\/\//i.test(downloadUrl)) return downloadUrl;
+  let path = String(downloadUrl);
 
-  const path = String(downloadUrl).replace(/^\/?v1\//, "/").replace(/^\/?/, "/");
+  // An absolute URL is only used as-is when it already points at the gateway.
+  // Testing saw Export fail with "Unable to reach the backend": an absolute
+  // link to the UPSTREAM app was fetched directly, which the browser cannot
+  // reach (no CORS, no gateway auth). Its path is re-based onto the gateway
+  // like a relative link instead.
+  if (/^https?:\/\//i.test(path)) {
+    try {
+      const target = new URL(path);
+      const gateway = new URL(API_CONFIG.API_BASE_URL, window.location.origin);
+      if (target.origin === gateway.origin && target.pathname.startsWith(gateway.pathname)) return path;
+      path = `${target.pathname}${target.search}`;
+    } catch (error) {
+      return path;
+    }
+  }
+
+  path = path.replace(/^\/?v1\//, "/").replace(/^\/?/, "/");
   return `${API_CONFIG.API_BASE_URL}${path}`;
 };
 

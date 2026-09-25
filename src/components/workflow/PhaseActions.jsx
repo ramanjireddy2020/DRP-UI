@@ -90,9 +90,9 @@ const PhaseActions = ({
           open={Boolean(exportAnchor)}
           onClose={() => setExportAnchor(null)}
         >
-          {/* The API takes a `format`, so the choice is offered rather than
-              assumed. PDF goes to /exports/pdf, the rest to /exports. */}
-          {["csv", "xlsx", "json", "pdf"].map((format) => (
+          {/* CSV and PDF only, per testing (XLSX and JSON were also offered).
+              PDF goes to /exports/pdf, CSV to /exports. */}
+          {["csv", "pdf"].map((format) => (
             <MenuItem
               key={format}
               onClick={() => chooseFormat(format)}

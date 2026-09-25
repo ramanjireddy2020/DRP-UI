@@ -64,13 +64,29 @@ export const getArticlePmcLink = async (articleId) =>
 export const saveArticle = async (articleId, projectId) =>
   unwrap(await apiClient.post(`/articles/${articleId}/save`, { projectId: projectId ?? null }));
 
-/** Q&A over one article's abstract — { role, content, citations }. */
-export const askArticle = async (articleId, message) =>
-  unwrap(await apiClient.post(`/articles/${articleId}/chat`, { message }));
+/**
+ * Q&A over one article's abstract — { role, content, citations }.
+ *
+ * The session id is sent so the thread belongs to this research session.
+ * Keyed on the article alone, a new session that retrieved the same article
+ * showed the previous session's chat (testing). The backend needs to store and
+ * filter on it; until it does, the extra field is ignored.
+ */
+export const askArticle = async (articleId, message, sessionId = null) =>
+  unwrap(
+    await apiClient.post(`/articles/${articleId}/chat`, {
+      message,
+      ...(sessionId ? { sessionId } : {}),
+    })
+  );
 
-/** Past Q&A on this article. */
-export const getArticleChatHistory = async (articleId) =>
-  unwrap(await apiClient.get(`/articles/${articleId}/chat/history`));
+/** Past Q&A on this article, for this session. */
+export const getArticleChatHistory = async (articleId, sessionId = null) =>
+  unwrap(
+    await apiClient.get(`/articles/${articleId}/chat/history`, {
+      params: sessionId ? { sessionId } : undefined,
+    })
+  );
 
 const litminexApi = {
   query,

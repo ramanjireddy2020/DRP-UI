@@ -1,8 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Box, Button, Checkbox, Typography } from "@mui/material";
+import { definitionFor } from "../../../workflow/txkgResult";
 import { TEAL, GRAY_BG } from "../workflowConstants";
 import PhaseActions from "../PhaseActions";
+import FormattedText from "../FormattedText";
+import { printSessionReport } from "../../../workflow/sessionReport";
 import novsearchApi from "../../../services/api/novsearch";
 
 import SharedAgentHeader from "../AgentHeader";
@@ -17,6 +20,51 @@ const NOVSEARCH_FONT = "'Inter', sans-serif";
 /* ============================================================================
    SHARED STYLES
 ============================================================================ */
+
+/**
+ * Novelty / risk terms in the assessment, colour-coded.
+ *
+ * Testing found the assessment in Insights unformatted: plain grey text with
+ * no emphasis or colour. The assessment's markdown is now rendered, these terms
+ * are made bold where they appear, and each one found is shown as a chip.
+ */
+const ASSESSMENT_TERMS = [
+  // Checked first, so "moderately novel" / "not novel" are not read as Novel.
+  { pattern: /\b(moderate(ly)? novel|moderate novelty|partially (covered|explored)|some prior art)\b/i, label: "Moderate", color: "#B45309", bg: "#FEF3C7" },
+  { pattern: /\b(crowded|well[- ]explored|heavily patented|extensive prior art|not novel|low novelty)\b/i, label: "Crowded", color: "#B91C1C", bg: "#FEE2E2" },
+  { pattern: /(?<!moderately |moderate |not |low )\b(highly novel|novel|unexplored|white space|no prior art)\b(?! ?novelty)/i, label: "Novel", color: "#047857", bg: "#D1FAE5" },
+  { pattern: /\b(freedom to operate|fto)\b/i, label: "Freedom to operate", color: "#1D4ED8", bg: "#DBEAFE" },
+  { pattern: /\b(high risk|infringement risk)\b/i, label: "High risk", color: "#B91C1C", bg: "#FEE2E2" },
+  { pattern: /\b(low risk)\b/i, label: "Low risk", color: "#047857", bg: "#D1FAE5" },
+];
+
+const emphasiseTerms = (value) =>
+  ASSESSMENT_TERMS.reduce(
+    (acc, term) =>
+      acc.replace(new RegExp(term.pattern.source, "gi"), (m, ...rest) => {
+        const offset = rest[rest.length - 2];
+        const whole = rest[rest.length - 1];
+        // Leave terms that are already bold alone.
+        return whole.slice(Math.max(0, offset - 2), offset) === "**" ? m : `**${m}**`;
+      }),
+    String(value ?? "")
+  );
+
+const AssessmentChips = ({ value }) => {
+  const found = ASSESSMENT_TERMS.filter((term) => term.pattern.test(String(value ?? "")));
+  if (!found.length) return null;
+  return (
+    <Box sx={{ display: "flex", flexWrap: "wrap", gap: "6px", mb: "8px" }}>
+      {found.map((term) => (
+        <Box key={term.label} sx={{ px: "8px", py: "2px", borderRadius: "10px", bgcolor: term.bg }}>
+          <Typography sx={{ fontFamily: "Inter, sans-serif", fontSize: "10px", fontWeight: 700, color: term.color, lineHeight: "14px" }}>
+            {term.label}
+          </Typography>
+        </Box>
+      ))}
+    </Box>
+  );
+};
 
 const text = {
   fontFamily: NOVSEARCH_FONT,
@@ -228,7 +276,7 @@ const UserMessage = ({ children }) => {
  *   GET /agents/novsearch/{jobId}/report — { id, title, relevance }.
  * @param {boolean} selectable - adds the checkbox column Compare reads from.
  */
-const PatentTable = ({ rows = [], selectable = false, selectedIds = [], onToggle, emptyText }) => {
+const PatentTable = ({ rows = [], selectable = false, selectedIds = [], onToggle, emptyText, relevanceHelp = null }) => {
   const columns = selectable
     ? "32px 120px minmax(0, 1fr) 94px"
     : "120px minmax(0, 1fr) 94px";
@@ -258,7 +306,10 @@ const PatentTable = ({ rows = [], selectable = false, selectedIds = [], onToggle
         {selectable && <Box />}
         <Typography sx={tableHeader}>PATENT ID</Typography>
         <Typography sx={tableHeader}>TITLE</Typography>
-        <Typography sx={tableHeader}>RELEVANCE</Typography>
+        {/* What relevance measures, from the report's scoreDefinitions. */}
+        <Typography sx={{ ...tableHeader, cursor: relevanceHelp ? "help" : "default" }} title={relevanceHelp || undefined}>
+          RELEVANCE{relevanceHelp ? " ⓘ" : ""}
+        </Typography>
       </Box>
 
       {rows.length === 0 && emptyText && (
@@ -461,37 +512,27 @@ const InsightsCard = ({ report }) => {
         )}
       </Box>
 
-      <Typography
-        sx={{
-          ...text,
-          fontSize: "12px",
-          lineHeight: "15px",
-          color: "#7B8491",
-          whiteSpace: "pre-wrap",
-        }}
-      >
-        {report?.assessment ||
-          "No novelty assessment was returned for this run."}
-      </Typography>
+      {report?.assessment ? (
+        <>
+          <AssessmentChips value={report.assessment} />
+          <FormattedText text={emphasiseTerms(report.assessment)} fontSize="12px" lineHeight={1.55} color="#475569" />
+        </>
+      ) : (
+        <Typography sx={{ ...text, fontSize: "12px", lineHeight: "15px", color: "#7B8491" }}>
+          No novelty assessment was returned for this run.
+        </Typography>
+      )}
 
       {/* The report's recommendations — previously there was nowhere for these
           to appear at all. */}
       {report?.recommendations?.length > 0 && (
         <Box sx={{ mt: "10px" }}>
-          {report.recommendations.map((rec, i) => (
-            <Typography
-              key={i}
-              sx={{
-                ...text,
-                fontSize: "12px",
-                lineHeight: "16px",
-                color: "#7B8491",
-                mb: "4px",
-              }}
-            >
-              • {rec}
-            </Typography>
-          ))}
+          <FormattedText
+            text={report.recommendations.map((rec) => `- ${emphasiseTerms(typeof rec === "string" ? rec : rec?.text ?? JSON.stringify(rec))}`).join("\n")}
+            fontSize="12px"
+            lineHeight={1.5}
+            color="#475569"
+          />
         </Box>
       )}
 
@@ -759,6 +800,7 @@ const ResultsScreen = ({
           }}
         >
           <PatentTable
+            relevanceHelp={definitionFor(report?.scoreDefinitions, "relevance")}
             rows={patentRows}
             selectable
             selectedIds={selectedIds}
@@ -932,8 +974,22 @@ const summaryText = {
  * recommendation — on every session. Anything the report does not carry is
  * left out rather than filled in.
  */
-const SummaryScreen = ({ report, researcherName, actions = {}, onNewResearch }) => {
-  const diseaseLabel = report?.disease || "";
+const SummaryScreen = ({ report, sessionReport, researcherName, actions = {}, onNewResearch }) => {
+  const diseaseLabel = report?.disease || sessionReport?.disease || "";
+  const [exportBlocked, setExportBlocked] = useState(false);
+  // The other modules' sections; NovSearch's own is drawn below from `report`.
+  const earlierSections = (sessionReport?.sections ?? []).filter((s) => !s.title.startsWith("NovSearch"));
+
+  // The whole session, printed from the browser. This used to call the
+  // per-job PDF export for the NovSearch job, which covered NovSearch only
+  // and was seen to re-run the module instead of exporting.
+  const exportReport = () => {
+    if (!sessionReport) {
+      actions.onExport?.("pdf");
+      return;
+    }
+    setExportBlocked(!printSessionReport(sessionReport, { researcherName }));
+  };
   const topPatents = [...(report?.patents ?? [])]
     .filter((p) => Number.isFinite(p.rawRelevance))
     .sort((a, b) => b.rawRelevance - a.rawRelevance)
@@ -973,6 +1029,18 @@ const SummaryScreen = ({ report, researcherName, actions = {}, onNewResearch }) 
         {"Status: SAVED ✓"}
       </Typography>
 
+      {/* The whole session, not just NovSearch: testing found the closing
+          report covered only the last module run. */}
+      {earlierSections.map((section) => (
+        <React.Fragment key={section.title}>
+          <Divider />
+          <Typography sx={summaryText}>
+            {`${section.title}:\n✓ ${section.summary}`}
+            {section.items.length ? `\n${section.items.map((item, i) => `${i + 1}. ${item}`).join("\n")}` : ""}
+          </Typography>
+        </React.Fragment>
+      ))}
+
       <Divider />
 
       <Typography sx={summaryText}>
@@ -1010,9 +1078,6 @@ const SummaryScreen = ({ report, researcherName, actions = {}, onNewResearch }) 
         </>
       )}
 
-      <Typography sx={{ ...text, fontSize: "12px", lineHeight: "18px", color: "#7B8491", mt: "12px" }}>
-        Results from the other modules are in their cards earlier in this session.
-      </Typography>
 
       <Typography
         sx={{
@@ -1035,7 +1100,7 @@ const SummaryScreen = ({ report, researcherName, actions = {}, onNewResearch }) 
           flexWrap: "wrap",
         }}
       >
-        <Button sx={primaryButton} onClick={() => actions.onExport?.("pdf")} disabled={!actions.onExport || Boolean(actions.busy)}>{actions.busy === "export" ? "Exporting…" : "Export Report"}</Button>
+        <Button sx={primaryButton} onClick={exportReport} disabled={!sessionReport && (!actions.onExport || Boolean(actions.busy))}>{actions.busy === "export" ? "Exporting…" : "Export Report"}</Button>
         <Button sx={buttonBase} onClick={actions.onBranch} disabled={!actions.onBranch || Boolean(actions.busy)}>{actions.busy === "branch" ? "Branching…" : "Branch"}</Button>
         <Button sx={buttonBase} onClick={onNewResearch}>+ New Research</Button>
         {/* "Share Results" is gone: there is no sharing endpoint. */}
@@ -1044,6 +1109,11 @@ const SummaryScreen = ({ report, researcherName, actions = {}, onNewResearch }) 
       {actions.error && (
         <Typography role="alert" sx={{ ...text, fontSize: "12px", color: "#DC2626", mt: "8px" }}>
           {actions.error}
+        </Typography>
+      )}
+      {exportBlocked && (
+        <Typography role="alert" sx={{ ...text, fontSize: "12px", color: "#DC2626", mt: "8px" }}>
+          The report window was blocked. Allow pop-ups for this site and try again.
         </Typography>
       )}
     </Box>
@@ -1219,6 +1289,8 @@ const NoveltySearchPhase = ({
    * summary only appears once it succeeds.
    */
   onEndTask,
+  /** Every module's results; see workflow/sessionReport.js. */
+  sessionReport = null,
 }) => {
   const navigate = useNavigate();
 
@@ -1394,7 +1466,10 @@ const NoveltySearchPhase = ({
             RESULTS
         ================================================================= */}
 
-        {!running && stage === "results" && (
+        {/* Stays on screen after End Task: the summary used to REPLACE the
+            results, so the patent table and assessment could no longer be
+            viewed once the session was ended (testing). */}
+        {!running && (stage === "results" || stage === "summary") && (
           <ResultsScreen
             actions={actions}
             report={report}
@@ -1404,7 +1479,7 @@ const NoveltySearchPhase = ({
             selectedIds={selectedIds}
             onToggle={toggleSelected}
             onCompare={handleCompare}
-            onFinish={() => setStage("decision")}
+            onFinish={stage === "summary" ? undefined : () => setStage("decision")}
           />
         )}
 
@@ -1440,7 +1515,7 @@ const NoveltySearchPhase = ({
             FOLLOW-UP THREAD
         ================================================================= */}
 
-        {!running && stage !== "summary" &&
+        {!running &&
           thread.map((entry) => (
             <React.Fragment key={entry.id}>
               <UserMessage>{entry.question}</UserMessage>
@@ -1456,6 +1531,7 @@ const NoveltySearchPhase = ({
           <SummaryScreen
             actions={actions}
             report={report}
+            sessionReport={sessionReport}
             researcherName={researcherName}
             onNewResearch={() => navigate("/dashboard/new-research")}
           />

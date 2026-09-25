@@ -56,8 +56,8 @@ const SubgraphView = ({
     });
     return nodes
       .filter((n) => styleForType(n.type).label === "Protein / Gene")
-      .map((n) => ({ id: String(n.id), label: n.label, connections: degree.get(n.id) || 0 }))
-      .sort((a, b) => b.connections - a.connections);
+      .map((n) => ({ id: String(n.id), label: n.label, associations: degree.get(n.id) || 0 }))
+      .sort((a, b) => b.associations - a.associations);
   }, [graph]);
   const [openFailed, setOpenFailed] = useState(false);
 
@@ -186,7 +186,7 @@ const SubgraphView = ({
         {[
           { label: "RELATIONSHIPS FOUND", value: stats?.relationshipsFound, unit: "relations" },
           { label: "PROTEINS", value: proteins.length, unit: proteins.length === 1 ? "protein" : "proteins" },
-          { label: "PATHWAY CONNECTIONS", value: stats?.pathwayConnections, unit: "connections" },
+          { label: "PATHWAY ASSOCIATIONS", value: stats?.pathwayConnections, unit: "associations" },
         ].map((stat, i, arr) => (
           <React.Fragment key={stat.label}>
             <Box sx={{ display: "flex", flexDirection: "column", gap: "4px" }}>
@@ -212,7 +212,7 @@ const SubgraphView = ({
       {proteins.length > 0 && (
         <Box sx={{ mt: "12px", border: `1px solid ${BORDER}`, borderRadius: "8px", overflow: "hidden" }}>
           <Box sx={{ display: "grid", gridTemplateColumns: "1fr 120px 100px", gap: "8px", p: "8px 12px", bgcolor: GRAY_BG }}>
-            {["Protein", "UniProt ID", "Connections"].map((h) => (
+            {["Protein", "UniProt ID", "Associations"].map((h) => (
               <Typography key={h} sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#475569", textTransform: "uppercase" }}>
                 {h}
               </Typography>
@@ -238,7 +238,7 @@ const SubgraphView = ({
                 ) : (
                   <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: TEXT_MUTED }}>{p.id}</Typography>
                 )}
-                <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: TEXT_DARK }}>{p.connections}</Typography>
+                <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: TEXT_DARK }}>{p.associations}</Typography>
               </Box>
             ))}
           </Box>

@@ -1,6 +1,8 @@
 import React, { useEffect, useLayoutEffect, useRef } from "react";
 import { Box, Typography, CircularProgress } from "@mui/material";
 import { FONT, TEAL, BORDER, TEXT_DARK, USER_MSG_BG } from "./workflowConstants";
+import FormattedText from "./FormattedText";
+import { withProductWording } from "../../workflow/wording";
 import { moduleDisplayFor } from "../../workflow/moduleMap";
 import { useCurrentUser } from "../../context/CurrentUserContext";
 
@@ -115,17 +117,17 @@ const AgentBubble = ({ text, moduleKey, agentName, isError }) => {
           )}
         </Box>
 
-        <Typography
-          sx={{
-            fontFamily: FONT,
-            fontSize: "14px",
-            lineHeight: "21px",
-            color: isError ? "#B4232C" : TEXT_DARK,
-            whiteSpace: "pre-wrap",
-          }}
-        >
-          {text}
-        </Typography>
+        {/* Agent replies are markdown; they used to render raw, asterisks
+            and all. Errors are our own plain text. */}
+        {isError ? (
+          <Typography
+            sx={{ fontFamily: FONT, fontSize: "14px", lineHeight: "21px", color: "#B4232C", whiteSpace: "pre-wrap" }}
+          >
+            {text}
+          </Typography>
+        ) : (
+          <FormattedText text={withProductWording(text)} fontSize="14px" lineHeight="21px" color={TEXT_DARK} />
+        )}
       </Box>
     </Box>
   );
@@ -147,6 +149,8 @@ const AgentBubble = ({ text, moduleKey, agentName, isError }) => {
 const ConversationTimeline = ({
   blocks,
   renderModule,
+  /** An earlier run of a module that has run again; see ArchivedRunCard. */
+  renderArchivedRun,
   pending = false,
   scrollAnchors,
 }) => {
@@ -219,6 +223,10 @@ const ConversationTimeline = ({
               )}
             </Box>
           );
+        }
+
+        if (block.kind === "archived") {
+          return <Box key={block.id}>{renderArchivedRun?.(block)}</Box>;
         }
 
         return (

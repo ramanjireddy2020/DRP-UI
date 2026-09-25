@@ -3,16 +3,17 @@ import './TXKGPhase.css';
 import {
   Box, Typography, Button, Tabs, Tab, Checkbox,
   TextField, Accordion, AccordionSummary, AccordionDetails, Chip, IconButton,
-  Drawer, CircularProgress,
+  Drawer, CircularProgress, Tooltip,
 } from '@mui/material';
 import litminexApi from '../../../services/api/litminex';
 import txkgApi from '../../../services/api/txkg';
-import { formatScore } from '../../../workflow/txkgResult';
+import { formatScore, definitionFor } from '../../../workflow/txkgResult';
 import { moduleDisplayFor } from '../../../workflow/moduleMap';
 import { linksForSource, uniprotUrl } from '../../../workflow/sourceLinks';
 import PhaseActions from '../PhaseActions';
 import SubgraphView from '../SubgraphView';
-import { styleForType } from '../subgraphStyle';
+import FormattedText from '../FormattedText';
+import { styleForType, normalizeGraph, findHubId, pathsBetween } from '../subgraphStyle';
 import { ExpandMoreOutlined, AddOutlined, CloseOutlined } from '@mui/icons-material';
 import {
   FONT, TEAL, GRAY_BG, BORDER, BORDER_LIGHT,
@@ -83,6 +84,22 @@ const SectionAccordionSummary = ({ label }) => (
     </Typography>
   </Box>
 );
+
+/** A short "term — meaning" list; renders nothing when the API sent none. */
+const DefinitionList = ({ title, definitions }) => {
+  const entries = Object.entries(definitions ?? {});
+  if (!entries.length) return null;
+  return (
+    <Box sx={{ display: "flex", flexDirection: "column", gap: "4px", p: "10px 12px", bgcolor: "#F8FAFC", border: `1px solid ${BORDER}`, borderRadius: "8px" }}>
+      <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: "0.04em" }}>{title}</Typography>
+      {entries.map(([term, meaning]) => (
+        <Typography key={term} sx={{ fontFamily: FONT, fontSize: "12px", color: "#4D5461", lineHeight: 1.45 }}>
+          <strong>{term.replace(/_/g, " ")}</strong> — {meaning}
+        </Typography>
+      ))}
+    </Box>
+  );
+};
 
 /**
  * One meta-path as it was walked: node names, coloured by node type (same
@@ -214,19 +231,6 @@ const TXKGPhase = ({
    * supports, which is what the data actually describes.
    */
   /**
-   * Metapaths come from each target's `connectionTypes`, e.g.
-   * "disease→gene/protein→pathway→gene/protein". Substituting the disease name
-   * for the literal word "disease" makes them readable without inventing
-   * anything.
-   */
-  const prettyPath = (p) =>
-    String(p || "")
-      .replace(/disease/gi, diseaseLabel || "disease")
-      .split("→")
-      .map((s) => s.trim())
-      .join(" → ");
-
-  /**
    * Meta-path traversals: which target rows are expanded.
    *
    * Testing reported the paths opened only for the first target: rank 1 was a
@@ -246,15 +250,45 @@ const TXKGPhase = ({
       return next;
     });
 
+  /** The target score and the meta-path score, as the API defines them. */
+  const scoreHelp =
+    definitionFor(txkg?.scoreDefinitions, "score") ||
+    definitionFor(txkg?.scoreDefinitions, "targetScore") ||
+    definitionFor(txkg?.scoreDefinitions, "target_score");
+  const metapathScoreHelp =
+    definitionFor(txkg?.scoreDefinitions, "metapath") ||
+    definitionFor(txkg?.scoreDefinitions, "metapathScore") ||
+    definitionFor(txkg?.scoreDefinitions, "metapath_score");
+
   const sourceRows = (() => {
     if (!hasLiveData) return [];
     const tally = new Map();
     txkg.targets.forEach((t) => {
       t.supportingSources.forEach((s) => tally.set(s, (tally.get(s) || 0) + 1));
     });
+    // The record behind each source for each target (supportingSourceLinks),
+    // so a link opens the evidence rather than the database's home page
+    // (testing). A link names its source; one without a source belongs to a
+    // target that cites a single source.
+    const sameSource = (a, b) => {
+      const x = String(a ?? "").toLowerCase();
+      const y = String(b ?? "").toLowerCase();
+      return Boolean(x && y) && (x.includes(y) || y.includes(x));
+    };
+    const deepLinksFor = (sourceName) =>
+      txkg.targets.flatMap((t) =>
+        (t.supportingSourceLinks ?? [])
+          .filter((l) =>
+            l.source ? sameSource(l.source, sourceName) : t.supportingSources.length === 1 && t.supportingSources[0] === sourceName
+          )
+          .map((l) => ({ name: `${t.name}${l.label && l.label !== l.url ? ` · ${l.label}` : ""}`, url: l.url }))
+      );
     return [...tally.entries()]
       .sort((a, b) => b[1] - a[1])
-      .map(([name, count]) => ({ name, count, links: linksForSource(name) }));
+      .map(([name, count]) => {
+        const deep = deepLinksFor(name);
+        return { name, count, links: deep.length ? deep : linksForSource(name), deep: deep.length > 0 };
+      });
   })();
 
   const [customTargets, setCustomTargets] = useState([]);
@@ -369,7 +403,7 @@ const TXKGPhase = ({
         ...prev,
         [key]: {
           data: {
-            content: typeof data?.content === 'string' ? plain(data.content) : '',
+            content: typeof data?.content === 'string' ? data.content.trim() : '',
             items: (Array.isArray(data?.items) ? data.items : []).map(readInsightItem).filter(Boolean),
           },
         },
@@ -451,10 +485,11 @@ const TXKGPhase = ({
     const { content, items } = insightEntry.data;
     return (
       <Box sx={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-        {content && (
-          <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 400, color: "#404552", lineHeight: 1.6, whiteSpace: "pre-line" }}>
-            {content}
-          </Typography>
+        {/* `items` are parsed from the same text as `content`, so showing
+            both put the raw, unformatted copy above the formatted one.
+            The raw text is only used when there are no items. */}
+        {content && !items.length && (
+          <FormattedText text={content} fontSize="12px" color="#404552" />
         )}
         {items.map((item, i) => (
           <Box key={i} sx={{ display: "flex", flexDirection: "column", gap: "3px" }}>
@@ -463,11 +498,8 @@ const TXKGPhase = ({
                 {plain(item.title)}
               </Typography>
             )}
-            {item.body && (
-              <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: "#404552", lineHeight: 1.6, whiteSpace: "pre-line" }}>
-                {plain(item.body)}
-              </Typography>
-            )}
+            {/* Rendered as markdown; plain() only dropped the ** markers. */}
+            {item.body && <FormattedText text={item.body} fontSize="12px" color="#404552" />}
             {item.url && (
               <Typography
                 component="a"
@@ -561,12 +593,20 @@ const TXKGPhase = ({
               <Box key={i} sx={{ display: "flex", flexDirection: "column", gap: "4px", p: "10px 12px", bgcolor: "#FAFCFF", border: `1px solid ${BORDER}`, borderRadius: "8px" }}>
                 <Box sx={{ display: "flex", alignItems: "center", gap: "8px" }}>
                   <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#1A1A26", lineHeight: "100%" }}>{rec.target}</Typography>
-                  <Chip label={rec.status} size="small" sx={{ bgcolor: chip.bg, color: chip.fg, fontFamily: FONT, fontSize: "10px", fontWeight: 600, height: "17px", borderRadius: "4px", "& .MuiChip-label": { px: "8px", py: "2px", lineHeight: "100%" } }} />
+                  <Tooltip title={definitionFor(txkg.labelDefinitions, rec.status) || ""} arrow placement="top">
+                    <Chip label={rec.status} size="small" sx={{ bgcolor: chip.bg, color: chip.fg, fontFamily: FONT, fontSize: "10px", fontWeight: 600, height: "17px", borderRadius: "4px", "& .MuiChip-label": { px: "8px", py: "2px", lineHeight: "100%" } }} />
+                  </Tooltip>
                 </Box>
                 <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 400, color: "#4D5461", lineHeight: 1.45 }}>{rec.desc}</Typography>
               </Box>
             );
           })}
+
+          {/* What the labels mean, from method.label_definitions. Testing asked
+              how targets are marked and what "well explored", "moderate" and
+              "high" mean. */}
+          <DefinitionList title="What the labels mean" definitions={txkg.labelDefinitions} />
+          <DefinitionList title="What the scores mean" definitions={txkg.scoreDefinitions} />
         </Box>
       );
     }
@@ -585,14 +625,14 @@ const TXKGPhase = ({
               <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 400, color: "#667080", lineHeight: "100%" }}>
                 Supports {source.count} of {txkg.targets.length} targets
               </Typography>
-              {/* The databases' own entry points; a label that matches
-                  nothing stays unlinked rather than pointing somewhere
-                  invented. */}
+              {/* The supporting records when the API links them; otherwise
+                  the database's own entry point. A label that matches nothing
+                  stays unlinked rather than pointing somewhere invented. */}
               {source.links.length > 0 && (
                 <Box sx={{ display: "flex", flexWrap: "wrap", gap: "8px", mt: "2px" }}>
-                  {source.links.map((link) => (
+                  {source.links.map((link, li) => (
                     <Typography
-                      key={link.url}
+                      key={`${link.url}-${li}`}
                       component="a"
                       href={link.url}
                       target="_blank"
@@ -687,13 +727,27 @@ const TXKGPhase = ({
    * payload carries them, else the meta-path analysis traversals that end at
    * (or name) this target.
    */
+  const subgraphIndex = (() => {
+    const graph = subgraph?.graph;
+    if (!graph) return null;
+    const { nodes, edges } = normalizeGraph(graph);
+    return { graph, nodes, hubId: findHubId(nodes, edges) };
+  })();
+
   const traversalsFor = (t) => {
     if (t.traversals?.length) return t.traversals;
-    const rows = metapath?.data?.traversals ?? [];
     const names = [t.id, t.name, t.fullName, t.geneName].filter(Boolean).map((v) => String(v).toLowerCase());
-    return rows.filter((row) =>
-      [row.target, row.targetName].some((v) => v != null && names.includes(String(v).toLowerCase()))
-    );
+    const matches = (v) => v != null && names.includes(String(v).toLowerCase());
+
+    const rows = metapath?.data?.traversals ?? [];
+    const fromAnalysis = rows.filter((row) => [row.target, row.targetName].some(matches));
+    if (fromAnalysis.length) return fromAnalysis;
+
+    // Otherwise, the real paths from the disease to this target in the
+    // generated subgraph: node names and relations, never path types.
+    if (!subgraphIndex) return [];
+    const node = subgraphIndex.nodes.find((n) => matches(n.id) || matches(n.label));
+    return node ? pathsBetween(subgraphIndex.graph, subgraphIndex.hubId, node.id) : [];
   };
 
   /** Top five targets, each expandable to list all of its sourced meta-paths. */
@@ -705,8 +759,6 @@ const TXKGPhase = ({
       {targets.slice(0, 5).map((t, i) => {
         const open = isMetapathOpen(t.name, i);
         const real = traversalsFor(t);
-        // Fallback when no node-level paths are available yet: the path types.
-        const paths = t.connectionTypes.map(prettyPath);
         return (
           <Box
             key={`${t.name}-${i}`}
@@ -740,7 +792,7 @@ const TXKGPhase = ({
               <Typography sx={{ flex: 1, fontFamily: FONT, fontSize: "11px", color: "#6B7280", lineHeight: "13px", visibility: open ? "hidden" : "visible" }}>
                 {real.length
                   ? `${real[0].text}${real.length > 1 ? ` (+${real.length - 1} more)` : ""}`
-                  : `${paths.length ? paths[0] : "No sourced path"}${paths.length > 1 ? ` (+${paths.length - 1} more)` : ""}`}
+                  : "No path available yet"}
               </Typography>
               <Box sx={{ display: "flex", alignItems: "center", p: "3px 8px", bgcolor: i === 0 ? "#00BCD4" : "#D1FAE5", borderRadius: "8px" }}>
                 <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: i === 0 ? "#FFFFFF" : "#059669", lineHeight: "13px" }}>
@@ -753,18 +805,11 @@ const TXKGPhase = ({
                 {real.length ? (
                   real.map((traversal, j) => <PathChain key={j} traversal={traversal} />)
                 ) : (
-                  <>
-                    {paths.length > 0 && (
-                      <Typography sx={{ fontFamily: FONT, fontSize: "10px", color: "#94A3B8" }}>
-                        Path types. Run meta-path analysis to see the actual nodes.
-                      </Typography>
-                    )}
-                    {(paths.length ? paths : ["No sourced path for this target"]).map((path, j) => (
-                      <Typography key={j} sx={{ fontFamily: FONT, fontSize: "11px", color: "#6B7280", lineHeight: 1.35 }}>
-                        • {path}
-                      </Typography>
-                    ))}
-                  </>
+                  // Metapath types ("gene/protein → pathway") are not shown:
+                  // testing asked for actual node names only.
+                  <Typography sx={{ fontFamily: FONT, fontSize: "11px", color: "#6B7280", lineHeight: 1.35 }}>
+                    No path for this target yet. Paths appear once the knowledge graph is generated.
+                  </Typography>
                 )}
               </Box>
             )}
@@ -783,9 +828,17 @@ const TXKGPhase = ({
         {data.scores.length > 0 && (
           <>
             <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#111827", lineHeight: "16px" }}>Meta-path scores</Typography>
+            {/* What a meta-path score measures (scoreDefinitions). */}
+            {metapathScoreHelp && (
+              <Typography sx={{ fontFamily: FONT, fontSize: "11px", color: "#6B7280", lineHeight: 1.4 }}>{metapathScoreHelp}</Typography>
+            )}
             {data.scores.map((row, i) => (
               <Box key={i} sx={{ display: "flex", alignItems: "center", p: "6px 12px", gap: "8px", borderBottom: `1px solid ${BORDER}` }}>
-                <Typography sx={{ flex: 1, fontFamily: FONT, fontSize: "11px", color: "#6B7280", lineHeight: 1.35 }}>{row.name}</Typography>
+                {row.traversal ? (
+                  <Box sx={{ flex: 1 }}><PathChain traversal={row.traversal} /></Box>
+                ) : (
+                  <Typography sx={{ flex: 1, fontFamily: FONT, fontSize: "11px", color: "#6B7280", lineHeight: 1.35 }}>{row.name}</Typography>
+                )}
                 <Box sx={{ p: "3px 8px", bgcolor: "#D1FAE5", borderRadius: "8px" }}>
                   <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#059669", lineHeight: "13px" }}>{row.score}</Typography>
                 </Box>
@@ -965,7 +1018,7 @@ const TXKGPhase = ({
                     <Box sx={{ display: "flex", bgcolor: GRAY_BG, p: "10px 12px", borderBottom: `1px solid ${BORDER_LIGHT}`, gap: "8px" }}>
                       <Typography sx={{ flex: "0 0 100px", fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase", letterSpacing: "0.5px" }}>UNIPROT ID</Typography>
                       <Typography sx={{ flex: 1, fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase", letterSpacing: "0.5px" }}>TARGET</Typography>
-                      <Typography sx={{ flex: "0 0 80px", fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase", textAlign: "right", letterSpacing: "0.5px" }}>SCORE</Typography>
+                      <Tooltip title={scoreHelp || ""} arrow placement="top"><Typography sx={{ flex: "0 0 80px", fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase", textAlign: "right", letterSpacing: "0.5px", cursor: scoreHelp ? "help" : "default" }}>SCORE{scoreHelp ? " ⓘ" : ""}</Typography></Tooltip>
                     </Box>
                     {targets.map((target, i) => (
                       <Box

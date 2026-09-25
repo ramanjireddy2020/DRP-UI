@@ -29,6 +29,41 @@ const EMPTY = {
   summary: null,
   method: null,
   subgraphHtmlUrl: null,
+  labelDefinitions: {},
+  scoreDefinitions: {},
+};
+
+/**
+ * Definitions as a plain { term: meaning } map, from either a map or a list of
+ * { label|name|term, definition|description|meaning }.
+ */
+export const readDefinitions = (raw) => {
+  if (Array.isArray(raw)) {
+    return Object.fromEntries(
+      raw
+        .map((d) => [d?.label ?? d?.name ?? d?.term ?? d?.key, d?.definition ?? d?.description ?? d?.meaning ?? d?.text])
+        .filter(([k, v]) => k && v)
+        .map(([k, v]) => [String(k), String(v)])
+    );
+  }
+  if (raw && typeof raw === "object") {
+    return Object.fromEntries(
+      Object.entries(raw)
+        .map(([k, v]) => [k, typeof v === "object" && v ? v.definition ?? v.description ?? v.meaning ?? v.text : v])
+        .filter(([, v]) => v != null && v !== "")
+        .map(([k, v]) => [k, String(v)])
+    );
+  }
+  return {};
+};
+
+/** The definition for a term, matched without regard to case, spaces or "_" / "-". */
+export const definitionFor = (definitions, term) => {
+  const squash = (v) => String(v ?? "").toLowerCase().replace(/[\s_-]+/g, "");
+  const key = squash(term);
+  if (!key) return null;
+  const hit = Object.entries(definitions ?? {}).find(([k]) => squash(k) === key);
+  return hit ? hit[1] : null;
 };
 
 /** Accept either the wrapper or the inner payload. */
@@ -100,13 +135,26 @@ export const normalizeTarget = (t, index) => {
     literatureHits: t.literatureHits ?? t.literature_hits ?? null,
     patentHits: t.patentHits ?? t.patent_hits ?? null,
     connectionTypes: Array.isArray(t.connectionTypes) ? t.connectionTypes : [],
-    // Actual paths for this target (node names + edge labels), when the
-    // payload includes them. connectionTypes above are only the path types.
-    traversals: [t.metapaths, t.traversals, t.paths]
-      .find((list) => Array.isArray(list) && list.some((row) => row && typeof row === "object"))
+    // Actual paths for this target (node names + edge labels). The API now
+    // returns them on every target as `connectionPaths`; connectionTypes
+    // above are only the path TYPES ("gene/protein → pathway"), which testing
+    // asked never to show. Older payload spellings are still read.
+    traversals: [t.connectionPaths, t.connection_paths, t.metapaths, t.traversals, t.paths]
+      .find((list) => Array.isArray(list) && list.length > 0)
       ?.map(normalizeTraversal)
       .filter(Boolean) ?? [],
     supportingSources: Array.isArray(t.supportingSources) ? t.supportingSources : [],
+    // Deep links to the record behind each source, e.g. the CTD entry for this
+    // gene–disease pair. Sources used to link to the database's home page.
+    supportingSourceLinks: (Array.isArray(t.supportingSourceLinks) ? t.supportingSourceLinks : Array.isArray(t.supporting_source_links) ? t.supporting_source_links : [])
+      .map((l) =>
+        typeof l === "string"
+          ? { source: null, label: l, url: l }
+          : l && (l.url || l.href)
+          ? { source: l.source ?? l.name ?? l.database ?? null, label: l.label ?? l.title ?? l.source ?? l.name ?? null, url: l.url ?? l.href }
+          : null
+      )
+      .filter((l) => l && /^https?:\/\//i.test(l.url)),
     pathCount: t.path_count ?? t.pathCount ?? (Array.isArray(t.connectionTypes) ? t.connectionTypes.length : null),
     customAdded: t.customAdded ?? t.custom_added ?? false,
     fromKnowledgeGraph: t.fromKnowledgeGraph ?? t.from_knowledge_graph ?? null,
@@ -199,6 +247,14 @@ export const normalizeTxkgResult = (payload) => {
     summary: r.summary ?? null,
     method: r.method ?? null,
     subgraphHtmlUrl: r.subgraphHtmlUrl ?? r.subgraph_html_url ?? null,
+    // What the novelty labels ("well explored", "moderate", "high") and the
+    // scores mean. Testing asked what they mean; the API now says.
+    labelDefinitions: readDefinitions(
+      r.method?.label_definitions ?? r.method?.labelDefinitions ?? r.label_definitions ?? r.labelDefinitions
+    ),
+    scoreDefinitions: readDefinitions(
+      r.scoreDefinitions ?? r.score_definitions ?? r.method?.scoreDefinitions ?? r.method?.score_definitions
+    ),
   };
 };
 
@@ -267,20 +323,33 @@ export const normalizeTraversal = (row) => {
   let edgeLabels = [];
 
   if (typeof row === "string") {
-    steps = row.split("→").map((name) => ({ name: name.trim(), type: null })).filter((s) => s.name);
+    steps = row.split(/→|->/).map((name) => ({ name: name.trim(), type: null })).filter((s) => s.name);
   } else if (typeof row === "object") {
     const names = row.node_names ?? row.nodeNames;
     const types = row.node_types ?? row.nodeTypes ?? [];
+    const nodeList = row.nodes ?? row.path;
     if (Array.isArray(names) && names.length) {
       steps = names.map((name, i) => ({ name: String(name), type: types[i] ?? null }));
+    } else if (Array.isArray(nodeList) && nodeList.some((n) => n && typeof n === "object")) {
+      // Nodes as objects: [{ name, type }, …]
+      steps = nodeList
+        .filter(Boolean)
+        .map((n) =>
+          typeof n === "object"
+            ? { name: String(n.name ?? n.label ?? n.id ?? ""), type: n.type ?? n.node_type ?? null }
+            : { name: String(n), type: null }
+        )
+        .filter((st) => st.name);
     } else {
       const text = pathText(row.path ?? row.nodes ?? row.traversal ?? row.metapath);
-      steps = text.split("→").map((name) => ({ name: name.trim(), type: null })).filter((s) => s.name);
+      steps = text.split(/→|->/).map((name) => ({ name: name.trim(), type: null })).filter((s) => s.name);
     }
     const labels = row.edge_labels ?? row.edgeLabels;
     edgeLabels = Array.isArray(labels) && labels.length
       ? labels.map(String)
-      : Array.isArray(row.edges) ? row.edges.map(relationText) : [];
+      : Array.isArray(row.edges)
+      ? row.edges.map((e) => (e && typeof e === "object" ? String(e.label ?? relationText(e.type ?? e.relation)) : relationText(e)))
+      : [];
   }
 
   if (!steps.length) return null;
@@ -316,10 +385,13 @@ export const normalizeMetapath = ({ analysis, scores, traversals } = {}) => {
   const scoreRows = listFrom(scores, ["scores", "items", "results", "metapaths"])
     .map((row) => {
       if (!row || typeof row !== "object") return null;
-      const name = pathText(row.metapath ?? row.path ?? row.name ?? row.target ?? row.id);
+      // A row that names its nodes is shown as the actual path, not the
+      // metapath type pattern in `metapath`.
+      const traversal = (row.node_names ?? row.nodeNames) ? normalizeTraversal(row) : null;
+      const name = traversal?.text ?? pathText(row.metapath ?? row.path ?? row.name ?? row.target ?? row.id);
       const score = Number(row.score ?? row.value ?? row.weight);
       if (!name) return null;
-      return { name, score: Number.isFinite(score) ? formatScore(score) : "—" };
+      return { name, traversal, score: Number.isFinite(score) ? formatScore(score) : "—" };
     })
     .filter(Boolean);
 

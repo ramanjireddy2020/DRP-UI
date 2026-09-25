@@ -18,7 +18,7 @@ import exportsApi from "../services/api/exports";
  * @param {string|null} jobId - the completed job whose results Export sends
  * @param {string} moduleLabel - used for the downloaded filename
  */
-const usePhaseActions = ({ session, moduleKey = null, jobId, moduleLabel }) => {
+const usePhaseActions = ({ session, moduleKey = null, jobId, moduleLabel, onRequestBranch }) => {
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
 
@@ -67,6 +67,15 @@ const usePhaseActions = ({ session, moduleKey = null, jobId, moduleLabel }) => {
       return;
     }
 
+    // With a branch dialog available, Branch opens it (name, description,
+    // what to change) instead of re-posting straight away. Testing found the
+    // immediate re-post looked like a rerun: no branch was ever named or
+    // shown, and there was nothing to go to.
+    if (onRequestBranch) {
+      onRequestBranch({ moduleKey: key, stepId, selections: selections ?? {} });
+      return;
+    }
+
     setBusy("branch");
     setError(null);
     try {
@@ -77,7 +86,7 @@ const usePhaseActions = ({ session, moduleKey = null, jobId, moduleLabel }) => {
     } finally {
       setBusy(null);
     }
-  }, [handOff, key, selections, stepId]);
+  }, [handOff, key, selections, stepId, onRequestBranch]);
 
   /**
    * Export this step's results.
