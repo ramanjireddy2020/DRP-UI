@@ -24,6 +24,12 @@ import { openSubgraphInNewTab } from "./subgraphHandoff";
  * full-size in a new tab.
  */
 
+/**
+ * The relationship counts and the protein / UniProt table under the graph are
+ * switched off for now, per testing. Kept (not deleted) so they can return.
+ */
+const SHOW_RELATIONSHIP_TABLES = false;
+
 const SubgraphView = ({
   /** { nodes, edges, legend } from GET /agents/subgraph/{graphJobId} */
   graph,
@@ -170,6 +176,12 @@ const SubgraphView = ({
         </Typography>
       )}
 
+      {/* Hidden for now (testing asked for these to be commented out, not
+          deleted): the "Relationships Found / Proteins / Pathway
+          Associations" cards and the Protein / UniProt ID / Associations
+          table below. Set SHOW_RELATIONSHIP_TABLES to true to bring both back. */}
+      {SHOW_RELATIONSHIP_TABLES && (
+      <>
       {/* Footer counts. These were fixed at 52 / 15 / 10. */}
       <Box
         sx={{
@@ -243,6 +255,8 @@ const SubgraphView = ({
             ))}
           </Box>
         </Box>
+      )}
+      </>
       )}
     </>
   );
