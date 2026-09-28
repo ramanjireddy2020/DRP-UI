@@ -391,9 +391,13 @@ function reducer(state, action) {
       // chat box underneath it. The timeline draws these AFTER the card; see
       // timelineBlocks in CompleteWorkflow.
       const afterCard = Boolean(key && state.steps[key]?.visited);
-      // The run this was said in, so it stays with that run's card.
-      const runId = [...state.runs].reverse().find((r) => r.key === key)?.id ?? null;
+      // The run this was said in, on the branch in view, so it stays with
+      // that run's card (a branch forked from TxKG has its own TxKG run).
       const branch = state.activeBranch ?? null;
+      const runId =
+        [...state.runs].reverse().find((r) => r.key === key && (r.branch ?? null) === branch)?.id ??
+        [...state.runs].reverse().find((r) => r.key === key)?.id ??
+        null;
       const stamped = action.messages.map((message, offset) => ({
         id: `m${state.seq + offset + 1}`,
         moduleKey: key ?? null,
@@ -452,6 +456,19 @@ const useWorkflowSession = () => {
    */
   const sessionIdRef = useRef(null);
 
+  /**
+   * The branch in view, for API calls. Testing found branchName was never
+   * sent — not on branch create, step create or messages — so a branch
+   * existed only in the UI and its steps landed on Main. Read through a ref so
+   * the stable callbacks below always send the current one.
+   */
+  const activeBranchRef = useRef(null);
+  activeBranchRef.current = state.activeBranch ?? null;
+  const runsRef = useRef([]);
+  runsRef.current = state.runs;
+  const withBranch = (payload, branch = activeBranchRef.current) =>
+    branch ? { ...payload, branchName: branch } : payload;
+
   const activeStepState = state.activeKey ? state.steps[state.activeKey] : null;
   const activeModule = state.activeKey ? MODULE_BY_KEY[state.activeKey] : null;
 
@@ -500,6 +517,17 @@ const useWorkflowSession = () => {
     }
 
     if (!moduleKey) {
+      // No module is a valid answer: for "open report.pdf", "hello" and the
+      // like the supervisor replies "I'm not sure what you'd like me to run…"
+      // with module "". That reply is shown as the conversation; the session
+      // stays open for the next message. Only a response with no reply at all
+      // is a failure.
+      const hasReply =
+        Array.isArray(raw?.messages) &&
+        raw.messages.some((m) => String(m?.role ?? "").toLowerCase() !== "user" && m?.content);
+      if (hasReply) {
+        return { sessionId, moduleKey: null, raw };
+      }
       dispatch({
         type: "SESSION_FAILED",
         error:
@@ -573,6 +601,8 @@ const useWorkflowSession = () => {
         phase,
         jobId: parsed.jobId,
         stepId: parsed.stepId,
+        // The branch the step was created on, as the server recorded it.
+        branch: step?.branchName || null,
       });
 
       if (step?.summary) {
@@ -597,10 +627,14 @@ const useWorkflowSession = () => {
             stepId: m.stepId || null,
             moduleKey: key,
             stepIndex: key ? MODULE_BY_KEY[key]?.index ?? null : null,
+            branch: m.branchName || owner?.branchName || null,
           };
         }),
       });
     }
+
+    // Reopen on the branch the session was last on.
+    dispatch({ type: "SET_ACTIVE_BRANCH", branch: raw?.activeBranch || null });
 
     return { sessionId: sessionIdRef.current, raw };
   }, []);
@@ -676,6 +710,12 @@ const useWorkflowSession = () => {
 
   const setActiveBranch = useCallback((branch) => {
     dispatch({ type: "SET_ACTIVE_BRANCH", branch: branch ?? null });
+    // Tell the server which branch is active; switching used to fire no call,
+    // so GET /sessions/{id} always reported activeBranch "".
+    const sessionId = sessionIdRef.current;
+    if (sessionId) {
+      patchSessionRequest(sessionId, { activeBranch: branch ?? "" }).catch(() => {});
+    }
   }, []);
 
   const reset = useCallback(() => {
@@ -731,7 +771,10 @@ const useWorkflowSession = () => {
 
       let raw;
       try {
-        raw = await createStepRequest(sessionId, { module, selections, fromStepId });
+        raw = await createStepRequest(
+          sessionId,
+          withBranch({ module, selections, fromStepId }, branch !== undefined ? branch : activeBranchRef.current)
+        );
       } catch (err) {
         dispatch({
           type: "SET_STEP_ERROR",
@@ -785,8 +828,16 @@ const useWorkflowSession = () => {
       if (!message) return null;
 
       const sessionId = sessionIdRef.current;
-      const originKey = state.activeKey;
-      const stepId = originKey ? state.steps[originKey]?.stepId ?? null : null;
+
+      // Ask about the step on the branch in view. The module slot holds the
+      // most recent run overall, so after branching, a question on Main was
+      // sent against the branch's step (testing: answers came back reversed).
+      const viewBranch = activeBranchRef.current;
+      const onBranch = runsRef.current.filter((r) => (r.branch ?? null) === viewBranch && r.stepId);
+      const run =
+        [...onBranch].reverse().find((r) => r.key === state.activeKey) ?? onBranch[onBranch.length - 1] ?? null;
+      const originKey = run?.key ?? state.activeKey;
+      const stepId = run?.stepId ?? (originKey ? state.steps[originKey]?.stepId ?? null : null);
 
       // Show the user's own message immediately, attached to the step they
       // typed it into, so it stays put if the hand-off moves the view.
@@ -815,7 +866,7 @@ const useWorkflowSession = () => {
 
       let raw;
       try {
-        raw = await postMessageRequest(sessionId, { message, stepId });
+        raw = await postMessageRequest(sessionId, withBranch({ message, stepId }));
       } catch (err) {
         dispatch({
           type: "APPEND_MESSAGES",
@@ -928,7 +979,7 @@ const useWorkflowSession = () => {
 
       let raw;
       try {
-        raw = await rerunStepRequest(sessionId, stepId, { params });
+        raw = await rerunStepRequest(sessionId, stepId, withBranch({ params }));
       } catch (err) {
         dispatch({
           type: "SET_STEP_ERROR",

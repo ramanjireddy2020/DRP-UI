@@ -211,13 +211,57 @@ const humanize = (name) =>
  */
 const CRITERIA_KEYS = ["criteria", "parameters", "properties", "rows", "items", "profile"];
 
+/** 0.1523 → "0.15", 404.51 → "404.5", 12 → "12". */
+const shortNumber = (n) => {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return String(n);
+  const abs = Math.abs(x);
+  return String(Number(x.toFixed(abs >= 100 ? 1 : abs >= 1 ? 2 : 3)));
+};
+
+/**
+ * The criterion's target, as text, from how the profile actually sends it:
+ *   numeric     { kind: "numeric", min, max, median }  → "0.15 – 0.93 (median 0.55)"
+ *   categorical { distribution: { not_withdrawn: 324 } } → "not withdrawn (324)"
+ * Testing saw "—" on every Target Criterion row: only a `value` field was read,
+ * and the profile sends none.
+ */
+const criterionTarget = (c) => {
+  const direct =
+    c.value ?? c.targetValue ?? c.target_value ?? c.range ?? c.goodValue ?? c.good_value ??
+    c.ideal ?? c.criterionValue ?? c.criterion_value ?? (typeof c.target !== "object" ? c.target : null);
+  if (direct != null && direct !== "") return direct;
+
+  const has = (v) => v != null && v !== "" && Number.isFinite(Number(v));
+  if (has(c.min) || has(c.max) || has(c.median)) {
+    const range =
+      has(c.min) && has(c.max)
+        ? `${shortNumber(c.min)} – ${shortNumber(c.max)}`
+        : has(c.min)
+        ? `≥ ${shortNumber(c.min)}`
+        : has(c.max)
+        ? `≤ ${shortNumber(c.max)}`
+        : "";
+    const median = has(c.median) ? `median ${shortNumber(c.median)}` : "";
+    return range && median ? `${range} (${median})` : range || median;
+  }
+
+  if (c.distribution && typeof c.distribution === "object") {
+    return Object.entries(c.distribution)
+      .filter(([, count]) => count != null)
+      .sort((a, b) => Number(b[1]) - Number(a[1]))
+      .slice(0, 3)
+      .map(([label, count]) => `${String(label).replace(/_/g, " ")} (${count})`)
+      .join(", ");
+  }
+  return "";
+};
+
 const criterionRow = (c, fallbackName) => {
   if (c == null) return null;
   if (typeof c !== "object") return { name: fallbackName, value: c, weight: null };
   const name = c.name ?? c.criterion ?? c.label ?? c.parameter ?? c.property ?? c.key ?? fallbackName;
-  const value =
-    c.value ?? c.target ?? c.targetValue ?? c.target_value ?? c.range ?? c.goodValue ?? c.good_value ??
-    c.ideal ?? c.criterionValue ?? c.criterion_value ?? "";
+  const value = criterionTarget(c);
   const weight = c.weight ?? c.defaultWeight ?? c.default_weight ?? null;
   return name == null || name === "" ? null : { ...c, name: String(name), value, weight };
 };
@@ -289,7 +333,11 @@ export const normalizeCuratexProfile = (payload) => {
 
   return {
     hasData: criteria.length > 0 || Boolean(payload?.target ?? payload?.result?.target),
-    target: payload?.target ?? payload?.result?.target ?? payload?.profile?.target ?? null,
+    // `target` can be an object ({ geneSymbol: "JAK2", … }).
+    target: (() => {
+      const t = payload?.target ?? payload?.result?.target ?? payload?.profile?.target ?? null;
+      return t && typeof t === "object" ? t.geneSymbol ?? t.gene_symbol ?? t.symbol ?? t.name ?? t.id ?? null : t;
+    })(),
     profileData,
     labels,
     criteria,
@@ -342,9 +390,14 @@ export const toApiWeights = (formWeights, profile) => {
 export const toApiValues = (formValues, profile) => {
   if (!formValues || typeof formValues !== "object") return {};
   const map = profile?.fieldToCriterion ?? {};
+  const original = profile?.profileData ?? {};
   const out = {};
   Object.entries(formValues).forEach(([key, value]) => {
     if (value == null || String(value).trim() === "") return;
+    // Only values the researcher changed. Unchanged rows now show a range
+    // built from min/max/median ("0.15 – 0.93 (median 0.55)"); sending that
+    // text back would replace the profile's own numbers with a string.
+    if (key in original && String(original[key]) === String(value)) return;
     out[map[key] ?? key] = value;
   });
   return out;

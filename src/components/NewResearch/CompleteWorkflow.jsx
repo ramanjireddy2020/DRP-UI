@@ -178,7 +178,10 @@ const CompleteWorkflow = () => {
   // was started with.
   const query = entryQuery || session.title || "";
 
-  const workflowPhase = session.activePhase ?? "txkg-loading";
+  // Only default to TxKG's loading screen while a session is being created;
+  // a session the supervisor answered without starting a module has no
+  // phase (the header used to read "TxKG / Searching" for "open report.pdf").
+  const workflowPhase = session.activePhase ?? (session.activeKey || session.status !== "ready" ? "txkg-loading" : "");
   const activeStep = session.activeIndex;
 
   /**
@@ -1036,6 +1039,10 @@ const CompleteWorkflow = () => {
     // Every CurateX phase is titled "Drug Curation", matching "Literature
     // mining" for LitMineX; it read "Target profile" / "Compound screening".
     const getTabInfo = () => {
+      // No module has run: the supervisor answered in chat.
+      if (!session.activeKey && session.status === "ready") {
+        return { badge: "", title: "Research assistant", count: "", dotColor: "#00BCD4", statusText: session.pending ? "Thinking…" : "Waiting for your request" };
+      }
       switch (workflowPhase) {
         case 'txkg-loading':    return { badge: 1, title: "Target identification query", count: "", dotColor: "#FFC107", statusText: running || "Searching databases" };
         case 'txkg-results':   return { badge: 1, title: "Target identification",       count: countOf(txkgCount), dotColor: "#00BCD4", statusText: txkgCount == null ? "No targets returned" : `${plural(txkgCount, "target")} found` };
@@ -1059,9 +1066,16 @@ const CompleteWorkflow = () => {
     // The second entry here was an invented "Alt · JAK2 + TPOR (MPL)" branch.
     // Branches are created from each card's Branch button; there is no
     // endpoint that lists them, so only the main path is shown.
+    // Branches created here, plus any the server reports on reopened steps.
+    const knownBranches = [
+      ...branches,
+      ...[...new Set(session.runs.map((r) => r.branch).filter(Boolean))]
+        .filter((id) => !branches.some((b) => b.id === id))
+        .map((id) => ({ id, name: id, description: "", target: null, moduleKey: session.runs.find((r) => r.branch === id)?.key })),
+    ];
     const BRANCHES = [
       { id: "main", label: "Main", sub: "Main research path" },
-      ...branches.map((b) => ({
+      ...knownBranches.map((b) => ({
         id: b.id,
         label: b.name,
         sub: b.description || [MODULE_BY_KEY[b.moduleKey]?.label, b.target].filter(Boolean).join(" · "),
@@ -1095,9 +1109,11 @@ const CompleteWorkflow = () => {
      * It read "TxKG Query" for the TxKG phases; the trailing "Query" is dropped
      * so the crumb matches the step name in the rail.
      */
-    const lastCrumb = moduleForPhase(workflowPhase)?.label
-      || WORKFLOW_STEPS[activeStep]?.label
-      || "";
+    const lastCrumb = !session.activeKey && session.status === "ready"
+      ? ""
+      : moduleForPhase(workflowPhase)?.label
+        || WORKFLOW_STEPS[activeStep]?.label
+        || "";
     return (
       <Box sx={{ bgcolor: "#FFFFFF", flexShrink: 0, position: "relative" }}>
         {/* Row 1: breadcrumb + All changes saved — hug height, 32px L/R padding, bottom border */}
@@ -2279,8 +2295,11 @@ const CompleteWorkflow = () => {
       }
 
       setBranchState({ pending: true, error: null });
-      // The id is fixed before posting so the branch's run is tagged with it.
-      const branchId = `branch-${Date.now()}`;
+      // The branch is identified by its name — that is what is sent to the
+      // API as `branchName` — made unique if the name is already taken.
+      const taken = new Set([...branches.map((b) => b.id), ...session.runs.map((r) => r.branch).filter(Boolean)]);
+      let branchId = name.trim() || "branch";
+      for (let n = 2; taken.has(branchId); n += 1) branchId = `${name.trim() || "branch"}-${n}`;
       const previousBranch = session.activeBranch ?? null;
       const result = await session.handOff(moduleKey, branchSelections, stepId, { branch: branchId });
       if (!result) {
@@ -2300,7 +2319,7 @@ const CompleteWorkflow = () => {
       setBranchState({ pending: false, error: null });
       setBranchCreated(branch);
     },
-    [branchSource, session]
+    [branchSource, session, branches]
   );
 
   const goToBranch = useCallback(
@@ -2681,7 +2700,13 @@ const CompleteWorkflow = () => {
         status: r.isFailed ? "failed" : r.isRunning ? "running" : r.isCompleted ? "completed" : r.visited ? "running" : "pending",
         selection: r.visited ? selectionFor(r.key) || null : null,
       }));
-    const active = branches.find((b) => b.id === session.activeBranch) ?? null;
+    // A branch reported by the server (reopened session) may not be in the
+    // local list; its id is its name.
+    const active =
+      branches.find((b) => b.id === session.activeBranch) ??
+      (session.activeBranch
+        ? { name: session.activeBranch, target: null, moduleKey: session.runs.find((r) => r.branch === session.activeBranch)?.key }
+        : null);
     return {
       mainLabel: `Main - ${mainTargets || txkgResult.disease || "research path"}`,
       branch: active
@@ -2758,7 +2783,7 @@ const CompleteWorkflow = () => {
             label={
               (block.branch ?? null) !== (session.activeBranch ?? null)
                 ? block.branch
-                  ? branches.find((b) => b.id === block.branch)?.name || "Branch"
+                  ? branches.find((b) => b.id === block.branch)?.name || block.branch
                   : "Main"
                 : "Earlier run"
             }
