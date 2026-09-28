@@ -570,6 +570,12 @@ const AnswerCard = ({ entry, onRetry }) => (
   >
     <AgentHeader />
 
+    {entry.scope?.length > 0 && (
+      <Typography sx={{ ...text, fontSize: "12px", color: "#64748B", mb: "6px" }}>
+        About {entry.scope.length === 1 ? "patent" : "patents"} {entry.scope.join(", ")}
+      </Typography>
+    )}
+
     {entry.pending && (
       <Box sx={{ display: "flex", alignItems: "center", gap: "8px" }}>
         <LoadingDots />
@@ -597,17 +603,13 @@ const AnswerCard = ({ entry, onRetry }) => (
 
     {!entry.pending && !entry.error && (
       <>
-        <Typography
-          sx={{
-            ...text,
-            fontSize: "15px",
-            lineHeight: "23px",
-            fontWeight: 400,
-            whiteSpace: "pre-line",
-          }}
-        >
-          {entry.answer || "NovSearch returned no answer to this question."}
-        </Typography>
+        {entry.answer ? (
+          <FormattedText text={entry.answer} fontSize="15px" lineHeight="23px" color="#334155" />
+        ) : (
+          <Typography sx={{ ...text, fontSize: "15px", lineHeight: "23px" }}>
+            NovSearch returned no answer to this question.
+          </Typography>
+        )}
 
         {(entry.chunksUsed != null || entry.patentIdsUsed?.length > 0) && (
           <Box sx={{ mt: "10px", borderTop: "1px solid #E2E8F0", pt: "10px" }}>
@@ -739,7 +741,7 @@ const ResultsScreen = ({
             : loading
             ? "Loading the novelty report…"
             : patentRows.length
-            ? `Novelty search complete. Analysed ${report.total} patent${report.total === 1 ? "" : "s"}${subject ? ` for ${subject}` : ""}.`
+            ? `Novelty search complete. Analysed ${report.total} patent${report.total === 1 ? "" : "s"}${subject ? ` for ${subject}` : ""}. Tick one or more patents to chat with them below.`
             : "No patents were returned for this candidate."}
         </Typography>
 
@@ -1034,7 +1036,7 @@ const SummaryScreen = ({ report, sessionReport, researcherName, actions = {}, on
    CHAT INPUT
 ============================================================================ */
 
-const ChatInput = ({ value, onChange, onSubmit, disabled = false }) => (
+const ChatInput = ({ value, onChange, onSubmit, disabled = false, placeholder = "Ask a question about the indexed patents..." }) => (
   <Box
     sx={{
       width: "100%",
@@ -1061,7 +1063,7 @@ const ChatInput = ({ value, onChange, onSubmit, disabled = false }) => (
           onSubmit();
         }
       }}
-      placeholder="Ask a question about the indexed patents..."
+      placeholder={placeholder}
       sx={{
         width: "100%",
         border: "none",
@@ -1224,6 +1226,9 @@ const NoveltySearchPhase = ({
 
   const running = isLoading || stage === "loading";
 
+  /** The ticked patents still in the report: what "Chat with patent" asks about. */
+  const chatScope = selectedIds.filter((pid) => (report?.patents ?? []).some((p) => p.id === pid));
+
   const toggleSelected = (id) =>
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
@@ -1231,22 +1236,29 @@ const NoveltySearchPhase = ({
   const askFollowUp = async (question, existingId = null) => {
     const id = existingId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+    // Chat with the selected patent(s): the ticked patents scope the
+    // question. It used to always ask across every indexed patent, so answers
+    // fell back to the top-ranked one (testing). A retry keeps its own scope.
+    const previous = existingId ? thread.find((e) => e.id === existingId) : null;
+    const inReport = new Set((report?.patents ?? []).map((p) => p.id));
+    const scope = previous?.scope ?? selectedIds.filter((pid) => inReport.has(pid));
+
     setThread((prev) =>
       existingId
-        ? prev.map((e) => (e.id === id ? { id, question, pending: true, error: null } : e))
-        : [...prev, { id, question, pending: true, error: null }]
+        ? prev.map((e) => (e.id === id ? { id, question, scope, pending: true, error: null } : e))
+        : [...prev, { id, question, scope, pending: true, error: null }]
     );
 
     try {
-      const result = await askNovSearch({ question, patentIds: null, topK: null });
+      const result = await askNovSearch({ question, patentIds: scope.length ? scope : null, topK: null });
       setThread((prev) =>
-        prev.map((e) => (e.id === id ? { id, question, pending: false, error: null, ...result } : e))
+        prev.map((e) => (e.id === id ? { id, question, scope, pending: false, error: null, ...result } : e))
       );
     } catch (err) {
       setThread((prev) =>
         prev.map((e) =>
           e.id === id
-            ? { id, question, pending: false, error: askError(err, "The question could not be answered.") }
+            ? { id, question, scope, pending: false, error: askError(err, "The question could not be answered.") }
             : e
         )
       );
@@ -1407,11 +1419,42 @@ const NoveltySearchPhase = ({
           },
         }}
       >
+        {/* Chat with patent: the ticked patents are what the next question
+            is about. Untick to go back to asking across all of them. */}
+        {chatScope.length > 0 && (
+          <Box sx={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "6px", mb: "8px" }}>
+            <Typography sx={{ ...text, fontSize: "12px", color: "#475569", fontWeight: 600 }}>
+              Chatting with:
+            </Typography>
+            {chatScope.map((pid) => (
+              <Box
+                key={pid}
+                sx={{ display: "inline-flex", alignItems: "center", gap: "4px", p: "2px 8px", borderRadius: "12px", bgcolor: "rgba(0,188,212,0.1)" }}
+              >
+                <Typography sx={{ ...text, fontSize: "12px", color: TEAL, fontWeight: 600 }}>{pid}</Typography>
+                <Box
+                  component="button"
+                  type="button"
+                  aria-label={`Stop chatting about ${pid}`}
+                  onClick={() => toggleSelected(pid)}
+                  sx={{ border: "none", background: "none", cursor: "pointer", color: "#64748B", p: 0, fontSize: "13px", lineHeight: 1 }}
+                >
+                  ×
+                </Box>
+              </Box>
+            ))}
+          </Box>
+        )}
         <ChatInput
           value={inputValue}
           onChange={setInputValue}
           onSubmit={handleSubmit}
           disabled={running || stage === "summary"}
+          placeholder={
+            chatScope.length
+              ? `Ask about the ${chatScope.length === 1 ? "selected patent" : `${chatScope.length} selected patents`} (e.g. what does claim 3 mean?)`
+              : "Ask a question about the indexed patents, or tick patents above to chat with them..."
+          }
         />
       </Box>
     </Box>
