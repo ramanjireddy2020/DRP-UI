@@ -308,7 +308,13 @@ function reducer(state, action) {
         );
       }
 
+      // A different step replaces the module's previous one: its summary
+      // (e.g. ScreenSuite's "JAK2 matches 5 structures" shortlist) must not
+      // carry over and resurface on the new step's card.
+      const newStep = stepId && existing.stepId && stepId !== existing.stepId;
+
       const next = withStep(state, key, {
+        ...(newStep ? { data: { ...(existing.data ?? {}), summary: null } } : {}),
         visited: true,
         phase: phase ?? existing.phase ?? module.loadingPhase,
         // Only overwrite ids when new ones are supplied, so re-activating a

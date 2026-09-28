@@ -25,7 +25,7 @@ import {
  * @param {boolean}     options.enabled     - default true
  * @param {number}      options.initialDelay - first poll delay, ms (default 1000)
  * @param {number}      options.maxDelay     - delay ceiling, ms (default 5000)
- * @param {number}      options.timeout      - give up after, ms (default 300000 / 5 min)
+ * @param {number}      options.timeout      - give up after, ms (default: never)
  * @param {boolean}     options.fetchResult  - fetch /result on success (default true).
  *   Pass false for modules that have their own results endpoint — only TxKG
  *   reads the generic /result.
@@ -38,10 +38,12 @@ const useJob = (jobId, options = {}) => {
     enabled = true,
     initialDelay = 1000,
     maxDelay = 5000,
-    // Docking in particular is slow — the mock stood in for it with an 8s timer.
-    // 5 minutes is generous rather than tuned; the real cadence is an open
-    // question against the live API.
-    timeout = 300000,
+    // No client-side give-up by default. It was 5 minutes, and docking can run
+    // longer — especially in a background tab, where browsers slow timers —
+    // so a still-running dock was marked failed and the card fell back to a
+    // stale "choose a structure" / "no hits" state (testing). The job's own
+    // status decides when it is finished.
+    timeout = Infinity,
     fetchResult = true,
   } = options;
 
@@ -124,8 +126,14 @@ const useJob = (jobId, options = {}) => {
 
     const startedAt = Date.now();
     let delay = initialDelay;
+    // A status read can fail transiently (network blip, tab waking up), so a
+    // few in a row are retried before the job is reported as unreadable.
+    let consecutiveErrors = 0;
+    const MAX_CONSECUTIVE_ERRORS = 3;
+    let inFlight = false;
 
     const finishWithError = (err, fallbackMessage) => {
+      timerRef.current = null;
       if (cancelledRef.current) return;
       setError(err?.userMessage || err?.message || fallbackMessage);
       setIsFailed(true);
@@ -133,6 +141,8 @@ const useJob = (jobId, options = {}) => {
     };
 
     const poll = async () => {
+      // The pending timer (if any) has fired or been superseded.
+      timerRef.current = null;
       if (cancelledRef.current) return;
 
       if (Date.now() - startedAt > timeout) {
@@ -144,14 +154,23 @@ const useJob = (jobId, options = {}) => {
       }
 
       let payload;
+      inFlight = true;
       try {
         payload = await getJobStatus(jobId);
+        consecutiveErrors = 0;
       } catch (err) {
+        inFlight = false;
         // A 401 is already handled globally by the response interceptor.
+        consecutiveErrors += 1;
+        if (consecutiveErrors < MAX_CONSECUTIVE_ERRORS && err?.status !== 404) {
+          timerRef.current = setTimeout(poll, maxDelay);
+          return;
+        }
         finishWithError(err, "Could not read the job status.");
         return;
       }
 
+      inFlight = false;
       if (cancelledRef.current) return;
 
       setStatusPayload(payload);
@@ -195,9 +214,21 @@ const useJob = (jobId, options = {}) => {
     // sit on a loading screen for a second for no reason.
     poll();
 
+    // Coming back to the tab: check straight away instead of waiting out a
+    // timer the browser slowed down while the tab was hidden.
+    const onVisible = () => {
+      if (document.visibilityState !== "visible" || cancelledRef.current) return;
+      // Only when a poll is waiting on its timer, not mid-request or finished.
+      if (inFlight || !timerRef.current) return;
+      clearTimer();
+      poll();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
     return () => {
       cancelledRef.current = true;
       clearTimer();
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [jobId, enabled, attempt, initialDelay, maxDelay, timeout, fetchResult]);
 
