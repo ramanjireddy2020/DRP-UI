@@ -2645,7 +2645,14 @@ const CompleteWorkflow = () => {
 
     runs.forEach((run) => {
       const own = conversation.filter(
-        (m) => m.moduleKey === run.key && (m.runId ? m.runId === run.id : firstRunOf[run.key] === run.id)
+        (m) =>
+          m.moduleKey === run.key &&
+          (m.runId ? m.runId === run.id : firstRunOf[run.key] === run.id) &&
+          // A module's automatic summary (added by the post-job sync)
+          // repeats what its card already shows — e.g. the TxKG
+          // interpretation that is in Insights — so it isn't drawn in the
+          // thread (testing: duplicate supervisor/module responses).
+          !(m.auto && m.role !== "user")
       );
       // The card is the answer to the prompt that ran the module. For TxKG
       // and CurateX the backend attaches automatic agent text ahead of it:

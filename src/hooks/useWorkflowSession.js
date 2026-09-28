@@ -241,6 +241,10 @@ function reducer(state, action) {
               return { runId: run?.id ?? null, branch: run?.branch ?? null };
             })(),
             fromModule: m.role === "user" ? undefined : Boolean(resolveModuleKey(m.module ?? m.agentName)),
+            // Not something the user typed or was answered live: a message the
+            // server wrote on its own, such as a module's summary when its
+            // job finished. The timeline hides these under module cards.
+            auto: true,
           });
         });
 
