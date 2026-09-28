@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Box, Button, Checkbox, Typography } from "@mui/material";
 import { definitionFor } from "../../../workflow/txkgResult";
@@ -110,36 +110,6 @@ const primaryButton = {
    SVG ICONS
 ============================================================================ */
 
-
-const LinkIcon = ({ color = TEAL }) => (
-  <svg
-    width="15"
-    height="15"
-    viewBox="0 0 24 24"
-    fill="none"
-  >
-    <path
-      d="M10 13.5L14 9.5"
-      stroke={color}
-      strokeWidth="2"
-      strokeLinecap="round"
-    />
-    <path
-      d="M7.5 16.5L5.8 18.2C4.25 19.75 1.75 19.75 0.2 18.2C-1.35 16.65-1.35 14.15 0.2 12.6L4.4 8.4C5.95 6.85 8.45 6.85 10 8.4"
-      transform="translate(3 0)"
-      stroke={color}
-      strokeWidth="2"
-      strokeLinecap="round"
-    />
-    <path
-      d="M14 15.6C15.55 17.15 18.05 17.15 19.6 15.6L23.8 11.4C25.35 9.85 25.35 7.35 23.8 5.8C22.25 4.25 19.75 4.25 18.2 5.8L16.5 7.5"
-      transform="translate(-3 0)"
-      stroke={color}
-      strokeWidth="2"
-      strokeLinecap="round"
-    />
-  </svg>
-);
 
 const PlusIcon = () => (
   <Typography
@@ -274,7 +244,7 @@ const UserMessage = ({ children }) => {
 /**
  * @param {object[]} rows - normalised patents from
  *   GET /agents/novsearch/{jobId}/report — { id, title, relevance }.
- * @param {boolean} selectable - adds the checkbox column Compare reads from.
+ * @param {boolean} selectable - adds the checkbox column (patents to chat about).
  */
 const PatentTable = ({ rows = [], selectable = false, selectedIds = [], onToggle, emptyText, relevanceHelp = null }) => {
   const columns = selectable
@@ -553,7 +523,7 @@ const InsightsCard = ({ report }) => {
 };
 
 /* ============================================================================
-   ASK ANSWERS (Compare + follow-up)
+   ASK ANSWERS (follow-up)
 ============================================================================ */
 
 const LoadingDots = () => (
@@ -651,7 +621,9 @@ const AnswerCard = ({ entry, onRetry }) => (
    RESULTS ACTIONS
 ============================================================================ */
 
-const ResultsActions = ({ onCompare, selectedCount = 0, onFinish, actions = {} }) => (
+// "Compare Selected" was removed (testing). Ticked patents are used for
+// chat with the selected patent(s) instead.
+const ResultsActions = ({ onFinish, actions = {} }) => (
   <Box sx={{ display: "flex", flexDirection: "column", gap: "12px", mt: "24px" }}>
     <Box
       sx={{
@@ -661,26 +633,6 @@ const ResultsActions = ({ onCompare, selectedCount = 0, onFinish, actions = {} }
         flexWrap: "wrap",
       }}
     >
-      {/* Was "View Patent Details", which opened a hardcoded comparison of
-          three patents that were never in the report. */}
-      <Button
-        onClick={onCompare}
-        disabled={selectedCount < 2}
-        title={selectedCount < 2 ? "Select at least two patents to compare" : undefined}
-        sx={{
-          ...buttonBase,
-          color: TEAL,
-          borderColor: "#DCE3EA",
-          display: "flex",
-          alignItems: "center",
-          gap: "8px",
-          "&.Mui-disabled": { color: "#94A3B8" },
-        }}
-      >
-        <LinkIcon color={selectedCount < 2 ? "#94A3B8" : TEAL} />
-        Compare Selected{selectedCount ? ` (${selectedCount})` : ""}
-      </Button>
-
       {onFinish && (
         <Button sx={buttonBase} onClick={onFinish}>
           Finish Research
@@ -738,7 +690,6 @@ const ResultsScreen = ({
   actions = {},
   selectedIds = [],
   onToggle,
-  onCompare,
   onFinish,
 }) => {
   const patentRows = report?.patents ?? [];
@@ -778,7 +729,7 @@ const ResultsScreen = ({
             : loading
             ? "Loading the novelty report…"
             : patentRows.length
-            ? `Novelty search complete. Analysed ${report.total} patent${report.total === 1 ? "" : "s"}${subject ? ` for ${subject}` : ""}. Select patents to compare them:`
+            ? `Novelty search complete. Analysed ${report.total} patent${report.total === 1 ? "" : "s"}${subject ? ` for ${subject}` : ""}.`
             : "No patents were returned for this candidate."}
         </Typography>
 
@@ -814,8 +765,6 @@ const ResultsScreen = ({
         </Box>
 
         <ResultsActions
-          onCompare={onCompare}
-          selectedCount={selectedIds.length}
           onFinish={onFinish}
           actions={actions}
         />
@@ -823,59 +772,6 @@ const ResultsScreen = ({
     </>
   );
 };
-
-/* ============================================================================
-   COMPARISON SCREEN
-============================================================================ */
-
-/**
- * Compare → POST /agents/novsearch/ask with the selected patentIds.
- *
- * This screen used to be an empty table under a hardcoded question about
- * US10234567, EP3456789 and US10294021 and a hardcoded answer; the ask
- * endpoint was never called.
- */
-const ComparisonScreen = ({ rows = [], comparison, onBack, onRetry, actions = {} }) => (
-  <>
-    <Box
-      sx={{
-        width: "100%",
-        boxSizing: "border-box",
-        border: "1px solid #E2E8F0",
-        borderRadius: "12px",
-        background: "#FFFFFF",
-        padding: "16px",
-        mb: "40px",
-      }}
-    >
-      <PatentTable rows={rows} emptyText="The selected patents are no longer in the report." />
-
-      <Box
-        sx={{
-          display: "flex",
-          flexDirection: "column",
-          gap: "12px",
-          mt: "24px",
-        }}
-      >
-        <Box>
-          <Button sx={buttonBase} onClick={onBack}>
-            Back to Results
-          </Button>
-        </Box>
-
-        <PhaseActions {...actions} />
-      </Box>
-    </Box>
-
-    {comparison && (
-      <>
-        <UserMessage>{comparison.question}</UserMessage>
-        <AnswerCard entry={comparison} onRetry={onRetry} />
-      </>
-    )}
-  </>
-);
 
 /* ============================================================================
    END TASK
@@ -1246,13 +1142,6 @@ const getInitialStage = (workflowPhase) => {
     return "decision";
   }
 
-  if (
-    value.includes("comparison") ||
-    value.includes("compare")
-  ) {
-    return "comparison";
-  }
-
   return "results";
 };
 
@@ -1303,12 +1192,8 @@ const NoveltySearchPhase = ({
 
   const [inputValue, setInputValue] = useState("");
 
-  /** Patents ticked in the results table, for Compare. */
+  /** Patents ticked in the results table. */
   const [selectedIds, setSelectedIds] = useState([]);
-
-  /** The Compare exchange: { question, ids, pending, error, answer, … }. */
-  const [comparison, setComparison] = useState(null);
-  const comparisonRequestRef = useRef(0);
 
   /** Follow-up questions and their answers, in order. */
   const [thread, setThread] = useState([]);
@@ -1328,41 +1213,9 @@ const NoveltySearchPhase = ({
   }, [workflowPhase]);
 
   const running = isLoading || stage === "loading";
-  const patents = useMemo(() => report?.patents ?? [], [report]);
 
   const toggleSelected = (id) =>
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
-
-  /** Compare → ask({ question, patentIds: selected, topK: null }). */
-  const runComparison = async (ids) => {
-    if (!ids.length) return;
-
-    const question = `Compare patents ${ids.join(", ")}. What are the common mechanisms and how do they differ in their approach?`;
-    const requestId = ++comparisonRequestRef.current;
-
-    setComparison({ question, ids, pending: true, error: null });
-    setStage("comparison");
-
-    try {
-      const result = await askNovSearch({ question, patentIds: ids, topK: null });
-      if (requestId !== comparisonRequestRef.current) return;
-      setComparison({ question, ids, pending: false, error: null, ...result });
-    } catch (err) {
-      if (requestId !== comparisonRequestRef.current) return;
-      setComparison({
-        question,
-        ids,
-        pending: false,
-        error: askError(err, "The comparison could not be run."),
-      });
-    }
-  };
-
-  const handleCompare = () => {
-    // Only patents still in the report — a rerun can replace the list.
-    const ids = selectedIds.filter((id) => patents.some((p) => p.id === id));
-    runComparison(ids);
-  };
 
   /** Follow-up box → ask({ question, patentIds: null, topK: null }) over every indexed patent. */
   const askFollowUp = async (question, existingId = null) => {
@@ -1420,8 +1273,6 @@ const NoveltySearchPhase = ({
       });
     }
   };
-
-  const comparisonRows = patents.filter((p) => comparison?.ids?.includes(p.id));
 
   return (
     <Box
@@ -1481,22 +1332,7 @@ const NoveltySearchPhase = ({
             onRetry={onRetry}
             selectedIds={selectedIds}
             onToggle={toggleSelected}
-            onCompare={handleCompare}
             onFinish={stage === "summary" ? undefined : () => setStage("decision")}
-          />
-        )}
-
-        {/* ================================================================
-            COMPARISON
-        ================================================================= */}
-
-        {!running && stage === "comparison" && (
-          <ComparisonScreen
-            actions={actions}
-            rows={comparisonRows}
-            comparison={comparison}
-            onBack={() => setStage("results")}
-            onRetry={comparison ? () => runComparison(comparison.ids) : undefined}
           />
         )}
 
