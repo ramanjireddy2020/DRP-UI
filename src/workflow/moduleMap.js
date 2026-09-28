@@ -104,8 +104,11 @@ export const MODULES = [
 export const PIPELINE = {
   key: "pipeline",
   index: 0,
-  label: "SaaS Pipeline",
-  agentRole: "Full Pipeline Agent",
+  // Shown on screen. "SaaS Pipeline" isn't a user-facing agent name
+  // (testing), so the card reads "Full Pipeline"; the API's own spelling
+  // stays in apiKey and the aliases below.
+  label: "Full Pipeline",
+  agentRole: "All five agents in sequence",
   number: "—",
   apiKey: "SaaS Pipeline",
   isPipeline: true,
@@ -174,6 +177,7 @@ const ALIASES = {
   saaspipeline: "pipeline",
   "saas-pipeline": "pipeline",
   "full-pipeline": "pipeline",
+  "full pipeline": "pipeline",
 };
 
 /**
