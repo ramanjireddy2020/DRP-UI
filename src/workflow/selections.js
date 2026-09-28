@@ -107,9 +107,13 @@ export const buildSelections = (moduleKey, picks = {}) => {
       return { targetIds: picks.targetIds ?? [] };
 
     case "screensuite":
+      // One or more proteins × one or more compounds. `target` (the first
+      // protein) is kept for payloads that read a single target.
       return {
-        target: picks.target ?? null,
+        target: picks.target ?? picks.targets?.[0] ?? null,
+        ...(Array.isArray(picks.targets) && picks.targets.length ? { targets: picks.targets } : {}),
         compounds: picks.compounds ?? [],
+        ...(picks.pdbId ? { pdbId: picks.pdbId } : {}),
       };
 
     case "novsearch":

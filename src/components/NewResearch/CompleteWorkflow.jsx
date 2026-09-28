@@ -22,7 +22,7 @@ import usePhaseResults from "../../hooks/usePhaseResults";
 import { moduleForPhase, isErrorPhase, isLoadingPhase, MODULE_BY_KEY } from "../../workflow/moduleMap";
 import { normalizeTxkgResult, normalizeMetapath } from "../../workflow/txkgResult";
 import { getArtifacts } from "../../services/api/sessions";
-import { toGeneNames, buildSelections } from "../../workflow/selections";
+import { toGeneNames, buildSelections, geneNameForTarget } from "../../workflow/selections";
 import { toApiWeights, toApiValues } from "../../workflow/phaseResults";
 import { withProductWording } from "../../workflow/wording";
 import { buildSessionReport } from "../../workflow/sessionReport";
@@ -36,6 +36,7 @@ import {
 } from "../../services/api/screensuite";
 import PhaseError from "../workflow/PhaseError";
 import PdbPicker from "../workflow/ScreeningSuite/PdbPicker";
+import ScreeningPicker from "../workflow/ScreeningSuite/ScreeningPicker";
 import { readPdbShortlist } from "../../workflow/pdbShortlist";
 import ChatInputBar from "../workflow/ChatInputBar";
 import PipelinePhase from "../workflow/PipelinePhase";
@@ -2011,14 +2012,48 @@ const CompleteWorkflow = () => {
   }, [curatexProfile.data, selectedTargets, txkgResult, session, setWorkflowPhase]);
 
   /** CurateX → ScreenSuite, carrying the chosen candidates. */
-  const handleContinueToScreenSuite = useCallback(() => {
-    const target = curatexResults.data?.target || curatexProfile.data?.target || null;
-    const compounds = selectedCompound
-      ? [selectedCompound.name]
-      : (curatexResults.data?.compounds ?? []).slice(0, 5).map((c) => c.name);
+  /**
+   * CurateX → ScreenSuite: choose the proteins and candidates first.
+   *
+   * This used to send one target (CurateX's) and either the last compound
+   * clicked or CurateX's top five, with no way to choose (testing). The
+   * picker offers the TxKG targets and the CurateX candidates, plus free-text
+   * entries, and the step is posted with exactly what was ticked.
+   */
+  const [screeningPickerOpen, setScreeningPickerOpen] = useState(false);
+  const handleContinueToScreenSuite = useCallback(() => setScreeningPickerOpen(true), []);
 
-    session.handOff("screensuite", buildSelections("screensuite", { target, compounds }));
-  }, [curatexResults.data, curatexProfile.data, selectedCompound, session]);
+  const screeningOptions = useMemo(() => {
+    const curatexTarget = curatexResults.data?.target || curatexProfile.data?.target || null;
+    const seen = new Set();
+    const proteins = [];
+    const addProtein = (value, detail) => {
+      const key = String(value ?? "").trim();
+      if (!key || seen.has(key.toUpperCase())) return;
+      seen.add(key.toUpperCase());
+      proteins.push({ value: key, detail: detail || "" });
+    };
+    if (curatexTarget) addProtein(curatexTarget, "CurateX target");
+    txkgResult.targets.forEach((t) => addProtein(geneNameForTarget(t), t.fullName));
+    const compounds = (curatexResults.data?.compounds ?? []).map((c) => ({
+      value: c.name,
+      detail: c.score && c.score !== "—" ? `score ${c.score}` : "",
+    }));
+    return {
+      proteins,
+      compounds,
+      initialProteins: curatexTarget ? [curatexTarget] : proteins.slice(0, 1).map((p) => p.value),
+      initialCompounds: selectedCompound ? [selectedCompound.name] : compounds.slice(0, 1).map((c) => c.value),
+    };
+  }, [curatexResults.data, curatexProfile.data, txkgResult.targets, selectedCompound]);
+
+  const handleConfirmScreening = useCallback(
+    ({ proteins, compounds }) => {
+      setScreeningPickerOpen(false);
+      session.handOff("screensuite", buildSelections("screensuite", { targets: proteins, compounds }));
+    },
+    [session]
+  );
 
   /**
    * Retry a failed step.
@@ -2533,7 +2568,17 @@ const CompleteWorkflow = () => {
     }
 
     if (moduleKey === "screensuite") {
+      const sel = step?.data?.selections ?? {};
+      const screenedProteins = Array.isArray(sel.targets) && sel.targets.length ? sel.targets : sel.target ? [sel.target] : [];
+      const screenedCompounds = Array.isArray(sel.compounds) ? sel.compounds : [];
       return (
+        <>
+        {/* The exact combination this run screens, so results stay tied to it. */}
+        {(screenedProteins.length > 0 || screenedCompounds.length > 0) && (
+          <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: "#475569", mb: "8px" }}>
+            Screening <strong>{screenedProteins.join(", ") || "—"}</strong> × <strong>{screenedCompounds.join(", ") || "—"}</strong>
+          </Typography>
+        )}
         <ScreeningSuitePhase
           workflowPhase={phase}
           progressMessage={screensuiteJob.progressMessage}
@@ -2547,6 +2592,7 @@ const CompleteWorkflow = () => {
           target={step?.data?.selections?.target ?? null}
           compounds={step?.data?.selections?.compounds ?? []}
         />
+        </>
       );
     }
 
@@ -2902,6 +2948,16 @@ const CompleteWorkflow = () => {
         pending={session.pending}
         onCancel={() => setCuratexPickerOpen(false)}
         onConfirm={handleConfirmCurateXTarget}
+      />
+      <ScreeningPicker
+        open={screeningPickerOpen}
+        proteinOptions={screeningOptions.proteins}
+        compoundOptions={screeningOptions.compounds}
+        initialProteins={screeningOptions.initialProteins}
+        initialCompounds={screeningOptions.initialCompounds}
+        pending={session.pending}
+        onCancel={() => setScreeningPickerOpen(false)}
+        onConfirm={handleConfirmScreening}
       />
       <BranchDialog
         source={branchSource}
