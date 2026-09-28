@@ -619,11 +619,44 @@ const useWorkflowSession = () => {
     });
 
     if (Array.isArray(raw?.messages)) {
+      /**
+       * Where each restored message goes relative to its step's card. The
+       * server list carries no such marker, so every message used to be drawn
+       * BEFORE its module's card, including questions asked after it ran
+       * (testing). Per step, in server order:
+       *  - the first question is what started the step → before the card;
+       *  - agent messages before the step's SECOND question are the step's
+       *    own output (the module's summary, which its card shows) →
+       *    automatic, and not drawn under the card;
+       *  - later questions and their answers → after the card.
+       * When both the message and the step carry timestamps, those decide.
+       */
+      const time = (v) => {
+        const t = Date.parse(v ?? "");
+        return Number.isFinite(t) ? t : null;
+      };
+      const questionsSeen = new Map();
       dispatch({
         type: "REPLACE_CONVERSATION",
         messages: raw.messages.map((m) => {
           const owner = steps.find((s) => s.id === m.stepId);
           const key = owner ? parseStepResponse(owner).moduleKey : null;
+          const isUser = String(m.role ?? "").toLowerCase() === "user";
+          let afterCard = false;
+          let auto = false;
+          if (owner) {
+            const mt = time(m.createdAt ?? m.created_at ?? m.timestamp);
+            const st = time(owner.createdAt ?? owner.created_at);
+            if (isUser) questionsSeen.set(owner.id, (questionsSeen.get(owner.id) || 0) + 1);
+            const asked = questionsSeen.get(owner.id) || 0;
+            const firstQuestion = isUser && asked === 1;
+            if (mt != null && st != null) {
+              afterCard = mt > st && !firstQuestion;
+            } else {
+              afterCard = asked > 0 && !firstQuestion;
+            }
+            auto = !isUser && asked <= 1;
+          }
           return {
             role: m.role,
             text: m.content,
@@ -632,6 +665,8 @@ const useWorkflowSession = () => {
             moduleKey: key,
             stepIndex: key ? MODULE_BY_KEY[key]?.index ?? null : null,
             branch: m.branchName || owner?.branchName || null,
+            afterCard,
+            auto,
           };
         }),
       });

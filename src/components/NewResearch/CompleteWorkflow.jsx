@@ -2647,7 +2647,13 @@ const CompleteWorkflow = () => {
       const own = conversation.filter(
         (m) =>
           m.moduleKey === run.key &&
-          (m.runId ? m.runId === run.id : firstRunOf[run.key] === run.id) &&
+          // By run; a restored message has no run, so it goes with the run
+          // of its own step, else the module's first run.
+          (m.runId
+            ? m.runId === run.id
+            : m.stepId && runs.some((r) => r.stepId === m.stepId)
+            ? run.stepId === m.stepId
+            : firstRunOf[run.key] === run.id) &&
           // A module's automatic summary (added by the post-job sync)
           // repeats what its card already shows — e.g. the TxKG
           // interpretation that is in Insights — so it isn't drawn in the
