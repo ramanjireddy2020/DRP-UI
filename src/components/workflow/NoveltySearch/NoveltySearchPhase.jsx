@@ -307,7 +307,7 @@ const PatentTable = ({ rows = [], selectable = false, selectedIds = [], onToggle
         <Typography sx={tableHeader}>PATENT ID</Typography>
         <Typography sx={tableHeader}>TITLE</Typography>
         {/* What relevance measures, from the report's scoreDefinitions. */}
-        <Typography sx={{ ...tableHeader, cursor: relevanceHelp ? "help" : "default" }} title={relevanceHelp || undefined}>
+        <Typography sx={{ ...tableHeader, textAlign: "right", cursor: relevanceHelp ? "help" : "default" }} title={relevanceHelp || undefined}>
           RELEVANCE{relevanceHelp ? " ⓘ" : ""}
         </Typography>
       </Box>
@@ -366,11 +366,14 @@ const PatentTable = ({ rows = [], selectable = false, selectedIds = [], onToggle
             {patent.title}
           </Typography>
 
+          {/* Right-aligned with fixed-width digits so 10.00 and 0.81 line up. */}
           <Typography
             sx={{
               ...tableCell,
               fontWeight: 600,
               color: "#374151",
+              textAlign: "right",
+              fontVariantNumeric: "tabular-nums",
             }}
           >
             {patent.relevance}
@@ -489,7 +492,7 @@ const InsightsCard = ({ report }) => {
 
         {viability && (
           <Box
-            title={`Estimated from the highest patent relevance (${viability.top.toFixed(2)}). The API returns no verdict.`}
+            title={`Estimated from the highest patent relevance (${viability.top.toFixed(2)}).`}
             sx={{
               px: "8px",
               py: "2px",
@@ -541,7 +544,7 @@ const InsightsCard = ({ report }) => {
           sx={{ ...text, fontSize: "10px", lineHeight: "14px", color: "#94A3B8", mt: "10px" }}
         >
           The viability badge is an estimate from the highest patent relevance
-          ({viability.top.toFixed(2)}), not a verdict from the API.
+          ({viability.top.toFixed(2)}).
         </Typography>
       )}
     </Box>

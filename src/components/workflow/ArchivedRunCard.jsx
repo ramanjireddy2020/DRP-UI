@@ -12,7 +12,7 @@ import { moduleDisplayFor } from "../../workflow/moduleMap";
  * this keeps what the earlier run found — captured when it was superseded — in
  * its place above, collapsed by default.
  */
-const ArchivedRunCard = ({ moduleKey, snapshot }) => {
+const ArchivedRunCard = ({ moduleKey, snapshot, label = "Earlier run" }) => {
   const [open, setOpen] = useState(false);
   const display = moduleDisplayFor(moduleKey);
 
@@ -37,7 +37,7 @@ const ArchivedRunCard = ({ moduleKey, snapshot }) => {
       >
         <Box sx={{ flex: 1 }}>
           <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 700, color: "#1E293B", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-            {display?.label || moduleKey} · Earlier run
+            {display?.label || moduleKey} · {label}
           </Typography>
           <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: TEXT_MUTED }}>
             {snapshot?.summary || "Superseded by the run below."}

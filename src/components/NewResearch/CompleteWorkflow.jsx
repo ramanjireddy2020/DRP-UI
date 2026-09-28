@@ -222,7 +222,6 @@ const CompleteWorkflow = () => {
   const [showArticleDetail, setShowArticleDetail] = useState(false);
   const [selectedArticle, setSelectedArticle] = useState(null);
   const [branchOpen, setBranchOpen] = useState(false);
-  const [selectedBranch, setSelectedBranch] = useState("main");
   const [viewMode, setViewMode] = useState("chat"); // 'chat' | 'artifacts'
   const [showShareDialog, setShowShareDialog] = useState(false);
 
@@ -1069,6 +1068,9 @@ const CompleteWorkflow = () => {
         branch: b,
       })),
     ];
+    // The branch in view comes from the session (null = Main), so the
+    // conversation below follows the header's selection.
+    const selectedBranch = session.activeBranch ?? "main";
     const selectedBranchLabel = BRANCHES.find((b) => b.id === selectedBranch)?.label || "Main";
 
     /**
@@ -1260,9 +1262,9 @@ const CompleteWorkflow = () => {
                       key={branch.id}
                       className="branch-item"
                       onClick={() => {
-                        setSelectedBranch(branch.id);
+                        session.setActiveBranch(branch.branch ? branch.id : null);
                         setBranchOpen(false);
-                        if (branch.branch) scrollToModule(branch.branch.moduleKey);
+                        if (branch.branch) window.setTimeout(() => scrollToModule(branch.branch.moduleKey), 0);
                       }}
                       style={{ cursor: "pointer" }}
                     >
@@ -2140,7 +2142,16 @@ const CompleteWorkflow = () => {
       // { success, message } — a 200 is not proof of a save; `success` is.
       const response = await litminexApi.saveArticle(selectedArticle.id, location.state?.projectId ?? null);
       if (response?.success === true) {
-        setArticleNotice({ text: response.message || "Article saved.", isError: false });
+        // Say WHERE it was saved. The backend's "Article saved to your
+        // library" named no place, and the app has no library screen, so
+        // testing could not tell where it went.
+        const projectName = location.state?.projectName;
+        setArticleNotice({
+          text: location.state?.projectId
+            ? `Article saved to the project${projectName ? ` "${projectName}"` : ""}. It is listed with the project's results.`
+            : "Article saved to your saved articles. This session isn't part of a project, so it isn't filed under one.",
+          isError: false,
+        });
       } else {
         setArticleNotice({
           text: response?.message || "The server did not confirm the save.",
@@ -2268,13 +2279,17 @@ const CompleteWorkflow = () => {
       }
 
       setBranchState({ pending: true, error: null });
-      const result = await session.handOff(moduleKey, branchSelections, stepId);
+      // The id is fixed before posting so the branch's run is tagged with it.
+      const branchId = `branch-${Date.now()}`;
+      const previousBranch = session.activeBranch ?? null;
+      const result = await session.handOff(moduleKey, branchSelections, stepId, { branch: branchId });
       if (!result) {
+        session.setActiveBranch(previousBranch);
         setBranchState({ pending: false, error: "The branch could not be created." });
         return;
       }
       const branch = {
-        id: `branch-${result.stepId || Date.now()}`,
+        id: branchId,
         name,
         description,
         target: changed ? target.toUpperCase() : current || null,
@@ -2290,12 +2305,14 @@ const CompleteWorkflow = () => {
 
   const goToBranch = useCallback(
     (branch) => {
-      setSelectedBranch(branch.id);
+      session.setActiveBranch(branch.id);
       setBranchSource(null);
       setBranchCreated(null);
-      scrollToModule(branch.moduleKey);
+      // After the view switches to the branch.
+      window.setTimeout(() => scrollToModule(branch.moduleKey), 0);
     },
-    [scrollToModule]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scrollToModule, session.setActiveBranch]
   );
 
   /**
@@ -2549,9 +2566,31 @@ const CompleteWorkflow = () => {
    */
   const timelineBlocks = useMemo(() => {
     const blocks = [];
-    const conversation = session.conversation;
-    const runs = session.runs;
+
+    /**
+     * Only what belongs to the branch being viewed (testing: Main and the
+     * branch were drawn on one screen). Main shows Main's runs and messages.
+     * A branch shows Main as it was up to the branch point (runs and messages
+     * that started before the branch's first run), then the branch's own.
+     */
+    const viewBranch = session.activeBranch ?? null;
+    const branchPoint = viewBranch
+      ? session.runs.find((r) => r.branch === viewBranch)?.startSeq ?? Infinity
+      : Infinity;
+    const seqOf = (m) => Number(String(m.id).replace(/^m/, "")) || 0;
+    const inView = (branch, seq) =>
+      (branch ?? null) === viewBranch || ((branch ?? null) === null && seq <= branchPoint);
+
+    const allRuns = session.runs;
+    const runs = allRuns.filter((r) => inView(r.branch, r.startSeq ?? 0));
+    const conversation = session.conversation.filter((m) => inView(m.branch, seqOf(m)));
     const keysWithRuns = new Set(runs.map((r) => r.key));
+    // The module slots hold each module's most recent run overall; a visible
+    // run that is not that one is shown from its snapshot, not the live card.
+    const globalLatestOf = {};
+    allRuns.forEach((r) => {
+      globalLatestOf[r.key] = r.id;
+    });
 
     conversation
       .filter((m) => !m.moduleKey || !keysWithRuns.has(m.moduleKey))
@@ -2591,15 +2630,66 @@ const CompleteWorkflow = () => {
         CARD_IS_THE_ANSWER.has(run.key) ? lead.filter((m) => m.role === "user" || m.isError) : lead
       );
       blocks.push(
-        latestRunOf[run.key] === run.id
-          ? { kind: "module", id: `mod-${run.key}`, moduleKey: run.key }
-          : { kind: "archived", id: `run-${run.id}`, moduleKey: run.key, runId: run.id }
+        latestRunOf[run.key] === run.id && globalLatestOf[run.key] === run.id
+          ? { kind: "module", id: `mod-${run.key}`, moduleKey: run.key, branch: run.branch }
+          : { kind: "archived", id: `run-${run.id}`, moduleKey: run.key, runId: run.id, branch: run.branch }
       );
       pushMessages(own.filter((m) => m.afterCard));
     });
 
     return blocks;
-  }, [session.conversation, session.runs]);
+  }, [session.conversation, session.runs, session.activeBranch]);
+
+  /**
+   * The Lineage page's content, from the live session: the branch in view
+   * and where it forked, Main's targets, and each step's status and selection.
+   * The page used to be a fixed mock-up (TP53 / EGFR / "Alt - JAK2 + TPOR").
+   */
+  const lineage = useMemo(() => {
+    const TITLES = {
+      txkg: "Target identification",
+      litminex: "Literature mining",
+      curatex: "Drug curation",
+      screensuite: "Screening suite",
+      novsearch: "Novelty search",
+    };
+    const join = (list) => (Array.isArray(list) ? list.filter(Boolean).join(", ") : "");
+    const mainTargets = join(toGeneNames(selectedTargets, txkgResult.targets).targetIds);
+    const selectionFor = (key) => {
+      const sel = session.steps[key]?.data?.selections ?? {};
+      switch (key) {
+        case "txkg":
+          return mainTargets || (txkgResult.hasData ? `${txkgResult.count} targets found` : "");
+        case "litminex":
+          return join(sel.targetIds) || (litminex.data?.total ? `${litminex.data.total} articles` : "");
+        case "curatex":
+          return curatexResults.data?.target || curatexProfile.data?.target || join(sel.targetIds);
+        case "screensuite":
+          return [join(sel.compounds), sel.target].filter(Boolean).join(" vs ");
+        case "novsearch":
+          return [sel.drug, sel.target, sel.disease].filter(Boolean).join(" + ");
+        default:
+          return "";
+      }
+    };
+    const steps = session.rail
+      .filter((r) => TITLES[r.key])
+      .map((r, i) => ({
+        id: i + 1,
+        key: r.key,
+        title: TITLES[r.key],
+        status: r.isFailed ? "failed" : r.isRunning ? "running" : r.isCompleted ? "completed" : r.visited ? "running" : "pending",
+        selection: r.visited ? selectionFor(r.key) || null : null,
+      }));
+    const active = branches.find((b) => b.id === session.activeBranch) ?? null;
+    return {
+      mainLabel: `Main - ${mainTargets || txkgResult.disease || "research path"}`,
+      branch: active
+        ? { name: active.name, target: active.target, forkedAt: TITLES[active.moduleKey] || MODULE_BY_KEY[active.moduleKey]?.label || "a step" }
+        : null,
+      steps,
+    };
+  }, [session.rail, session.steps, session.activeBranch, branches, selectedTargets, txkgResult, litminex.data, curatexResults.data, curatexProfile.data]);
 
   /** Status chip for one module's card, from the rail the session already builds. */
   const cardStatusFor = (moduleKey) => {
@@ -2616,7 +2706,7 @@ const CompleteWorkflow = () => {
     if (viewMode === "lineage") {
       return (
         <Box sx={{ flex: 1, p: "24px", overflow: "auto" }}>
-          <LineagePage />
+          <LineagePage lineage={lineage} />
         </Box>
       );
     }
@@ -2660,7 +2750,19 @@ const CompleteWorkflow = () => {
         pending={session.pending}
         scrollAnchors={moduleAnchors}
         renderArchivedRun={(block) => (
-          <ArchivedRunCard moduleKey={block.moduleKey} snapshot={runSnapshots[block.runId]} />
+          <ArchivedRunCard
+            moduleKey={block.moduleKey}
+            snapshot={runSnapshots[block.runId]}
+            // Which line the run belongs to, when it isn't an earlier run of
+            // the branch in view (e.g. Main's run seen from a branch).
+            label={
+              (block.branch ?? null) !== (session.activeBranch ?? null)
+                ? block.branch
+                  ? branches.find((b) => b.id === block.branch)?.name || "Branch"
+                  : "Main"
+                : "Earlier run"
+            }
+          />
         )}
         renderModule={(moduleKey) => (
           <ModuleResultCard

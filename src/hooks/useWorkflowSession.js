@@ -19,6 +19,7 @@ import {
   parseStepResponse,
   parseMessageResponse,
   moduleForPhase,
+  resolveModuleKey,
 } from "../workflow/moduleMap";
 
 /**
@@ -82,6 +83,12 @@ const initialState = {
    */
   runs: [],
   runSeq: 0,
+  /**
+   * The branch being viewed and worked in: null for Main, else a branch id.
+   * Runs and messages record the branch they belong to, so the timeline can
+   * show Main on its own, or Main up to the branch point plus that branch.
+   */
+  activeBranch: null,
   /**
    * Append-only conversation. Each entry carries the module it belongs to, so
    * the thread can be sliced per step without ever dropping a message.
@@ -180,8 +187,19 @@ function reducer(state, action) {
 
       const serverMessages = Array.isArray(raw.messages) ? raw.messages : [];
       if (serverMessages.length) {
-        const signature = (role, text) =>
-          `${String(role || "").toLowerCase()}|${String(text ?? "").trim()}`;
+        // Messages are matched on role + NORMALISED text. Exact text used to
+        // be required, so a server copy that differed only in formatting
+        // (markdown markers, whitespace, a leading @module) was added a second
+        // time — the repeated supervisor replies testing saw.
+        const normalise = (text) =>
+          String(text ?? "")
+            .toLowerCase()
+            .replace(/[*_`#>]/g, "")
+            .replace(/^\s*@\w+\s*/, "")
+            .replace(/\s+/g, " ")
+            .trim();
+        const agentRole = (role) => (String(role || "").toLowerCase() === "user" ? "user" : "agent");
+        const signature = (role, text) => `${agentRole(role)}|${normalise(text)}`;
 
         // Multiset of what is already on screen, so a question asked twice is
         // matched twice rather than collapsing into one.
@@ -210,6 +228,19 @@ function reducer(state, action) {
             stepId: m.stepId || null,
             moduleKey: key,
             stepIndex: key ? MODULE_BY_KEY[key]?.index ?? null : null,
+            // Placed like a live message: after the card when the module is
+            // already on screen, with its current run. Synced messages used
+            // to carry neither, so they were drawn ABOVE a module that had
+            // run before the question was asked.
+            afterCard: Boolean(key && next.steps[key]?.visited),
+            ...(() => {
+              // The run (and so the branch) of the step it was said on.
+              const run =
+                (next.runs ?? []).find((r) => m.stepId && r.stepId === m.stepId) ??
+                [...(next.runs ?? [])].reverse().find((r) => r.key === key);
+              return { runId: run?.id ?? null, branch: run?.branch ?? null };
+            })(),
+            fromModule: m.role === "user" ? undefined : Boolean(resolveModuleKey(m.module ?? m.agentName)),
           });
         });
 
@@ -243,17 +274,28 @@ function reducer(state, action) {
 
       // A new run when the module has never run, or when it is started again
       // on a different step. Rerun (`replace`) keeps the current run.
+      // A module used in a different branch also starts its own run.
+      const branch = action.branch !== undefined ? action.branch : state.activeBranch;
       const runsForKey = state.runs.filter((r) => r.key === key);
       const latestRun = runsForKey[runsForKey.length - 1] ?? null;
       const startsNewRun =
         !latestRun ||
-        (!action.replace && stepId && existing.stepId && stepId !== existing.stepId);
+        (latestRun.branch ?? null) !== (branch ?? null) ||
+        // A different step than the run already has. Compared with the run's
+        // own step, not the module slot's: a branch's run opens before its
+        // step id is known, and filling that in must not open another run.
+        (!action.replace && stepId && latestRun.stepId && stepId !== latestRun.stepId);
 
       let runs = state.runs;
       let runSeq = state.runSeq;
       if (startsNewRun) {
         runSeq += 1;
-        runs = [...runs, { id: `run${runSeq}`, key, stepId: stepId ?? null, jobId: jobId ?? null }];
+        runs = [
+          ...runs,
+          // startSeq: the conversation position when the run began, i.e. the
+          // branch point when this is a branch's first run.
+          { id: `run${runSeq}`, key, stepId: stepId ?? null, jobId: jobId ?? null, branch: branch ?? null, startSeq: state.seq },
+        ];
       } else if (stepId !== undefined || jobId !== undefined) {
         runs = runs.map((r) =>
           r.id === latestRun.id
@@ -277,6 +319,7 @@ function reducer(state, action) {
         ...next,
         runs,
         runSeq,
+        activeBranch: branch ?? null,
         activeKey: key,
         activationOrder: state.activationOrder.includes(key)
           ? state.activationOrder
@@ -350,6 +393,7 @@ function reducer(state, action) {
       const afterCard = Boolean(key && state.steps[key]?.visited);
       // The run this was said in, so it stays with that run's card.
       const runId = [...state.runs].reverse().find((r) => r.key === key)?.id ?? null;
+      const branch = state.activeBranch ?? null;
       const stamped = action.messages.map((message, offset) => ({
         id: `m${state.seq + offset + 1}`,
         moduleKey: key ?? null,
@@ -357,6 +401,7 @@ function reducer(state, action) {
         at: Date.now(),
         afterCard,
         runId,
+        branch,
         ...message,
       }));
 
@@ -382,6 +427,10 @@ function reducer(state, action) {
 
     case "SET_PENDING":
       return { ...state, pending: action.pending };
+
+    /** View / work in Main (null) or a branch. */
+    case "SET_ACTIVE_BRANCH":
+      return { ...state, activeBranch: action.branch ?? null };
 
     case "RESET":
       return { ...initialState, steps: buildInitialSteps() };
@@ -625,6 +674,10 @@ const useWorkflowSession = () => {
     dispatch({ type: "APPEND_MESSAGES", messages: list, key });
   }, []);
 
+  const setActiveBranch = useCallback((branch) => {
+    dispatch({ type: "SET_ACTIVE_BRANCH", branch: branch ?? null });
+  }, []);
+
   const reset = useCallback(() => {
     sessionIdRef.current = null;
     dispatch({ type: "RESET" });
@@ -643,7 +696,7 @@ const useWorkflowSession = () => {
    * @param {string|null} fromStepId - set to an earlier step to branch
    */
   const handOff = useCallback(
-    async (moduleKey, selections = {}, fromStepId = null) => {
+    async (moduleKey, selections = {}, fromStepId = null, { branch } = {}) => {
       const sessionId = sessionIdRef.current;
       if (!sessionId) {
         dispatch({
@@ -671,6 +724,8 @@ const useWorkflowSession = () => {
         type: "ACTIVATE_MODULE",
         key: moduleKey,
         phase: MODULE_BY_KEY[moduleKey].loadingPhase,
+        // A new branch: its run (and the branch) start here.
+        ...(branch !== undefined ? { branch } : {}),
       });
       dispatch({ type: "SET_PENDING", pending: true });
 
@@ -802,6 +857,9 @@ const useWorkflowSession = () => {
               text: parsed.content,
               agentName: parsed.agentName,
               stepId: parsed.stepId,
+              // A module's output (it started a job or names a module), as
+              // opposed to a plain supervisor answer, which gets no title.
+              fromModule: Boolean(parsed.jobId || parsed.moduleKey),
             },
           ],
         });
@@ -975,6 +1033,8 @@ const useWorkflowSession = () => {
     steps: state.steps,
     activationOrder: state.activationOrder,
     runs: state.runs,
+    activeBranch: state.activeBranch,
+    setActiveBranch,
     conversation: state.conversation,
     pending: state.pending,
     title: state.title,

@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { Box, Typography, Button, CircularProgress } from "@mui/material";
 import { getArtifacts } from "../../services/api/sessions";
-import exportsApi from "../../services/api/exports";
 import projectsApi from "../../services/api/projects";
 import "./ArtifactsPage.css";
 
@@ -21,13 +20,6 @@ const isoDate = (value) => {
   const text = String(value);
   const date = new Date(/[zZ]|[+-]\d{2}:?\d{2}$/.test(text) ? text : `${text}Z`);
   return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, 10);
-};
-
-const buttonSx = {
-  bgcolor: "#00BCD4",
-  color: "#FFFFFF",
-  textTransform: "none",
-  "&:hover": { bgcolor: "#089B98" },
 };
 
 const ArtifactsPage = ({ sessionId = null, projectId = null, refreshKey = 0, onLoaded }) => {
@@ -72,25 +64,6 @@ const ArtifactsPage = ({ sessionId = null, projectId = null, refreshKey = 0, onL
 
   const setAction = (id, patch) =>
     setActionState((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
-
-  /** POST /exports/pdf for this artifact's job, then the authenticated download. */
-  const handleReport = useCallback(async (artifact) => {
-    setAction(artifact.id, { busy: "report", message: null, isError: false });
-    try {
-      const response = await exportsApi.createPdfExport(artifact.jobId);
-      const downloadUrl = response?.downloadUrl ?? response?.download_url;
-      if (!downloadUrl) throw new Error("The report did not return a download link.");
-      const name = `${String(artifact.module || "drp").toLowerCase()}-${artifact.jobId}.pdf`;
-      await exportsApi.downloadExport(downloadUrl, name);
-      setAction(artifact.id, { busy: null, message: "Report downloaded.", isError: false });
-    } catch (err) {
-      setAction(artifact.id, {
-        busy: null,
-        message: err?.userMessage || err?.message || "The report could not be generated.",
-        isError: true,
-      });
-    }
-  }, []);
 
   /** POST /projects/{id}/results — file this result into the session's project. */
   const handleAddToProject = useCallback(
@@ -194,16 +167,8 @@ const ArtifactsPage = ({ sessionId = null, projectId = null, refreshKey = 0, onL
             )}
 
             <Box sx={{ mt: 2, display: "flex", gap: "10px", flexWrap: "wrap" }}>
-              {artifact.exportable && artifact.jobId && (
-                <Button
-                  variant="contained"
-                  disabled={Boolean(state.busy)}
-                  onClick={() => handleReport(artifact)}
-                  sx={buttonSx}
-                >
-                  {state.busy === "report" ? "Generating…" : "Generate report"}
-                </Button>
-              )}
+              {/* "Generate report" was removed: POST /exports/pdf per artifact
+                  returns 502, and testing asked for the button to go. */}
               {/* Only offered when the session belongs to a project. */}
               {projectId && artifact.jobId && (
                 <Button

@@ -264,7 +264,8 @@
 
 .curatex-profile-grid {
   display: grid;
-  grid-template-columns: minmax(150px, 1fr) minmax(200px, 2fr) 92px 24px;
+  /* Last column holds the per-row Edit / Remove actions. */
+  grid-template-columns: minmax(150px, 1fr) minmax(200px, 2fr) 92px 60px;
   align-items: center;
   column-gap: 8px;
   row-gap: 12px;
@@ -1198,4 +1199,15 @@
   .curatex-match-details {
     min-width: 720px;
   }
+}
+/* Per-row Edit / Remove (and Save / Cancel while a row is being edited). */
+.curatex-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.curatex-row-save-icon {
+  color: #00bcd4 !important;
+  font-size: 18px !important;
 }

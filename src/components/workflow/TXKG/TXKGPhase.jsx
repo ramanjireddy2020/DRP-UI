@@ -102,51 +102,74 @@ const DefinitionList = ({ title, definitions }) => {
 };
 
 /**
- * One meta-path as it was walked: node names, coloured by node type (same
- * colours as the subgraph), with the relation written on each arrow.
- * Replaces the "gene/protein → biological_process → gene/protein" type strings.
+ * One meta-path as it was walked, in two layers (testing's redesign):
+ *   1. the node chain — the actual node names as coloured nodes (subgraph
+ *      colours by node type) joined by arrows, the primary read;
+ *   2. the relationships — each edge label as a smaller grey chip beneath,
+ *      in order, numbered to the hop it describes.
+ * It used to be one wrapping row with each label stacked over its arrow,
+ * which read as a single crowded string on longer paths.
  */
-const PathChain = ({ traversal }) => (
-  <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px 6px" }}>
-    {traversal.steps.map((step, i) => (
-      <React.Fragment key={i}>
-        {i > 0 && (
-          <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", px: "2px" }}>
-            {traversal.edgeLabels[i - 1] && (
-              <Typography sx={{ fontFamily: FONT, fontSize: "9px", color: "#94A3B8", lineHeight: "11px", whiteSpace: "nowrap" }}>
-                {traversal.edgeLabels[i - 1]}
-              </Typography>
-            )}
-            <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: "#94A3B8", lineHeight: "12px" }}>→</Typography>
-          </Box>
-        )}
-        <Box
-          title={step.type || undefined}
-          sx={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "4px",
-            p: "2px 8px",
-            borderRadius: "10px",
-            border: `1px solid ${BORDER}`,
-            bgcolor: "#FFFFFF",
-          }}
-        >
-          {step.type && <Box sx={{ width: 7, height: 7, borderRadius: "50%", bgcolor: styleForType(step.type).color, flexShrink: 0 }} />}
-          <Typography sx={{ fontFamily: FONT, fontSize: "11px", color: "#111827", lineHeight: "14px" }}>{step.name}</Typography>
+const PathChain = ({ traversal }) => {
+  const labels = traversal.edgeLabels.filter(Boolean);
+  return (
+    <Box sx={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+      <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px" }}>
+        {traversal.steps.map((step, i) => {
+          const color = styleForType(step.type).color;
+          return (
+            <React.Fragment key={i}>
+              {i > 0 && (
+                <Typography aria-hidden="true" sx={{ fontFamily: FONT, fontSize: "13px", color: "#94A3B8", lineHeight: 1, px: "1px" }}>
+                  →
+                </Typography>
+              )}
+              <Box
+                title={step.type || undefined}
+                sx={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "5px",
+                  p: "3px 9px",
+                  borderRadius: "12px",
+                  border: `1px solid ${step.type ? color : BORDER}`,
+                  bgcolor: step.type ? `${color}14` : "#FFFFFF",
+                }}
+              >
+                {step.type && <Box sx={{ width: 8, height: 8, borderRadius: "50%", bgcolor: color, flexShrink: 0 }} />}
+                <Typography sx={{ fontFamily: FONT, fontSize: "11.5px", fontWeight: 600, color: "#111827", lineHeight: "15px" }}>
+                  {step.name}
+                </Typography>
+              </Box>
+            </React.Fragment>
+          );
+        })}
+      </Box>
+
+      {(labels.length > 0 || traversal.hopCount != null || traversal.contextWeight != null) && (
+        <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px" }}>
+          {traversal.edgeLabels.map((label, i) =>
+            label ? (
+              <Box key={i} sx={{ p: "1px 7px", borderRadius: "8px", bgcolor: "#F1F5F9", border: `1px solid ${BORDER}` }}>
+                <Typography sx={{ fontFamily: FONT, fontSize: "9.5px", color: "#64748B", lineHeight: "13px" }}>
+                  {i + 1}. {label}
+                </Typography>
+              </Box>
+            ) : null
+          )}
+          {(traversal.hopCount != null || traversal.contextWeight != null) && (
+            <Typography sx={{ fontFamily: FONT, fontSize: "9.5px", color: "#94A3B8", ml: "2px" }}>
+              {[
+                traversal.hopCount != null && `${traversal.hopCount} hop${traversal.hopCount === 1 ? "" : "s"}`,
+                traversal.contextWeight != null && `context weight ${traversal.contextWeight}`,
+              ].filter(Boolean).join(" · ")}
+            </Typography>
+          )}
         </Box>
-      </React.Fragment>
-    ))}
-    {(traversal.hopCount != null || traversal.contextWeight != null) && (
-      <Typography sx={{ fontFamily: FONT, fontSize: "10px", color: "#94A3B8", ml: "4px" }}>
-        {[
-          traversal.hopCount != null && `${traversal.hopCount} hop${traversal.hopCount === 1 ? "" : "s"}`,
-          traversal.contextWeight != null && `context weight ${traversal.contextWeight}`,
-        ].filter(Boolean).join(" · ")}
-      </Typography>
-    )}
-  </Box>
-);
+      )}
+    </Box>
+  );
+};
 
 const TXKGPhase = ({
   workflowPhase,
@@ -568,7 +591,10 @@ const TXKGPhase = ({
       return (
         <Box sx={{ display: "flex", flexDirection: "column", gap: "12px" }}>
           <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 700, color: "#1A1F26", lineHeight: "100%" }}>Recommendations</Typography>
-          {renderApiInsight()}
+          {/* The agent's commentary covers the same targets as the rows below,
+              so showing both put the raw text above the processed list
+              (testing). It is only used when there are no rows. */}
+          {!recommendationRows.length && renderApiInsight()}
 
           {/* The agent's own next step, when it gave one. */}
           {txkg.recommendation?.text && (
@@ -613,7 +639,9 @@ const TXKGPhase = ({
 
     return (
       <Box sx={{ display: "flex", flexDirection: "column", gap: "16px", pt: "12px" }}>
-        {renderApiInsight()}
+        {/* Same as Recommendations: the commentary is only a fallback for an
+            empty sources list, not a second copy above it. */}
+        {!sourceRows.length && renderApiInsight()}
         {/* The job result carries curated evidence bases per target
             (`supportingSources`), not journal citations — so these are the
             real sources and how many targets each one supports. */}
@@ -689,37 +717,28 @@ const TXKGPhase = ({
       );
     }
 
-    return (
-      <Box sx={containerSx}>
-        {metapath?.loading ? (
-          <Box sx={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <CircularProgress size={14} sx={{ color: TEAL }} />
-            <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: "#6B7280" }}>Running meta-path analysis…</Typography>
-          </Box>
-        ) : (
-          <Typography
-            role={metapath?.error ? "alert" : undefined}
-            sx={{ fontFamily: FONT, fontSize: "12px", color: metapath?.error ? "#DC2626" : "#6B7280", lineHeight: 1.5 }}
-          >
-            {metapath?.error ||
-              (metapath?.data
-                ? "The meta-path analysis returned no summary figures."
-                : metapath?.onAnalyze
-                ? "Meta-path statistics come from a separate analysis of the knowledge graph."
-                : "Generate the knowledge graph first — meta-path statistics are computed from it.")}
+    // No "Run meta-path analysis" button or "separate analysis" note any
+    // more (testing): target paths come with the TxKG result
+    // (connectionPaths), so nothing has to be run by hand. The row only
+    // appears for figures, a run in progress, or an error.
+    if (metapath?.loading) {
+      return (
+        <Box sx={containerSx}>
+          <CircularProgress size={14} sx={{ color: TEAL }} />
+          <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: "#6B7280" }}>Running meta-path analysis…</Typography>
+        </Box>
+      );
+    }
+    if (metapath?.error) {
+      return (
+        <Box sx={containerSx}>
+          <Typography role="alert" sx={{ fontFamily: FONT, fontSize: "12px", color: "#DC2626", lineHeight: 1.5 }}>
+            {metapath.error}
           </Typography>
-        )}
-        {metapath?.onAnalyze && !metapath?.loading && (
-          <Button
-            size="small"
-            onClick={metapath.onAnalyze}
-            sx={{ textTransform: "none", fontFamily: FONT, fontSize: "12px", fontWeight: 600, color: TEAL }}
-          >
-            {metapath?.data || metapath?.error ? "Run again" : "Run meta-path analysis"}
-          </Button>
-        )}
-      </Box>
-    );
+        </Box>
+      );
+    }
+    return null;
   };
 
   /**

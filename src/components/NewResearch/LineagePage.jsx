@@ -1,6 +1,5 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
-  Box,
   Button,
   Card,
   Chip,
@@ -8,56 +7,24 @@ import {
   StepLabel,
   Stepper,
   StepConnector,
-  Paper,
 } from "@mui/material";
 import {
   Check as CheckIcon,
   DeleteOutline as DeleteOutlineIcon,
   EditOutlined as EditOutlinedIcon,
-  CheckCircleOutlineIcon,
-  RadioButtonUncheckedIcon,
 } from "@mui/icons-material";
 
 import "./LineagePage.css";
 
-const initialSteps = [
-  {
-    id: 1,
-    title: "Target identification",
-    status: "accepted",
-    selection: "JAK2, TPOR (MPL)",
-  },
-  {
-    id: 2,
-    title: "Literature mining",
-    status: "awaiting",
-    selection: null,
-  },
-  {
-    id: 3,
-    title: "Drug candidate generation",
-    status: "pending",
-    selection: null,
-  },
-  {
-    id: 4,
-    title: "Screening suite",
-    status: "pending",
-    selection: null,
-  },
-  {
-    id: 5,
-    title: "Novelty search",
-    status: "pending",
-    selection: null,
-  },
-  {
-    id: 6,
-    title: "Documentation",
-    status: "pending",
-    selection: null,
-  },
-];
+/*
+ * Everything on this page used to be a fixed mock-up: "Fork ancestry for the
+ * active branch. Lit: TP53 (pending), EGFR (pending)…", "Main - JAK2 + TPOR
+ * (MPL)", "Forked at Target identification", "Alt - JAK2 + TPOR (MPL)" and a
+ * fixed six-step list, whatever the session was. It now comes from the live
+ * session via the `lineage` prop built in CompleteWorkflow:
+ *   { mainLabel, branch: { name, target, forkedAt } | null,
+ *     steps: [{ id, title, status, selection }] }
+ */
 
 /* -------------------------------------------------
    CUSTOM STEP CONNECTOR
@@ -107,6 +74,21 @@ function StatusChip({ status }) {
 
     pending: {
       label: "PENDING",
+      className: "status-chip--pending",
+    },
+
+    completed: {
+      label: "COMPLETED",
+      className: "status-chip--accepted",
+    },
+
+    running: {
+      label: "RUNNING",
+      className: "status-chip--awaiting",
+    },
+
+    failed: {
+      label: "FAILED",
       className: "status-chip--pending",
     },
   };
@@ -168,11 +150,26 @@ function LineageStepCard({ step, active, onClick }) {
    MAIN COMPONENT
 -------------------------------------------------- */
 
-function LineagePage() {
-  const [steps, setSteps] = useState(initialSteps);
+function LineagePage({ lineage = null }) {
+  const liveSteps = lineage?.steps ?? [];
+  const [steps, setSteps] = useState(liveSteps);
 
-  // Step that is currently selected/active
-  const [activeStep, setActiveStep] = useState(1);
+  // Follow the session: the steps' status and selections change as it runs.
+  useEffect(() => {
+    setSteps(liveSteps);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(liveSteps)]);
+
+  // Step that is currently selected/active: the first one not yet done.
+  const firstOpen = liveSteps.findIndex((st) => st.status !== "completed" && st.status !== "accepted");
+  const [activeStep, setActiveStep] = useState(firstOpen >= 0 ? firstOpen : 0);
+
+  const branch = lineage?.branch ?? null;
+  // "Fork ancestry" line: each step with its selection and status, live.
+  const ancestry = steps
+    .filter((st) => st.selection || st.status !== "pending")
+    .map((st) => `${st.title}: ${st.selection || "no selection"} (${st.status})`)
+    .join(" · ");
 
   /* -------------------------------------------------
      HANDLE STEP CLICK
@@ -232,8 +229,8 @@ function LineagePage() {
         </div>
 
         <div className="lineage-description">
-          Fork ancestry for the active branch. Lit: TP53 (pending),
-          EGFR (pending), JAK2 (pending), TPOR (MPL) (pending).
+          {branch ? "Fork ancestry for the active branch." : "The main research path."}
+          {ancestry ? ` ${ancestry}.` : " No steps have run yet."}
         </div>
 
         {/* Rename / Delete */}
@@ -268,27 +265,33 @@ function LineagePage() {
         >
           <div className="lineage-breadcrumb">
             <span className="lineage-breadcrumb-main">
-              Main - JAK2 + TPOR (MPL)
+              {lineage?.mainLabel || "Main"}
             </span>
 
-            <span className="lineage-breadcrumb-arrow">
-              &gt;
-            </span>
+            {branch && (
+              <>
+                <span className="lineage-breadcrumb-arrow">
+                  &gt;
+                </span>
 
-            <span className="lineage-breadcrumb-secondary">
-              Forked at Target identification
-            </span>
+                <span className="lineage-breadcrumb-secondary">
+                  Forked at {branch.forkedAt}
+                </span>
 
-            <span className="lineage-breadcrumb-arrow">
-              &gt;
-            </span>
+                <span className="lineage-breadcrumb-arrow">
+                  &gt;
+                </span>
+              </>
+            )}
           </div>
 
-          <Chip
-            label="Alt - JAK2 + TPOR (MPL)"
-            size="small"
-            className="lineage-branch-chip"
-          />
+          {branch && (
+            <Chip
+              label={`${branch.name}${branch.target ? ` - ${branch.target}` : ""}`}
+              size="small"
+              className="lineage-branch-chip"
+            />
+          )}
         </Card>
 
         {/* ============================================
@@ -347,19 +350,6 @@ function LineagePage() {
           </Button>
         </div>
 
-        {/* ============================================
-            OTHER BRANCHES
-        ============================================= */}
-
-        <div className="lineage-other-branches">
-          <div className="lineage-section-label">
-            OTHER BRANCHES
-          </div>
-
-          <div className="lineage-description">
-            Switch from the header to view other branches.
-          </div>
-        </div>
       </div>
     </div>
   );

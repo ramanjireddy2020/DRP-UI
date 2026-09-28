@@ -3,7 +3,7 @@ import { Box, Typography, CircularProgress } from "@mui/material";
 import { FONT, TEAL, BORDER, TEXT_DARK, USER_MSG_BG } from "./workflowConstants";
 import FormattedText from "./FormattedText";
 import { withProductWording } from "../../workflow/wording";
-import { moduleDisplayFor } from "../../workflow/moduleMap";
+import { moduleDisplayFor, resolveModuleKey } from "../../workflow/moduleMap";
 import { useCurrentUser } from "../../context/CurrentUserContext";
 
 /**
@@ -75,13 +75,13 @@ const UserBubble = ({ text, label }) => (
   </Box>
 );
 
-const AgentBubble = ({ text, moduleKey, agentName, isError }) => {
-  const display = moduleKey ? moduleDisplayFor(moduleKey) : null;
+const AgentBubble = ({ text, titleKey, agentName, isError }) => {
+  const display = titleKey ? moduleDisplayFor(titleKey) : null;
 
   // `agentName` is what the API called itself on this reply ("DRP LitMineX
   // Agent"); the registry spelling wins when the module is known, so the five
   // modules cannot drift apart in the transcript.
-  const name = display?.label || agentName || "Agent";
+  const name = display?.label || (isError ? agentName || "Agent" : null);
   const role = display?.role || null;
 
   return (
@@ -95,6 +95,10 @@ const AgentBubble = ({ text, moduleKey, agentName, isError }) => {
           p: "14px 18px",
         }}
       >
+        {/* No title on a plain supervisor / general-knowledge answer: it is
+            not a module's output, and labelling it with whichever module was
+            open read as if that module had answered (testing). */}
+        {name && (
         <Box sx={{ mb: "8px" }}>
           <Typography
             sx={{
@@ -116,6 +120,7 @@ const AgentBubble = ({ text, moduleKey, agentName, isError }) => {
             </Typography>
           )}
         </Box>
+        )}
 
         {/* Agent replies are markdown; they used to render raw, asterisks
             and all. Errors are our own plain text. */}
@@ -216,7 +221,15 @@ const ConversationTimeline = ({
               ) : (
                 <AgentBubble
                   text={m.text}
-                  moduleKey={m.moduleKey}
+                  // Titled only when a module produced the reply: flagged on
+                  // live replies, or named by the API's agentName otherwise.
+                  titleKey={
+                    m.fromModule === true
+                      ? m.moduleKey
+                      : m.fromModule === false
+                      ? null
+                      : resolveModuleKey(m.agentName)
+                  }
                   agentName={m.agentName}
                   isError={m.isError}
                 />

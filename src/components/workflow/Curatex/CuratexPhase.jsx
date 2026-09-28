@@ -9,6 +9,9 @@ import {
 import {
   AddOutlined,
   DeleteOutlineOutlined,
+  EditOutlined,
+  CheckOutlined,
+  CloseOutlined,
 } from "@mui/icons-material";
 import AgentHeader from "../AgentHeader";
 import PhaseActions from "../PhaseActions";
@@ -317,9 +320,23 @@ const CuratexPhase = ({
   const targetName = profile?.target || resultsTarget || null;
   const targetLabel = targetName || "the selected target";
 
-  const handleStartEdit = () => {
-    editSnapshotRef.current = { profileData: { ...profileData }, weights: { ...weights } };
-    setProfileEditMode?.(true);
+  /**
+   * Per-row Edit / Remove (testing asked for these in place of one table-wide
+   * "Edit Weights" toggle). One row is edited at a time: its value and weight
+   * go into a draft, saved with ✓ or discarded with ✕.
+   */
+  const [editingRow, setEditingRow] = useState(null);
+  const [rowDraft, setRowDraft] = useState({ value: "", weight: "" });
+  const startRowEdit = (key) => {
+    setEditingRow(key);
+    setRowDraft({ value: String(profileData?.[key] ?? ""), weight: String(weights[key] ?? "") });
+  };
+  const cancelRowEdit = () => setEditingRow(null);
+  const saveRowEdit = () => {
+    if (!editingRow) return;
+    setProfileData?.({ ...profileData, [editingRow]: rowDraft.value });
+    setWeights((prev) => ({ ...prev, [editingRow]: rowDraft.weight === "" ? 0 : Number(rowDraft.weight) }));
+    setEditingRow(null);
   };
 
   const handleAddParameterClick = () => {
@@ -462,13 +479,13 @@ const CuratexPhase = ({
   if (workflowPhase === "curatex-profile") {
     const subtitle = isAddingParameter
       ? "Adding parameters — fill in each new row, add more if needed, then save changes."
-      : profileEditMode
-      ? "Editing mode — adjust the weights below, then save changes."
+      : editingRow
+      ? "Editing one criterion — change its value or weight, then save it with ✓."
       : editable
       ? "Review the criteria and weights, then submit to find matching candidates."
       : "This profile is locked by the backend and cannot be edited. Submit it to find matching candidates.";
 
-    const showInputs = editable && (profileEditMode || isAddingParameter);
+    const showInputs = editable && (Boolean(editingRow) || isAddingParameter);
     const rows = Object.entries(profileData ?? {});
 
     return (
@@ -543,10 +560,10 @@ const CuratexPhase = ({
                   {/* Criterion values are editable in edit mode: POST
                       /agents/curatex/compounds now accepts `values` as well as
                       weights (it used to take weights only). */}
-                  {showInputs ? (
+                  {editingRow === key ? (
                     <TextField
-                      value={value ?? ""}
-                      onChange={(event) => setProfileData?.({ ...profileData, [key]: event.target.value })}
+                      value={rowDraft.value}
+                      onChange={(event) => setRowDraft((d) => ({ ...d, value: event.target.value }))}
                       placeholder="Value or range"
                       size="small"
                       fullWidth
@@ -560,11 +577,11 @@ const CuratexPhase = ({
                   )}
 
                   <div className="curatex-weight-field">
-                    {showInputs ? (
+                    {editingRow === key ? (
                       <TextField
-                        value={weights[key] ?? ""}
+                        value={rowDraft.weight}
                         onChange={(event) =>
-                          setWeights((prev) => ({ ...prev, [key]: cleanWeightInput(event.target.value) }))
+                          setRowDraft((d) => ({ ...d, weight: cleanWeightInput(event.target.value) }))
                         }
                         placeholder="0"
                         size="small"
@@ -580,17 +597,40 @@ const CuratexPhase = ({
                     )}
                   </div>
 
-                  {editable ? (
-                    <IconButton
-                      size="small"
-                      className="curatex-profile-delete"
-                      aria-label={`Remove ${propertyLabel(key)}`}
-                      onClick={() => handleDeleteParameter(key)}
-                    >
-                      <DeleteOutlineOutlined className="curatex-trash-icon" />
-                    </IconButton>
-                  ) : (
+                  {!editable ? (
                     <span />
+                  ) : editingRow === key ? (
+                    <div className="curatex-row-actions">
+                      <IconButton size="small" className="curatex-profile-delete" aria-label={`Save ${propertyLabel(key)}`} onClick={saveRowEdit}>
+                        <CheckOutlined className="curatex-row-save-icon" />
+                      </IconButton>
+                      <IconButton size="small" className="curatex-profile-delete" aria-label={`Cancel editing ${propertyLabel(key)}`} onClick={cancelRowEdit}>
+                        <CloseOutlined className="curatex-trash-icon" />
+                      </IconButton>
+                    </div>
+                  ) : (
+                    <div className="curatex-row-actions">
+                      <IconButton
+                        size="small"
+                        className="curatex-profile-delete"
+                        aria-label={`Edit ${propertyLabel(key)}`}
+                        title="Edit"
+                        disabled={Boolean(editingRow)}
+                        onClick={() => startRowEdit(key)}
+                      >
+                        <EditOutlined className="curatex-trash-icon" />
+                      </IconButton>
+                      <IconButton
+                        size="small"
+                        className="curatex-profile-delete"
+                        aria-label={`Remove ${propertyLabel(key)}`}
+                        title="Remove"
+                        disabled={Boolean(editingRow)}
+                        onClick={() => handleDeleteParameter(key)}
+                      >
+                        <DeleteOutlineOutlined className="curatex-trash-icon" />
+                      </IconButton>
+                    </div>
                   )}
                 </React.Fragment>
               ))}
@@ -670,7 +710,7 @@ const CuratexPhase = ({
 
             {/* Stays available while rows are being added, so several
                 parameters can be added before saving. */}
-            {showInputs && profileEditMode && (
+            {editable && !editingRow && (
               <Button
                 startIcon={<AddOutlined />}
                 onClick={handleAddParameterClick}
@@ -682,12 +722,12 @@ const CuratexPhase = ({
           </div>
 
           <div className="curatex-action-row">
-            {showInputs ? (
+            {isAddingParameter ? (
               <>
                 <Button
                   variant="contained"
                   onClick={handleSaveChanges}
-                  disabled={!newParamsValid || !weightsBalanced}
+                  disabled={!newParamsValid}
                   className="curatex-primary-button"
                 >
                   Save Changes
@@ -710,7 +750,7 @@ const CuratexPhase = ({
                     criteria above them. */}
                 <Button
                   variant="contained"
-                  disabled={!profile?.hasData || !weightsBalanced}
+                  disabled={!profile?.hasData || !weightsBalanced || Boolean(editingRow)}
                   onClick={() => {
                     if (onSubmitProfile) {
                       // The LOCAL weights, not the profile's — a deleted or
@@ -727,16 +767,6 @@ const CuratexPhase = ({
                   Submit Profile
                 </Button>
 
-                {editable && (
-                  <Button
-                    variant="outlined"
-                    onClick={handleStartEdit}
-                    disabled={!profile?.hasData}
-                    className="curatex-secondary-button curatex-edit-button"
-                  >
-                    Edit Weights
-                  </Button>
-                )}
               </>
             )}
           </div>
