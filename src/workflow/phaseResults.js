@@ -513,8 +513,13 @@ export const normalizeCuratexResults = (payload, { pageSize: requested } = {}) =
         c.compoundName ?? c.pref_name ?? c.molecule_name ?? null;
       if (!name) return null;
 
-      const matched = c.matchedProps ?? c.matched_props ?? c.matched ?? [];
-      const mismatched = c.mismatchedProps ?? c.mismatched_props ?? c.mismatched ?? [];
+      // The results table's matched / mismatched columns. The API never sent
+      // matchedProps, so they were always empty; they are derived from the
+      // per-criterion breakdown the API does send.
+      const breakdown = readBreakdown(c.breakdown);
+      const byStatus = (status) => breakdown.filter((b) => b.status === status).map((b) => b.label);
+      const matched = c.matchedProps ?? c.matched_props ?? c.matched ?? byStatus("match");
+      const mismatched = c.mismatchedProps ?? c.mismatched_props ?? c.mismatched ?? byStatus("mismatch");
       const asText = (v) => (Array.isArray(v) ? v.join(", ") : String(v ?? ""));
 
       // The API sends the composite score as camelCase `compositeScore`; only
@@ -540,7 +545,10 @@ export const normalizeCuratexResults = (payload, { pageSize: requested } = {}) =
         smiles: c.smiles ?? null,
         chemblId: c.chemblId ?? c.chembl_id ?? null,
         // Per-criterion comparison, its sources and supporting links.
-        breakdown: readBreakdown(c.breakdown),
+        breakdown,
+        // "14 of 19 criteria met", from the breakdown.
+        matchCount: breakdown.length ? breakdown.filter((b) => b.status === "match").length : null,
+        criteriaCount: breakdown.length ? breakdown.filter((b) => b.status !== "unknown").length : null,
         fieldSources: readFieldSources(c.fieldSources ?? c.field_sources),
         evidenceLinks: readEvidenceLinks(c.evidenceLinks ?? c.evidence_links),
       };

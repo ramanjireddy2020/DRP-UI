@@ -852,7 +852,7 @@ const CuratexPhase = ({
               </Typography>
               {showProps && (
                 <Typography className="curatex-results-header-cell">
-                  MATCHED PROPERTIES
+                  PROFILE MATCH
                 </Typography>
               )}
               {showProps && (
@@ -905,8 +905,12 @@ const CuratexPhase = ({
                     </Typography>
 
                     {showProps && (
-                      <Typography className="curatex-matched-properties">
-                        {compound.matchedProps}
+                      <Typography className="curatex-matched-properties" title={compound.matchedProps || undefined}>
+                        {/* How well it fits the ideal candidate profile, then
+                            which criteria it meets. */}
+                        {compound.criteriaCount
+                          ? `${compound.matchCount} / ${compound.criteriaCount} met${compound.matchedProps ? ` · ${compound.matchedProps}` : ""}`
+                          : compound.matchedProps}
                       </Typography>
                     )}
 
