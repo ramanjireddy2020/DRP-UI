@@ -598,7 +598,7 @@ const TXKGPhase = ({
 
           {/* The agent's own next step, when it gave one. */}
           {txkg.recommendation?.text && (
-            <Box sx={{ display: "flex", flexDirection: "column", gap: "6px", p: "10px 12px", bgcolor: "#F0FDFC", border: `1px solid ${TEAL}`, borderRadius: "8px" }}>
+            <Box sx={{ display: "flex", flexDirection: "column", gap: "6px", pl: "10px", borderLeft: `3px solid ${TEAL}` }}>
               <Box sx={{ display: "flex", alignItems: "center", gap: "8px" }}>
                 <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEAL, textTransform: "uppercase", letterSpacing: "0.5px", lineHeight: "100%" }}>
                   Suggested next step
@@ -616,7 +616,7 @@ const TXKGPhase = ({
           {recommendationRows.map((rec, i) => {
             const chip = noveltyChipColours(rec.status);
             return (
-              <Box key={i} sx={{ display: "flex", flexDirection: "column", gap: "4px", p: "10px 12px", bgcolor: "#FAFCFF", border: `1px solid ${BORDER}`, borderRadius: "8px" }}>
+              <Box key={i} sx={{ display: "flex", flexDirection: "column", gap: "4px", py: "10px", borderBottom: `1px solid ${BORDER}` }}>
                 <Box sx={{ display: "flex", alignItems: "center", gap: "8px" }}>
                   <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#1A1A26", lineHeight: "100%" }}>{rec.target}</Typography>
                   <Tooltip title={definitionFor(txkg.labelDefinitions, rec.status) || ""} arrow placement="top">
@@ -1061,13 +1061,15 @@ const TXKGPhase = ({
                     ))}
                   </Box>
                 </Box>
-                {/* Insights Panel */}
-                <Box sx={{ flex: 1, minWidth: 0, border: `1px solid ${BORDER}`, borderRadius: "8px", overflow: "hidden" }}>
-                  <Box sx={{ bgcolor: GRAY_BG, p: "10px 12px", borderBottom: `1px solid ${BORDER_LIGHT}` }}>
+                {/* Insights Panel — no outer box and no inner scroll area:
+                    testing asked for Interpretation / Recommendations /
+                    Sources to read cleanly with the page. */}
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Box sx={{ p: "4px 0 8px" }}>
                     <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 700, color: INSIGHTS_HEADER, lineHeight: "100%" }}>Insights</Typography>
                     
                   </Box>
-                  <Box sx={{ borderBottom: `1px solid ${BORDER}`, p: "4px" }}>
+                  <Box sx={{ borderBottom: `1px solid ${BORDER}` }}>
                     <Tabs value={insightTab} onChange={(e, val) => setInsightTab(val)} TabIndicatorProps={{ style: { display: "none" } }}
                       sx={{ minHeight: "32px", "& .MuiTab-root": { minHeight: "23px", p: "4px 10px", textTransform: "none", fontFamily: FONT, fontSize: "10px", fontWeight: 600, lineHeight: "100%", color: TEXT_MUTED, "&.Mui-selected": { color: ACTIVE_TAB } } }}>
                       <Tab label="Interpretation" />
@@ -1075,7 +1077,7 @@ const TXKGPhase = ({
                       <Tab label="Sources" />
                     </Tabs>
                   </Box>
-                  <Box sx={{ p: "16px", overflowY: "auto", maxHeight: "340px" }}>
+                  <Box sx={{ pt: "12px" }}>
                     {renderInsightTabBody()}
                   </Box>
                 </Box>
@@ -1251,18 +1253,19 @@ const TXKGPhase = ({
                     ))}
                   </Box>
                 </Box>
-                <Box sx={{ flex: 1, border: `1px solid ${BORDER}`, borderRadius: "8px", overflow: "hidden" }}>
-                  <Box sx={{ bgcolor: GRAY_BG, p: "10px 12px", borderBottom: `1px solid ${BORDER}` }}>
+                {/* Same flat Insights layout as the results view. */}
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Box sx={{ p: "4px 0 8px" }}>
                     <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 700, color: INSIGHTS_HEADER }}>Insights</Typography>
                     
                   </Box>
-                  <Box sx={{ borderBottom: `1px solid ${BORDER}`, px: "4px" }}>
+                  <Box sx={{ borderBottom: `1px solid ${BORDER}` }}>
                     <Tabs value={insightTab} onChange={(_, v) => setInsightTab(v)} TabIndicatorProps={{ style: { display: "none" } }}
                       sx={{ minHeight: "32px", "& .MuiTab-root": { minHeight: "28px", p: "4px 10px", textTransform: "none", fontFamily: FONT, fontSize: "10px", fontWeight: 600, color: TEXT_MUTED, "&.Mui-selected": { color: ACTIVE_TAB } } }}>
                       <Tab label="Interpretation" /><Tab label="Recommendations" /><Tab label="Sources" />
                     </Tabs>
                   </Box>
-                  <Box sx={{ p: "12px", maxHeight: "320px", overflowY: "auto" }}>
+                  <Box sx={{ pt: "12px" }}>
                     {renderInsightTabBody()}
                   </Box>
                 </Box>
