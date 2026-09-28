@@ -90,6 +90,13 @@ const initialState = {
    */
   activeBranch: null,
   /**
+   * Each branch's own module state, saved while another branch is in view:
+   * { [branchKey]: { steps, activeKey } } ("__main__" for Main). A module
+   * has one slot in `steps`, so without this a branch's run overwrote Main's
+   * and switching back showed the branch's step (testing).
+   */
+  branchSteps: {},
+  /**
    * Append-only conversation. Each entry carries the module it belongs to, so
    * the thread can be sliced per step without ever dropping a message.
    */
@@ -106,6 +113,30 @@ const withStep = (state, key, patch) => ({
     [key]: { ...state.steps[key], ...patch },
   },
 });
+
+const branchKeyOf = (branch) => branch ?? "__main__";
+
+/**
+ * Put `branch` in view: save the current branch's module state, and restore
+ * the target's (a branch seen for the first time starts from the current
+ * state, i.e. Main as it was at the fork point).
+ */
+const switchBranch = (state, branch) => {
+  const to = branch ?? null;
+  if (to === (state.activeBranch ?? null)) return state;
+  const branchSteps = {
+    ...state.branchSteps,
+    [branchKeyOf(state.activeBranch)]: { steps: state.steps, activeKey: state.activeKey },
+  };
+  const saved = branchSteps[branchKeyOf(to)];
+  return {
+    ...state,
+    branchSteps,
+    activeBranch: to,
+    steps: saved ? saved.steps : state.steps,
+    activeKey: saved ? saved.activeKey : state.activeKey,
+  };
+};
 
 function reducer(state, action) {
   switch (action.type) {
@@ -273,6 +304,12 @@ function reducer(state, action) {
       const { key, phase, jobId, stepId } = action;
       const module = MODULE_BY_KEY[key];
       if (!module) return state;
+
+      // A step on another branch (creating a branch, or replaying a reopened
+      // session) first brings that branch's module state into view.
+      if (action.branch !== undefined && (action.branch ?? null) !== (state.activeBranch ?? null)) {
+        state = switchBranch(state, action.branch);
+      }
 
       const existing = state.steps[key];
 
@@ -444,7 +481,7 @@ function reducer(state, action) {
 
     /** View / work in Main (null) or a branch. */
     case "SET_ACTIVE_BRANCH":
-      return { ...state, activeBranch: action.branch ?? null };
+      return switchBranch(state, action.branch);
 
     case "RESET":
       return { ...initialState, steps: buildInitialSteps() };

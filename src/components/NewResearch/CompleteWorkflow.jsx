@@ -637,6 +637,32 @@ const CompleteWorkflow = () => {
    */
   const [selectedArticles, setSelectedArticles] = useState([]);
 
+  /**
+   * Each branch keeps its own picks: TxKG targets, LitMineX articles, the
+   * chosen compound and the CurateX profile edits. They were shared, so
+   * choosing IL6 on a branch also changed Main (testing). On switching, the
+   * branch being left is saved and the one entered is restored; a branch
+   * seen for the first time starts from Main's picks at the fork.
+   */
+  const branchPicksRef = useRef({});
+  const pickBranchRef = useRef(session.activeBranch ?? null);
+  useEffect(() => {
+    const from = pickBranchRef.current;
+    const to = session.activeBranch ?? null;
+    if (from === to) return;
+    branchPicksRef.current[from ?? "__main__"] = { selectedTargets, selectedArticles, selectedCompound, profileData };
+    const saved = branchPicksRef.current[to ?? "__main__"];
+    if (saved) {
+      setSelectedTargets(saved.selectedTargets);
+      setSelectedArticles(saved.selectedArticles);
+      setSelectedCompound(saved.selectedCompound);
+      setProfileData(saved.profileData);
+    }
+    pickBranchRef.current = to;
+    // Only a branch switch triggers this; the picks are read as they were.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.activeBranch]);
+
   const handleToggleArticle = useCallback((articleId) => {
     setSelectedArticles((prev) =>
       prev.includes(articleId) ? prev.filter((id) => id !== articleId) : [...prev, articleId]
@@ -2659,12 +2685,6 @@ const CompleteWorkflow = () => {
     const runs = allRuns.filter((r) => inView(r.branch, r.startSeq ?? 0));
     const conversation = session.conversation.filter((m) => inView(m.branch, seqOf(m)));
     const keysWithRuns = new Set(runs.map((r) => r.key));
-    // The module slots hold each module's most recent run overall; a visible
-    // run that is not that one is shown from its snapshot, not the live card.
-    const globalLatestOf = {};
-    allRuns.forEach((r) => {
-      globalLatestOf[r.key] = r.id;
-    });
 
     conversation
       .filter((m) => !m.moduleKey || !keysWithRuns.has(m.moduleKey))
@@ -2716,9 +2736,13 @@ const CompleteWorkflow = () => {
       pushMessages(
         CARD_IS_THE_ANSWER.has(run.key) ? lead.filter((m) => m.role === "user" || m.isError) : lead
       );
+      // The module slots now follow the branch in view (the session restores
+      // each branch's own steps), so the latest VISIBLE run is the live card;
+      // earlier ones — e.g. Main's run seen from a branch — are snapshots. The
+      // id carries the branch so a card is rebuilt, not reused, on switching.
       blocks.push(
-        latestRunOf[run.key] === run.id && globalLatestOf[run.key] === run.id
-          ? { kind: "module", id: `mod-${run.key}`, moduleKey: run.key, branch: run.branch }
+        latestRunOf[run.key] === run.id
+          ? { kind: "module", id: `mod-${run.key}-${viewBranch ?? "main"}`, moduleKey: run.key, branch: run.branch }
           : { kind: "archived", id: `run-${run.id}`, moduleKey: run.key, runId: run.id, branch: run.branch }
       );
       pushMessages(own.filter((m) => m.afterCard));
