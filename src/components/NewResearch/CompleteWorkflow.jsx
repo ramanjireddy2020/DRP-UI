@@ -2158,16 +2158,10 @@ const CompleteWorkflow = () => {
       // { success, message } — a 200 is not proof of a save; `success` is.
       const response = await litminexApi.saveArticle(selectedArticle.id, location.state?.projectId ?? null);
       if (response?.success === true) {
-        // Say WHERE it was saved. The backend's "Article saved to your
-        // library" named no place, and the app has no library screen, so
-        // testing could not tell where it went.
-        const projectName = location.state?.projectName;
-        setArticleNotice({
-          text: location.state?.projectId
-            ? `Article saved to the project${projectName ? ` "${projectName}"` : ""}. It is listed with the project's results.`
-            : "Article saved to your saved articles. This session isn't part of a project, so it isn't filed under one.",
-          isError: false,
-        });
+        // A neutral confirmation. The backend's "Article saved to your
+        // library" names a place that isn't confirmed (and the app has no
+        // library screen), so no storage location is claimed.
+        setArticleNotice({ text: "Article saved.", isError: false });
       } else {
         setArticleNotice({
           text: response?.message || "The server did not confirm the save.",
