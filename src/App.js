@@ -10,6 +10,7 @@ import SignUp from "./components/Login/SignUp";
 import ForgotPassword from "./components/Login/ForgotPassword";
 import ResetPassword from "./components/Login/ResetPassword";
 import SplashScreen from "./components/SplashScreen";
+import InfoPage from "./components/Legal/InfoPage";
 // Commented out with its route below; kept for when it returns.
 // import WelcomeScreen from "./components/WelcomeScreen";
 
@@ -66,6 +67,12 @@ const router = createBrowserRouter([
     path: "/reset-password",
     element: <ResetPassword />,
   },
+
+  // Help Center, Privacy Policy and Terms of Service — linked from the login
+  // footer and the sign-up consent line. Public: no sign-in needed.
+  { path: "/help", element: <InfoPage page="help" /> },
+  { path: "/privacy", element: <InfoPage page="privacy" /> },
+  { path: "/terms", element: <InfoPage page="terms" /> },
 
   {
     path: "/splash",

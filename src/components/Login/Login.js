@@ -565,15 +565,16 @@ const Login = () => {
 
         <div className="login-footer">
           <div className="footer-links">
-            <button type="button">
+            {/* These had no action; the screens exist now. */}
+            <button type="button" onClick={() => navigate("/help")}>
               Help Center
             </button>
 
-            <button type="button">
+            <button type="button" onClick={() => navigate("/privacy")}>
               Privacy Policy
             </button>
 
-            <button type="button">
+            <button type="button" onClick={() => navigate("/terms")}>
               Terms of Service
             </button>
           </div>

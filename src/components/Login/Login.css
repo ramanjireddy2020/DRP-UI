@@ -1501,6 +1501,13 @@ body {
   color: #00c2b5;
 
   font-weight: 600;
+
+  /* Now a real link (was a span). */
+  text-decoration: none;
+}
+
+.terms-link:hover {
+  text-decoration: underline;
 }
 
 
