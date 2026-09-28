@@ -37,14 +37,20 @@ const ArticleDetailPanel = ({
 }) => {
   const [question, setQuestion] = useState("");
   const chatEndRef = useRef(null);
+  const lastMessageRef = useRef(null);
 
-  // Keep the newest question/answer in view. The panel used to be declared
-  // inside CompleteWorkflow, so it remounted on every parent render (about
-  // once a second while jobs poll): its scroll jumped back to the top after
-  // Enter and the answer below was out of sight.
+  // Keep the newest exchange in view. While a reply is pending, the end of
+  // the thread (the "Asking…" line) is shown. When an answer arrives, its
+  // START is scrolled into view: scrolling to the end put the top of a long
+  // answer out of sight, so answers looked cut off (testing).
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [articleChat.length, articleBusy]);
+    const last = articleChat[articleChat.length - 1];
+    if (last && last.role !== "user" && lastMessageRef.current) {
+      lastMessageRef.current.scrollIntoView({ block: "start", behavior: "smooth" });
+    } else {
+      chatEndRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [articleChat, articleChat.length, articleBusy]);
 
   if (!open || !selectedArticle) return null;
 
@@ -184,11 +190,18 @@ const ArticleDetailPanel = ({
               {articleChat.map((msg, i) => (
                 <Box
                   key={i}
+                  ref={i === articleChat.length - 1 ? lastMessageRef : undefined}
                   sx={{
                     p: "10px 12px",
                     borderRadius: "8px",
                     bgcolor: msg.role === "user" ? "#F0FDFC" : "#F8FAFC",
                     border: `1px solid ${BORDER}`,
+                    // Long URLs, DOIs and gene lists wrap inside the 380px
+                    // panel instead of running past its clipped edge.
+                    minWidth: 0,
+                    overflowWrap: "anywhere",
+                    wordBreak: "break-word",
+                    scrollMarginTop: "12px",
                   }}
                 >
                   {/* The full answer, formatted; it was plain text with the

@@ -98,7 +98,8 @@ const parseBlocks = (source) => {
 
 const FormattedText = ({ text, fontSize = "14px", color = "#334155", lineHeight = 1.6, sx }) => {
   const blocks = parseBlocks(text);
-  const base = { fontFamily: FONT, fontSize, color, lineHeight };
+  // Wrap long unbroken strings (URLs, IDs, gene lists) rather than overflow.
+  const base = { fontFamily: FONT, fontSize, color, lineHeight, overflowWrap: "anywhere", wordBreak: "break-word" };
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: "8px", ...sx }}>
