@@ -3,7 +3,7 @@ import { Box, Typography, Button, CircularProgress } from "@mui/material";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import { FONT, TEAL, GRAY_BG, BORDER, TEXT_DARK, TEXT_MUTED } from "./workflowConstants";
 import KnowledgeGraphCanvas, { GraphLegend } from "./KnowledgeGraphCanvas";
-import { buildLegend, normalizeGraph, styleForType } from "./subgraphStyle";
+import { buildLegend, normalizeGraph, normalizeNodeType } from "./subgraphStyle";
 import { uniprotUrl } from "../../workflow/sourceLinks";
 import { looksLikeAccession } from "../../workflow/selections";
 import { openSubgraphInNewTab } from "./subgraphHandoff";
@@ -55,7 +55,7 @@ const SubgraphView = ({
       degree.set(e.target, (degree.get(e.target) || 0) + 1);
     });
     return nodes
-      .filter((n) => styleForType(n.type).label === "Protein / Gene")
+      .filter((n) => normalizeNodeType(n.type) === "gene/protein")
       .map((n) => ({ id: String(n.id), label: n.label, associations: degree.get(n.id) || 0 }))
       .sort((a, b) => b.associations - a.associations);
   }, [graph]);

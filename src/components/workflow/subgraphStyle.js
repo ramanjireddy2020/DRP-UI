@@ -4,38 +4,58 @@
  */
 
 /**
- * Node colours by type.
+ * Node colours by type — the app's theme palette.
  *
- * Testing asked for the graph to be colour-coded from the JSON, with proteins,
- * disease, pathways and biological processes each in their own colour and the
- * same colours in the legend. Pathway and biological process used to share a
- * teal, so the two were indistinguishable. Matching is on a normalised type
- * ("gene/protein", "biological_process", "Biological Process" all work).
+ * Nodes carry a `type` and no colour, so the colour is always resolved here
+ * from the normalised type. The API's `color_legend` (and any `node.color`)
+ * uses a different palette and is deliberately not read, and neither is the
+ * old txkg_test.py HTML renderer's.
+ *
+ * Types are matched EXACTLY, on a canonical key or a listed alias, after
+ * normalising case and separators ("gene/protein", "Gene / Protein",
+ * "biological_process", "Biological Process" …). It used to be a substring
+ * match, so "genetic_disorder" read as a gene and "cell" / "complex" /
+ * "tissue" fell through to Other.
  */
-const TYPE_COLORS = [
-  { match: "disease", label: "Disease", color: "#F25966", radius: 16 },
-  { match: "gene", label: "Protein / Gene", color: "#F28C33", radius: 14 },
-  { match: "protein", label: "Protein / Gene", color: "#F28C33", radius: 14 },
-  { match: "pathway", label: "Pathway", color: "#149E99", radius: 13 },
-  { match: "biologicalprocess", label: "Biological process", color: "#3B82F6", radius: 12 },
-  { match: "molecularfunction", label: "Molecular function", color: "#EAB308", radius: 12 },
-  { match: "cellularcomponent", label: "Cellular component", color: "#A3A3A3", radius: 12 },
-  { match: "drug", label: "Drug / Compound", color: "#8C4DBF", radius: 13 },
-  { match: "compound", label: "Drug / Compound", color: "#8C4DBF", radius: 13 },
+export const NODE_TYPE_STYLES = [
+  { key: "disease", label: "Disease", color: "#F25966", radius: 16, aliases: ["disease", "diseases", "diseasehub"] },
+  { key: "gene/protein", label: "Gene / Protein", color: "#F28C33", radius: 14, aliases: ["geneprotein", "proteingene", "gene", "genes", "protein", "proteins"] },
+  { key: "pathway", label: "Pathway", color: "#149E99", radius: 13, aliases: ["pathway", "pathways"] },
+  { key: "biological_process", label: "Biological process", color: "#3B82F6", radius: 12, aliases: ["biologicalprocess", "biologicalprocesses"] },
+  { key: "molecular_function", label: "Molecular function", color: "#EAB308", radius: 12, aliases: ["molecularfunction", "molecularfunctions"] },
+  { key: "cellular_component", label: "Cellular component", color: "#A3A3A3", radius: 12, aliases: ["cellularcomponent", "cellularcomponents"] },
+  // Kept although drugs are not normally part of context-graph traversal.
+  { key: "drug/compound", label: "Drug / Compound", color: "#8C4DBF", radius: 13, aliases: ["drugcompound", "compounddrug", "drug", "drugs", "compound", "compounds"] },
+  { key: "complex", label: "Complex", color: "#A66BC4", radius: 13, aliases: ["complex", "complexes", "proteincomplex"] },
+  { key: "genetic_disorder", label: "Genetic disorder", color: "#D94F64", radius: 12, aliases: ["geneticdisorder", "geneticdisorders"] },
+  { key: "tissue", label: "Tissue", color: "#84B77A", radius: 12, aliases: ["tissue", "tissues"] },
+  { key: "cell", label: "Cell", color: "#35B8D4", radius: 12, aliases: ["cell", "cells", "celltype"] },
 ];
 
-const FALLBACK_STYLE = { label: "Other", color: "#64748B", radius: 11 };
+export const OTHER_NODE_STYLE = { key: "other", label: "Other", color: "#64748B", radius: 11, aliases: [] };
 
 /** The query disease: drawn in the disease colour, larger, with a ring. */
 export const HUB_STROKE = "#FFFFFF";
 export const HUB_RADIUS = 24;
 
+/** "Biological Process" / "biological_process" / "gene/protein" → "biologicalprocess" / "geneprotein". */
 const squash = (value) => String(value ?? "").toLowerCase().replace(/[\s_\-/]+/g, "");
 
-export const styleForType = (type) => {
-  const text = squash(type);
-  return TYPE_COLORS.find((entry) => text.includes(entry.match)) ?? FALLBACK_STYLE;
-};
+const STYLE_BY_ALIAS = new Map();
+NODE_TYPE_STYLES.forEach((style) => {
+  [style.key, ...style.aliases].forEach((alias) => STYLE_BY_ALIAS.set(squash(alias), style));
+});
+
+/** The canonical type key for a node type ("gene/protein", "cell", …), or "other". */
+export const normalizeNodeType = (type) => (STYLE_BY_ALIAS.get(squash(type)) ?? OTHER_NODE_STYLE).key;
+
+/**
+ * { key, label, color, radius } for a node type. The one lookup for every
+ * place that colours or classifies nodes: the canvas, the legend, the
+ * protein/gene list, disease-hub detection and the meta-path node chips.
+ * Unknown or missing types resolve to Other.
+ */
+export const styleForType = (type) => STYLE_BY_ALIAS.get(squash(type)) ?? OTHER_NODE_STYLE;
 
 /**
  * Nodes and edges in one shape, whatever the subgraph JSON calls its fields.
@@ -96,7 +116,7 @@ export const findHubId = (nodes, edges) => {
   if (!nodes.length) return null;
   const explicit =
     nodes.find((n) => String(n.type ?? "").toLowerCase().includes("hub")) ??
-    nodes.find((n) => styleForType(n.type).label === "Disease");
+    nodes.find((n) => normalizeNodeType(n.type) === "disease");
   if (explicit) return explicit.id;
 
   const degree = new Map();
