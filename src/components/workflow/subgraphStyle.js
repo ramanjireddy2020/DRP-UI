@@ -88,7 +88,29 @@ export const normalizeGraph = (graph) => {
     }))
     .filter((e) => e.source != null && e.target != null);
 
-  return { nodes, edges };
+  // Comorbidity links are not shown (testing: they were being added to the
+  // genetic-disorder representation incorrectly). A node that was connected
+  // ONLY through such links is dropped with them; isolated nodes that never
+  // had a link are kept.
+  const isComorbidity = (e) =>
+    [e.label, e.type, e.relation, e.edge_type, e.edgeType].some((v) => /comorbid/i.test(String(v ?? "")));
+  const kept = edges.filter((e) => !isComorbidity(e));
+  if (kept.length === edges.length) return { nodes, edges };
+
+  const linked = new Set();
+  kept.forEach((e) => {
+    linked.add(e.source);
+    linked.add(e.target);
+  });
+  const touchedByRemoved = new Set();
+  edges.filter(isComorbidity).forEach((e) => {
+    touchedByRemoved.add(e.source);
+    touchedByRemoved.add(e.target);
+  });
+  return {
+    nodes: nodes.filter((n) => linked.has(n.id) || !touchedByRemoved.has(n.id)),
+    edges: kept,
+  };
 };
 
 /**

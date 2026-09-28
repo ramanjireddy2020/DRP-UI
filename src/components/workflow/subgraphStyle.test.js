@@ -149,3 +149,39 @@ describe("disease hub", () => {
     expect(findHubId(nodes, edges)).toBe("g");
   });
 });
+
+describe("comorbidity links are not shown", () => {
+  const graph = {
+    nodes: [
+      { id: "D", type: "disease" },
+      { id: "G", type: "gene/protein" },
+      { id: "GD", type: "genetic_disorder" },
+      { id: "LONE", type: "pathway" },
+    ],
+    edges: [
+      { source: "D", target: "G", label: "Protein Disease Association" },
+      { source: "D", target: "GD", label: "Comorbidity" },
+    ],
+  };
+
+  test("comorbidity edges are dropped, with nodes only they connected", () => {
+    const { nodes, edges } = normalizeGraph(graph);
+    expect(edges).toHaveLength(1);
+    expect(edges[0].label).toBe("Protein Disease Association");
+    expect(nodes.map((n) => n.id)).toEqual(["D", "G", "LONE"]);
+  });
+
+  test("matched on type / relation too, any case", () => {
+    const { edges } = normalizeGraph({
+      nodes: [{ id: "a" }, { id: "b" }],
+      edges: [{ source: "a", target: "b", type: "DISEASE_COMORBIDITY" }],
+    });
+    expect(edges).toHaveLength(0);
+  });
+
+  test("graphs without comorbidity are unchanged", () => {
+    const g = { nodes: [{ id: "a" }, { id: "b" }], edges: [{ source: "a", target: "b", label: "x" }] };
+    expect(normalizeGraph(g).nodes).toHaveLength(2);
+    expect(normalizeGraph(g).edges).toHaveLength(1);
+  });
+});
