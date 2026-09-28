@@ -311,17 +311,27 @@ const PatentTable = ({ rows = [], selectable = false, selectedIds = [], onToggle
             />
           )}
 
+          {/* The ID opens the patent itself (testing: the patent could not
+              be opened from the results). */}
           <Typography
+            component="a"
+            href={patent.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`Open patent ${patent.id}`}
+            onClick={(e) => e.stopPropagation()}
             sx={{
               ...tableCell,
               fontWeight: 600,
-              color: "#374151",
+              color: TEAL,
+              textDecoration: "none",
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
+              "&:hover": { textDecoration: "underline" },
             }}
           >
-            {patent.id}
+            {patent.id} ↗
           </Typography>
 
           <Typography

@@ -647,6 +647,12 @@ export const normalizeNoveltyReport = (payload) => {
         rawRelevance: Number.isFinite(relevance) ? relevance : null,
         assignee: p.assignee ?? null,
         description: p.description ?? p.abstract ?? null,
+        // A link to the patent itself: the API's own URL when it gives one,
+        // otherwise the public Google Patents page for the ID.
+        url:
+          [p.url, p.link, p.patentUrl, p.patent_url, p.pdfUrl, p.pdf_url].find(
+            (u) => typeof u === "string" && /^https?:\/\//i.test(u)
+          ) ?? `https://patents.google.com/patent/${encodeURIComponent(String(id).replace(/\s+/g, ""))}`,
       };
     })
     .filter(Boolean);
