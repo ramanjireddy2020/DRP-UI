@@ -10,7 +10,8 @@ import SignUp from "./components/Login/SignUp";
 import ForgotPassword from "./components/Login/ForgotPassword";
 import ResetPassword from "./components/Login/ResetPassword";
 import SplashScreen from "./components/SplashScreen";
-import WelcomeScreen from "./components/WelcomeScreen";
+// Commented out with its route below; kept for when it returns.
+// import WelcomeScreen from "./components/WelcomeScreen";
 
 import RecentSessionsPage from "./components/RecentSessions/RecentSessionsPage";
 
@@ -71,9 +72,12 @@ const router = createBrowserRouter([
     element: <SplashScreen />,
   },
 
+  // The Welcome screen is commented out for now (testing). The route stays
+  // so old links land on the dashboard instead of a blank page.
   {
     path: "/welcome",
-    element: <WelcomeScreen />,
+    // element: <WelcomeScreen />,
+    element: <Navigate to="/dashboard" replace />,
   },
 
 

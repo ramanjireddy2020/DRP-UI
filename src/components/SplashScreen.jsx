@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getOnboardingStatus } from "../services/researchApi";
+// Used by the onboarding check, commented out below with the Welcome screen.
+// import { getOnboardingStatus } from "../services/researchApi";
 import "./SplashScreen.css";
 
 import inovapathLogo from "./assets/inovapath-logo.png";
@@ -10,7 +11,8 @@ const FADE_DURATION = 850;
 
 // If GET /users/me/onboarding-status has not answered by this point the
 // splash stops waiting and falls back to /welcome, same as on an error.
-const STATUS_TIMEOUT = 8000;
+// (Unused while the Welcome screen is commented out.)
+// const STATUS_TIMEOUT = 8000;
 
 const LogoMark = ({ size = 86 }) => {
   return (
@@ -68,16 +70,21 @@ const SplashScreen = () => {
       setTimeout(resolve, SPLASH_DURATION)
     );
 
-    const destination = Promise.race([
-      getOnboardingStatus()
-        .then((status) =>
-          status?.completed === true ? "/dashboard" : "/welcome"
-        )
-        .catch(() => "/welcome"),
-      new Promise((resolve) =>
-        setTimeout(() => resolve("/welcome"), STATUS_TIMEOUT)
-      ),
-    ]);
+    // The Welcome screen is switched off for now (testing), so everyone goes
+    // to the dashboard. The onboarding check that chose between the two is
+    // kept, commented out, for when the Welcome screen comes back:
+    //
+    // const destination = Promise.race([
+    //   getOnboardingStatus()
+    //     .then((status) =>
+    //       status?.completed === true ? "/dashboard" : "/welcome"
+    //     )
+    //     .catch(() => "/welcome"),
+    //   new Promise((resolve) =>
+    //     setTimeout(() => resolve("/welcome"), STATUS_TIMEOUT)
+    //   ),
+    // ]);
+    const destination = Promise.resolve("/dashboard");
 
     Promise.all([destination, minimumDuration]).then(([path]) => {
       if (cancelled) return;
