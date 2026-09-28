@@ -2278,21 +2278,35 @@ const CompleteWorkflow = () => {
   );
 
   /** Post the branch: the same module, from the branched step, maybe on a new target. */
-  const handleCreateBranch = useCallback(
-    async ({ name, description, target }) => {
-      if (!branchSource) return;
-      const { moduleKey, stepId, selections } = branchSource;
-      const current = selections?.targetIds?.[0] ?? selections?.target ?? "";
-      const changed = target && target.toUpperCase() !== String(current).toUpperCase();
+  /**
+   * "Branch From" choices: every step that has run, per line, e.g.
+   * "Main (Step 3: TxKG Results)" or "stat3-branch (Step 1: LitMineX Results)".
+   * Steps are numbered in the order they ran on that line.
+   */
+  const branchStepOptions = useMemo(() => {
+    const counters = {};
+    return session.runs
+      .filter((r) => r.stepId)
+      .map((r) => {
+        const line = r.branch ?? null;
+        counters[line] = (counters[line] ?? 0) + 1;
+        const lineName = line ? branches.find((b) => b.id === line)?.name || line : "Main";
+        return {
+          value: r.stepId,
+          moduleKey: r.key,
+          label: `${lineName} (Step ${counters[line]}: ${MODULE_BY_KEY[r.key]?.label ?? r.key} Results)`,
+        };
+      });
+  }, [session.runs, branches]);
 
-      let branchSelections = selections ?? {};
-      if (changed) {
-        const symbol = target.toUpperCase();
-        branchSelections =
-          moduleKey === "litminex" || moduleKey === "curatex"
-            ? buildSelections(moduleKey, { targetIds: [symbol] })
-            : { ...branchSelections, target: symbol };
-      }
+  /** Post the branch: a step forked from the chosen step, under the branch's name. */
+  const handleCreateBranch = useCallback(
+    async ({ name, description, fromStepId, fromModuleKey, fromLabel }) => {
+      if (!branchSource) return;
+      const stepId = fromStepId || branchSource.stepId;
+      const moduleKey = fromModuleKey || branchSource.moduleKey;
+      // The clicked card's picks travel with it; another step forks as it was.
+      const branchSelections = stepId === branchSource.stepId ? branchSource.selections ?? {} : {};
 
       setBranchState({ pending: true, error: null });
       // The branch is identified by its name — that is what is sent to the
@@ -2309,11 +2323,12 @@ const CompleteWorkflow = () => {
       }
       const branch = {
         id: branchId,
-        name,
+        name: branchId,
         description,
-        target: changed ? target.toUpperCase() : current || null,
+        target: branchSelections?.targetIds?.[0] ?? branchSelections?.target ?? null,
         moduleKey: result.moduleKey,
         stepId: result.stepId ?? null,
+        fromLabel,
       };
       setBranches((prev) => [...prev, branch]);
       setBranchState({ pending: false, error: null });
@@ -2714,7 +2729,7 @@ const CompleteWorkflow = () => {
         : null,
       steps,
     };
-  }, [session.rail, session.steps, session.activeBranch, branches, selectedTargets, txkgResult, litminex.data, curatexResults.data, curatexProfile.data]);
+  }, [session.rail, session.steps, session.runs, session.activeBranch, branches, selectedTargets, txkgResult, litminex.data, curatexResults.data, curatexProfile.data]);
 
   /** Status chip for one module's card, from the rail the session already builds. */
   const cardStatusFor = (moduleKey) => {
@@ -2883,6 +2898,7 @@ const CompleteWorkflow = () => {
       />
       <BranchDialog
         source={branchSource}
+        stepOptions={branchStepOptions}
         created={branchCreated}
         pending={branchState.pending}
         error={branchState.error}
