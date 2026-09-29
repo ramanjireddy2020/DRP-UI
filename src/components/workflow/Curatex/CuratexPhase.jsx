@@ -228,6 +228,8 @@ const CuratexPhase = ({
   actions = {},
   /** GET /agents/curatex/{jobId}/results → target, when the profile has none. */
   resultsTarget = null,
+  /** The results' written recommendation, if the backend sent one. */
+  recommendation = null,
 }) => {
   const activeCompound = selectedCompound || curateXResults?.[0];
 
@@ -810,11 +812,14 @@ const CuratexPhase = ({
     );
     const gridStyle = { gridTemplateColumns: resultsGrid(showProps) };
 
-    // The strongest candidate on this page, straight from the scores.
-    const scored = curateXResults.filter((c) => Number.isFinite(c?.rawScore));
-    const best = scored.length
-      ? scored.reduce((a, b) => (b.rawScore > a.rawScore ? b : a))
-      : null;
+    // The backend's recommended drugs, or the top five by score.
+    const recommended = recommendation?.items?.length
+      ? recommendation.items.slice(0, 5)
+      : [...curateXResults]
+          .filter((c) => Number.isFinite(c?.rawScore))
+          .sort((a, b) => b.rawScore - a.rawScore)
+          .slice(0, 5)
+          .map((c) => ({ name: c.name, score: c.score, reason: null }));
 
     return (
       <Box className="curatex-page">
@@ -1043,19 +1048,47 @@ const CuratexPhase = ({
             </Typography>
           </div>
 
-          {/* Was a fixed Metformin/Pioglitazone recommendation. The API
-              returns no recommendation text, so this only states what the
-              scores show. */}
-          {best && (
+          {/* Recommendation for the next step, as TxKG recommends targets:
+              the backend's own when it sends one, otherwise the top five by
+              score, labelled as such. It used to name only the single
+              highest score on the page. */}
+          {recommended.length > 0 && (
             <div className="curatex-recommendation-card">
               <Typography className="curatex-recommendation-title">
-                Highest score on this page
+                {recommendation ? "Recommended for screening" : "Top candidates by score"}
               </Typography>
 
-              <Typography className="curatex-recommendation-text">
-                {best.name} (rank {best.rank}, score {best.score}) is the highest-scoring
-                candidate shown{targetName ? ` for ${targetName}` : ""}.
-              </Typography>
+              {recommendation?.text && (
+                <Typography className="curatex-recommendation-text" sx={{ mb: "6px" }}>
+                  {recommendation.text}
+                </Typography>
+              )}
+
+              <Box component="ol" sx={{ m: 0, pl: "20px", display: "flex", flexDirection: "column", gap: "3px" }}>
+                {recommended.map((d) => (
+                  <li key={d.name}>
+                    <Typography component="span" className="curatex-recommendation-text">
+                      <strong>{d.name}</strong>
+                      {d.score != null && d.score !== "—" ? ` — score ${d.score}` : ""}
+                      {d.reason ? `: ${d.reason}` : ""}
+                    </Typography>
+                  </li>
+                ))}
+              </Box>
+
+              {onContinue && (
+                <Typography className="curatex-recommendation-text" sx={{ mt: "8px" }}>
+                  Suggested next step:{" "}
+                  <Box
+                    component="button"
+                    type="button"
+                    onClick={() => onContinue(recommended.map((d) => d.name))}
+                    sx={{ border: "none", background: "none", p: 0, cursor: "pointer", color: "#00A3B8", fontWeight: 600, fontSize: "inherit", fontFamily: "inherit" }}
+                  >
+                    screen these in ScreenSuite →
+                  </Box>
+                </Typography>
+              )}
             </div>
           )}
 

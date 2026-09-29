@@ -2051,7 +2051,12 @@ const CompleteWorkflow = () => {
    * entries, and the step is posted with exactly what was ticked.
    */
   const [screeningPickerOpen, setScreeningPickerOpen] = useState(false);
-  const handleContinueToScreenSuite = useCallback(() => setScreeningPickerOpen(true), []);
+  // Candidates to pre-tick, e.g. CurateX's recommended five.
+  const [screeningPreset, setScreeningPreset] = useState(null);
+  const handleContinueToScreenSuite = useCallback((compoundNames) => {
+    setScreeningPreset(Array.isArray(compoundNames) && compoundNames.length ? compoundNames : null);
+    setScreeningPickerOpen(true);
+  }, []);
 
   const screeningOptions = useMemo(() => {
     const curatexTarget = curatexResults.data?.target || curatexProfile.data?.target || null;
@@ -2073,9 +2078,13 @@ const CompleteWorkflow = () => {
       proteins,
       compounds,
       initialProteins: curatexTarget ? [curatexTarget] : proteins.slice(0, 1).map((p) => p.value),
-      initialCompounds: selectedCompound ? [selectedCompound.name] : compounds.slice(0, 1).map((c) => c.value),
+      initialCompounds: screeningPreset
+        ? screeningPreset
+        : selectedCompound
+        ? [selectedCompound.name]
+        : compounds.slice(0, 1).map((c) => c.value),
     };
-  }, [curatexResults.data, curatexProfile.data, txkgResult.targets, selectedCompound]);
+  }, [curatexResults.data, curatexProfile.data, txkgResult.targets, selectedCompound, screeningPreset]);
 
   const handleConfirmScreening = useCallback(
     ({ proteins, compounds }) => {
@@ -2591,6 +2600,7 @@ const CompleteWorkflow = () => {
           onPageChange={setCuratexPage}
           actions={curatexActions}
           resultsTarget={curatexResults.data?.target ?? null}
+          recommendation={curatexResults.data?.recommendation ?? null}
         />
       );
     }

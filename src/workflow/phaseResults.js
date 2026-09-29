@@ -498,6 +498,30 @@ const readEvidenceLinks = (raw) =>
     )
     .filter((l) => l && /^https?:\/\//i.test(l.url));
 
+/**
+ * CurateX's written recommendation, when the backend sends one: the drugs to
+ * take to the next step and why — { text, items: [{ name, reason, score }] }.
+ * Accepts an object ({ text|summary, items|candidates|drugs }), a list of
+ * drugs, or plain text. null when there is none.
+ */
+const readCuratexRecommendation = (payload) => {
+  const src = payload?.recommendation ?? payload?.recommendations ?? payload?.result?.recommendation ?? null;
+  if (src == null) return null;
+  if (typeof src === "string") return src.trim() ? { text: src.trim(), items: [] } : null;
+  const list = Array.isArray(src) ? src : src.items ?? src.candidates ?? src.drugs ?? src.top ?? [];
+  const items = (Array.isArray(list) ? list : [])
+    .map((d) =>
+      typeof d === "string"
+        ? { name: d, reason: null, score: null }
+        : d && (d.name || d.drug || d.compound)
+        ? { name: d.name ?? d.drug ?? d.compound, reason: d.reason ?? d.rationale ?? d.why ?? null, score: d.score ?? d.compositeScore ?? null }
+        : null
+    )
+    .filter(Boolean);
+  const text = Array.isArray(src) ? null : src.text ?? src.summary ?? src.message ?? null;
+  return text || items.length ? { text, items } : null;
+};
+
 export const normalizeCuratexResults = (payload, { pageSize: requested } = {}) => {
   const items = candidateList(payload);
 
@@ -559,6 +583,7 @@ export const normalizeCuratexResults = (payload, { pageSize: requested } = {}) =
     hasData: compounds.length > 0,
     compounds,
     target: payload?.target ?? payload?.result?.target ?? null,
+    recommendation: readCuratexRecommendation(payload),
     total: Number(payload?.totalCompounds ?? payload?.total ?? payload?.count ?? compounds.length) || compounds.length,
     page,
     pageSize,
