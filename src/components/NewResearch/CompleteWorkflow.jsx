@@ -2612,6 +2612,9 @@ const CompleteWorkflow = () => {
         <ScreeningSuitePhase
           workflowPhase={phase}
           progressMessage={screensuiteJob.progressMessage}
+          startedAt={screensuiteJob.startedAt}
+          lastChangeAt={screensuiteJob.lastChangeAt}
+          onStopWaiting={screensuiteJob.stop}
           hits={screensuite.data?.hits ?? []}
           loading={screensuite.loading}
           error={screensuite.error}

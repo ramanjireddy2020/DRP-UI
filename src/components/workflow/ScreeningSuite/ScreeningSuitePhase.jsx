@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Box, Typography, Button, LinearProgress } from "@mui/material";
 import { FONT, TEAL, GRAY_BG } from "../workflowConstants";
 import PhaseActions from "../PhaseActions";
@@ -176,6 +176,9 @@ const recommendations = [
 /* ============================================================================
    COMMON STYLES
 ============================================================================ */
+
+/** Minutes without any status / progress change before "taking longer than usual". */
+const SLOW_AFTER_MIN = 10;
 
 const baseText = {
   fontFamily: FONT,
@@ -1111,6 +1114,11 @@ const OverallRecommendation = () => {
 const ScreeningSuitePhase = ({
   workflowPhase,
   progressMessage,
+  /** When the docking job started, and when its status / progress last changed. */
+  startedAt = null,
+  lastChangeAt = null,
+  /** Stop waiting on the job (useJob.stop). */
+  onStopWaiting,
   hits = [],
   loading = false,
   error = null,
@@ -1127,6 +1135,16 @@ const ScreeningSuitePhase = ({
   target = null,
   compounds = [],
 }) => {
+  // A slow clock for the "running for …" line; only ticks while loading.
+  const [now, setNow] = useState(() => Date.now());
+  const [snoozeUntil, setSnoozeUntil] = useState(null);
+  useEffect(() => {
+    if (workflowPhase !== "screensuite-loading") return undefined;
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(id);
+  }, [workflowPhase]);
+
   const [selectedReport, setSelectedReport] = useState(null);
 
   const hasHits = Array.isArray(hits) && hits.length > 0;
@@ -1134,6 +1152,10 @@ const ScreeningSuitePhase = ({
 
 
   if (workflowPhase === "screensuite-loading") {
+    const minutes = (ms) => Math.max(0, Math.floor(ms / 60000));
+    const runningFor = startedAt ? minutes(now - startedAt) : null;
+    const quietFor = lastChangeAt ? minutes(now - lastChangeAt) : null;
+    const slow = quietFor != null && quietFor >= SLOW_AFTER_MIN && !(snoozeUntil && now < snoozeUntil);
     return (
       <Box
         sx={{
@@ -1187,6 +1209,40 @@ const ScreeningSuitePhase = ({
               {progressMessage ||
                 "Received candidates from CurateX. Initializing molecular docking pipeline..."}
             </Typography>
+
+            {/* How long it has been running, and — since polling now waits for
+                the job's own verdict — a way out when it has gone quiet,
+                instead of an open-ended spinner (testing: minutes before
+                anything was reported). */}
+            {runningFor != null && runningFor >= 1 && (
+              <Typography sx={{ ...baseText, fontSize: "12px", lineHeight: "18px", color: "#64748B", marginBottom: "12px" }}>
+                Running for {runningFor} min
+                {quietFor != null && quietFor >= 1 ? ` · last update ${quietFor} min ago` : ""}
+              </Typography>
+            )}
+            {slow && (
+              <Box role="status" sx={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", p: "10px 12px", mb: "12px", borderRadius: "8px", bgcolor: "#FEF3C7", border: "1px solid #FDE68A" }}>
+                <Typography sx={{ ...baseText, flex: 1, fontSize: "12px", lineHeight: "18px", color: "#92400E" }}>
+                  Docking is taking longer than usual — no update for {quietFor} minutes.
+                </Typography>
+                <Button
+                  size="small"
+                  onClick={() => setSnoozeUntil(Date.now() + SLOW_AFTER_MIN * 60000)}
+                  sx={{ textTransform: "none", fontSize: "12px", color: "#92400E" }}
+                >
+                  Keep waiting
+                </Button>
+                {onStopWaiting && (
+                  <Button
+                    size="small"
+                    onClick={onStopWaiting}
+                    sx={{ textTransform: "none", fontSize: "12px", fontWeight: 600, color: "#B91C1C" }}
+                  >
+                    Stop waiting
+                  </Button>
+                )}
+              </Box>
+            )}
 
             {/* Said up front, because the run is expected to fail here and a
                 silent eight-minute wait followed by an error is worse. */}

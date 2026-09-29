@@ -62,6 +62,15 @@ const useJob = (jobId, options = {}) => {
    */
   const [progressMessage, setProgressMessage] = useState(null);
 
+  /**
+   * When polling started, and when the status or progress line last changed,
+   * so a screen can say how long a job has been running and when it has gone
+   * quiet — polling no longer gives up on its own.
+   */
+  const [startedAt, setStartedAt] = useState(null);
+  const [lastChangeAt, setLastChangeAt] = useState(null);
+  const lastSeenRef = useRef(null);
+
   /** The module /status reports this job belongs to. */
   const [jobModule, setJobModule] = useState(null);
 
@@ -89,6 +98,19 @@ const useJob = (jobId, options = {}) => {
     setAttempt((n) => n + 1);
   }, []);
 
+  /**
+   * Stop waiting on a job the user has given up on. Polling ends and the job
+   * is reported as not finished (it may still complete on the server).
+   */
+  const stop = useCallback(() => {
+    cancelledRef.current = true;
+    clearTimer();
+    setIsPolling(false);
+    setError("Stopped waiting for this job. It may still finish on the server; reopen the session later to see its result.");
+    setIsFailed(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const reset = useCallback(() => {
     clearTimer();
     setStatus(null);
@@ -101,6 +123,8 @@ const useJob = (jobId, options = {}) => {
     setProgressMessage(null);
     setJobModule(null);
     setTrackedJobId(null);
+    setStartedAt(null);
+    setLastChangeAt(null);
   }, []);
 
   useEffect(() => {
@@ -125,6 +149,9 @@ const useJob = (jobId, options = {}) => {
     setIsPolling(true);
 
     const startedAt = Date.now();
+    setStartedAt(startedAt);
+    setLastChangeAt(startedAt);
+    lastSeenRef.current = null;
     let delay = initialDelay;
     // A status read can fail transiently (network blip, tab waking up), so a
     // few in a row are retried before the job is reported as unreadable.
@@ -176,6 +203,11 @@ const useJob = (jobId, options = {}) => {
       setStatusPayload(payload);
       setStatus(readStatus(payload));
       setProgressMessage(readProgressMessage(payload));
+      const seen = `${readStatus(payload)}|${readProgressMessage(payload)}`;
+      if (seen !== lastSeenRef.current) {
+        lastSeenRef.current = seen;
+        setLastChangeAt(Date.now());
+      }
       setJobModule(readJobModule(payload));
 
       if (isTerminalFailure(payload)) {
@@ -243,8 +275,11 @@ const useJob = (jobId, options = {}) => {
     isFailed,
     progressMessage,
     jobModule,
+    startedAt,
+    lastChangeAt,
     retry,
     reset,
+    stop,
   };
 };
 
