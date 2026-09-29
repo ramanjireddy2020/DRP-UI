@@ -741,7 +741,12 @@ const ResultsScreen = ({
             : loading
             ? "Loading the novelty report…"
             : patentRows.length
-            ? `Novelty search complete. Analysed ${report.total} patent${report.total === 1 ? "" : "s"}${subject ? ` for ${subject}` : ""}. Tick one or more patents to chat with them below.`
+            ? // The count is the rows in the table. It used report.total (the
+              // API's totalPatents), which read "Analysed 1 patent" above a
+              // two-row table (testing). A larger total is still mentioned.
+              `Novelty search complete. Found ${patentRows.length} patent${patentRows.length === 1 ? "" : "s"}${
+                report.total > patentRows.length ? ` (of ${report.total} analysed)` : ""
+              }${subject ? ` for ${subject}` : ""}. Tick one or more patents to chat with them below.`
             : "No patents were returned for this candidate."}
         </Typography>
 
@@ -957,7 +962,7 @@ const SummaryScreen = ({ report, sessionReport, researcherName, actions = {}, on
       <Typography sx={summaryText}>
         {"Novelty Search:\n"}
         {report
-          ? `✓ ${report.total} patent${report.total === 1 ? "" : "s"} analysed`
+          ? `✓ ${report.patents?.length ?? report.total} patent${(report.patents?.length ?? report.total) === 1 ? "" : "s"} found`
           : "The novelty report is not available."}
       </Typography>
 

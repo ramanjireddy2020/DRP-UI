@@ -66,7 +66,7 @@ export const buildSessionReport = ({ txkg, litminex, curatexTarget, curatex, doc
     sections.push({
       key: "novsearch",
       title: "NovSearch — Novelty search",
-      summary: `${novelty.total} patent${novelty.total === 1 ? "" : "s"} analysed`,
+      summary: `${(novelty.patents ?? []).length} patent${(novelty.patents ?? []).length === 1 ? "" : "s"} found`,
       items: [
         ...(novelty.assessment ? [`Assessment: ${novelty.assessment}`] : []),
         ...top(patents, 3).map((p) => `${p.id} — ${p.title} — relevance ${p.relevance}`),
