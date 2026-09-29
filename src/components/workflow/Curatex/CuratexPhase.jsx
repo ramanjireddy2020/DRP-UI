@@ -77,7 +77,7 @@ const resultsGrid = (showProps) =>
 const STATUS_ICON = {
   match: { icon: "✓", className: "is-match", title: "Matches the criterion" },
   mismatch: { icon: "✕", color: "#DC2626", title: "Outside the criterion" },
-  unknown: { icon: "?", color: "#94A3B8", title: "Not returned by the API" },
+  unknown: { icon: "?", color: "#94A3B8", title: "Not available for this compound" },
 };
 
 /**
@@ -899,7 +899,7 @@ const CuratexPhase = ({
                         shown at all. */}
                     <Typography
                       className="curatex-compound-name"
-                      title={compound.rawScore != null ? `API score: ${compound.rawScore}` : undefined}
+                      title={compound.rawScore != null ? `Raw score: ${compound.rawScore}` : undefined}
                     >
                       {compound.score}
                     </Typography>
@@ -1054,8 +1054,7 @@ const CuratexPhase = ({
 
               <Typography className="curatex-recommendation-text">
                 {best.name} (rank {best.rank}, score {best.score}) is the highest-scoring
-                candidate shown{targetName ? ` for ${targetName}` : ""}. The CurateX API does not
-                return a written recommendation.
+                candidate shown{targetName ? ` for ${targetName}` : ""}.
               </Typography>
             </div>
           )}
@@ -1232,7 +1231,7 @@ const CuratexPhase = ({
 
               <CompoundSection
                 title="Mechanism of Action, Current Uses, Patent Status"
-                text="Not available from the CurateX API. Patent status is assessed by NovSearch later in the workflow."
+                text="Patent status is assessed by NovSearch later in the workflow."
                 last
               />
             </div>

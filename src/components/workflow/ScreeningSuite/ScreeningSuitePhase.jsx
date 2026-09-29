@@ -1385,9 +1385,9 @@ const ScreeningSuitePhase = ({
                 No interaction profile for {selectedReport.protein}
               </Typography>
               <Typography sx={{ ...baseText, fontSize: "12px", lineHeight: "18px", color: "#64748B" }}>
-                The affinity above is the full extent of what this deployment
-                returns. Residue interactions, hydrogen bonds, the 3D pose view
-                and the downloadable bundle have no endpoint in the API.
+                Only the binding affinity is available for this run. Residue
+                interactions, hydrogen bonds, the 3D pose view and the
+                downloadable bundle aren't available yet.
               </Typography>
             </Box>
           )}
