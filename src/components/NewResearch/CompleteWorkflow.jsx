@@ -636,6 +636,9 @@ const CompleteWorkflow = () => {
    * always ticked and none could be changed.
    */
   const [selectedArticles, setSelectedArticles] = useState([]);
+  /** NovSearch patents ticked for chat, and the latest question about them. */
+  const [selectedPatentIds, setSelectedPatentIds] = useState([]);
+  const [patentQuestion, setPatentQuestion] = useState(null);
 
   /**
    * Each branch keeps its own picks: TxKG targets, LitMineX articles, the
@@ -650,13 +653,14 @@ const CompleteWorkflow = () => {
     const from = pickBranchRef.current;
     const to = session.activeBranch ?? null;
     if (from === to) return;
-    branchPicksRef.current[from ?? "__main__"] = { selectedTargets, selectedArticles, selectedCompound, profileData };
+    branchPicksRef.current[from ?? "__main__"] = { selectedTargets, selectedArticles, selectedCompound, profileData, selectedPatentIds };
     const saved = branchPicksRef.current[to ?? "__main__"];
     if (saved) {
       setSelectedTargets(saved.selectedTargets);
       setSelectedArticles(saved.selectedArticles);
       setSelectedCompound(saved.selectedCompound);
       setProfileData(saved.profileData);
+      setSelectedPatentIds(saved.selectedPatentIds ?? []);
     }
     pickBranchRef.current = to;
     // Only a branch switch triggers this; the picks are read as they were.
@@ -2635,6 +2639,9 @@ const CompleteWorkflow = () => {
           actions={novsearchActions}
           onEndTask={handleEndTask}
           sessionReport={sessionReport}
+          selectedIds={selectedPatentIds}
+          onToggleSelected={togglePatent}
+          patentQuestion={patentQuestion}
         />
       );
     }
@@ -2913,12 +2920,28 @@ const CompleteWorkflow = () => {
    * the response names. A UI that guesses the module puts the researcher on a
    * screen the backend knows nothing about.
    */
+  /**
+   * Chat with patent through the one platform chat bar: with patents ticked
+   * in NovSearch, the question goes to those patents (answered in NovSearch's
+   * thread); otherwise to the supervisor. NovSearch used to draw a second
+   * query box of its own (testing).
+   */
+  const togglePatent = useCallback(
+    (id) => setSelectedPatentIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id])),
+    []
+  );
+  const patentScope = selectedPatentIds.filter((pid) => (novsearch.data?.patents ?? []).some((p) => p.id === pid));
+
   const handleChatSubmit = useCallback(
     (text) => {
+      if (patentScope.length) {
+        setPatentQuestion({ id: `${Date.now()}`, text });
+        return;
+      }
       session.sendMessage(text);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [session.sendMessage]
+    [session.sendMessage, patentScope.length]
   );
 
   return (
@@ -2951,14 +2974,42 @@ const CompleteWorkflow = () => {
                  on every parent render, and the parent re-renders roughly once
                  a second while a job is polling, which remounted the field and
                  threw away the caret mid-sentence. */
+              <>
+              {patentScope.length > 0 && (
+                <Box sx={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "6px", px: { xs: "16px", md: "32px" }, pt: "8px" }}>
+                  <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: "#475569", fontWeight: 600 }}>
+                    Chatting with:
+                  </Typography>
+                  {patentScope.map((pid) => (
+                    <Box key={pid} sx={{ display: "inline-flex", alignItems: "center", gap: "4px", p: "2px 8px", borderRadius: "12px", bgcolor: "rgba(0,188,212,0.1)" }}>
+                      <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: TEAL, fontWeight: 600 }}>{pid}</Typography>
+                      <Box
+                        component="button"
+                        type="button"
+                        aria-label={`Stop chatting about ${pid}`}
+                        onClick={() => togglePatent(pid)}
+                        sx={{ border: "none", background: "none", cursor: "pointer", color: "#64748B", p: 0, fontSize: "13px", lineHeight: 1 }}
+                      >
+                        ×
+                      </Box>
+                    </Box>
+                  ))}
+                </Box>
+              )}
               <ChatInputBar
                 onSend={handleChatSubmit}
                 pending={session.pending}
+                placeholder={
+                  patentScope.length
+                    ? `Ask about the ${patentScope.length === 1 ? "selected patent" : `${patentScope.length} selected patents`} (e.g. what does claim 3 mean?)`
+                    : undefined
+                }
                 // Only shown while a reply is in flight. The idle hint
                 // ("Mention a module with @ to start a new run") was removed
                 // per testing; the placeholder already says to type @.
                 hint={session.pending ? "Asking the agent…" : undefined}
               />
+              </>
             )}
           </Box>
         </Box>

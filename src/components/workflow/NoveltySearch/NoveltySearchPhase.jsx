@@ -111,67 +111,6 @@ const primaryButton = {
 ============================================================================ */
 
 
-const PlusIcon = () => (
-  <Typography
-    component="span"
-    sx={{
-      fontFamily: NOVSEARCH_FONT,
-      fontSize: "22px",
-      lineHeight: "22px",
-      color: "#64748B",
-      fontWeight: 400,
-    }}
-  >
-    +
-  </Typography>
-);
-
-const ArrowUpIcon = () => (
-  <Typography
-    component="span"
-    sx={{
-      fontFamily: NOVSEARCH_FONT,
-      fontSize: "21px",
-      lineHeight: "21px",
-      color: "#FFFFFF",
-      fontWeight: 400,
-    }}
-  >
-    ↑
-  </Typography>
-);
-
-const MicIcon = () => (
-  <svg
-    width="16"
-    height="16"
-    viewBox="0 0 24 24"
-    fill="none"
-  >
-    <rect
-      x="8"
-      y="3"
-      width="8"
-      height="12"
-      rx="4"
-      stroke="#94A3B8"
-      strokeWidth="2"
-    />
-    <path
-      d="M5 11V12C5 15.866 8.134 19 12 19C15.866 19 19 15.866 19 12V11"
-      stroke="#94A3B8"
-      strokeWidth="2"
-      strokeLinecap="round"
-    />
-    <path
-      d="M12 19V22"
-      stroke="#94A3B8"
-      strokeWidth="2"
-      strokeLinecap="round"
-    />
-  </svg>
-);
-
 /* ============================================================================
    AGENT HEADER
 ============================================================================ */
@@ -746,7 +685,7 @@ const ResultsScreen = ({
               // two-row table (testing). A larger total is still mentioned.
               `Novelty search complete. Found ${patentRows.length} patent${patentRows.length === 1 ? "" : "s"}${
                 report.total > patentRows.length ? ` (of ${report.total} analysed)` : ""
-              }${subject ? ` for ${subject}` : ""}. Tick one or more patents to chat with them below.`
+              }${subject ? ` for ${subject}` : ""}. Tick one or more patents, then ask about them in the chat bar below.`
             : "No patents were returned for this candidate."}
         </Typography>
 
@@ -1038,107 +977,6 @@ const SummaryScreen = ({ report, sessionReport, researcherName, actions = {}, on
 };
 
 /* ============================================================================
-   CHAT INPUT
-============================================================================ */
-
-const ChatInput = ({ value, onChange, onSubmit, disabled = false, placeholder = "Ask a question about the indexed patents..." }) => (
-  <Box
-    sx={{
-      width: "100%",
-      height: "98px",
-      boxSizing: "border-box",
-      border: "1.5px solid #E2E8F0",
-      borderRadius: "16px",
-      background: "#FFFFFF",
-      padding: "16px",
-      display: "flex",
-      flexDirection: "column",
-      justifyContent: "space-between",
-      gap: "12px",
-    }}
-  >
-    <Box
-      component="input"
-      value={value}
-      disabled={disabled}
-      onChange={(event) => onChange(event.target.value)}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" && !event.shiftKey) {
-          event.preventDefault();
-          onSubmit();
-        }
-      }}
-      placeholder={placeholder}
-      sx={{
-        width: "100%",
-        border: "none",
-        outline: "none",
-        background: "transparent",
-        fontFamily: NOVSEARCH_FONT,
-        fontSize: "14px",
-        lineHeight: "20px",
-        color: "#1E293B",
-
-        "&::placeholder": {
-          color: "#94A3B8",
-          opacity: 1,
-        },
-      }}
-    />
-
-    <Box
-      sx={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        mt: "12px",
-      }}
-    >
-      <Box
-        sx={{
-          width: "26px",
-          height: "26px",
-          borderRadius: "6px",
-          background: "#F1F5F9",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          cursor: disabled ? "default" : "pointer",
-        }}
-      >
-        <PlusIcon />
-      </Box>
-
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          gap: "16px",
-        }}
-      >
-        <MicIcon />
-
-        <Box
-          onClick={disabled ? undefined : onSubmit}
-          sx={{
-            width: "32px",
-            height: "32px",
-            borderRadius: "50%",
-            background: disabled ? "#CBD5E1" : "#08B8D0",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            cursor: disabled ? "default" : "pointer",
-          }}
-        >
-          <ArrowUpIcon />
-        </Box>
-      </Box>
-    </Box>
-  </Box>
-);
-
-/* ============================================================================
    PHASE NORMALIZATION
 ============================================================================ */
 
@@ -1200,6 +1038,14 @@ const NoveltySearchPhase = ({
   onEndTask,
   /** Every module's results; see workflow/sessionReport.js. */
   sessionReport = null,
+  /**
+   * Chat with patent goes through the platform chat bar (one query box, not a
+   * second one inside NovSearch). The parent owns the ticked patents and
+   * hands questions asked about them down as { id, text }.
+   */
+  selectedIds = [],
+  onToggleSelected,
+  patentQuestion = null,
 }) => {
   const navigate = useNavigate();
 
@@ -1207,10 +1053,7 @@ const NoveltySearchPhase = ({
     getInitialStage(workflowPhase)
   );
 
-  const [inputValue, setInputValue] = useState("");
 
-  /** Patents ticked in the results table. */
-  const [selectedIds, setSelectedIds] = useState([]);
 
   /** Follow-up questions and their answers, in order. */
   const [thread, setThread] = useState([]);
@@ -1231,11 +1074,7 @@ const NoveltySearchPhase = ({
 
   const running = isLoading || stage === "loading";
 
-  /** The ticked patents still in the report: what "Chat with patent" asks about. */
-  const chatScope = selectedIds.filter((pid) => (report?.patents ?? []).some((p) => p.id === pid));
-
-  const toggleSelected = (id) =>
-    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  const toggleSelected = (id) => onToggleSelected?.(id);
 
   /** Follow-up box → ask({ question, patentIds: null, topK: null }) over every indexed patent. */
   const askFollowUp = async (question, existingId = null) => {
@@ -1270,20 +1109,12 @@ const NoveltySearchPhase = ({
     }
   };
 
-  /**
-   * The follow-up text used to be keyword-matched ("compare", "summary") to
-   * switch screens and then thrown away, so no question was ever answered.
-   */
-  const handleSubmit = () => {
-    const value = inputValue.trim();
-
-    if (!value) {
-      return;
-    }
-
-    setInputValue("");
-    askFollowUp(value);
-  };
+  // A question typed in the platform chat bar while patents are ticked.
+  useEffect(() => {
+    if (patentQuestion?.text) askFollowUp(patentQuestion.text);
+    // Once per question (its id), not on every re-render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [patentQuestion?.id]);
 
   const handleEndTask = async () => {
     if (!onEndTask) return;
@@ -1405,63 +1236,6 @@ const NoveltySearchPhase = ({
 
       </Box>
 
-      {/* Keep the composer fixed to the NovSearch viewport across every stage. */}
-      <Box
-        sx={{
-          flexShrink: 0,
-          width: "100%",
-          background: GRAY_BG,
-          borderTop: "1px solid #E2E8F0",
-          padding: "12px 16px",
-          boxSizing: "border-box",
-
-          "@media (max-width: 1100px)": {
-            padding: "12px 16px",
-          },
-
-          "@media (max-width: 700px)": {
-            padding: "12px 16px",
-          },
-        }}
-      >
-        {/* Chat with patent: the ticked patents are what the next question
-            is about. Untick to go back to asking across all of them. */}
-        {chatScope.length > 0 && (
-          <Box sx={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "6px", mb: "8px" }}>
-            <Typography sx={{ ...text, fontSize: "12px", color: "#475569", fontWeight: 600 }}>
-              Chatting with:
-            </Typography>
-            {chatScope.map((pid) => (
-              <Box
-                key={pid}
-                sx={{ display: "inline-flex", alignItems: "center", gap: "4px", p: "2px 8px", borderRadius: "12px", bgcolor: "rgba(0,188,212,0.1)" }}
-              >
-                <Typography sx={{ ...text, fontSize: "12px", color: TEAL, fontWeight: 600 }}>{pid}</Typography>
-                <Box
-                  component="button"
-                  type="button"
-                  aria-label={`Stop chatting about ${pid}`}
-                  onClick={() => toggleSelected(pid)}
-                  sx={{ border: "none", background: "none", cursor: "pointer", color: "#64748B", p: 0, fontSize: "13px", lineHeight: 1 }}
-                >
-                  ×
-                </Box>
-              </Box>
-            ))}
-          </Box>
-        )}
-        <ChatInput
-          value={inputValue}
-          onChange={setInputValue}
-          onSubmit={handleSubmit}
-          disabled={running || stage === "summary"}
-          placeholder={
-            chatScope.length
-              ? `Ask about the ${chatScope.length === 1 ? "selected patent" : `${chatScope.length} selected patents`} (e.g. what does claim 3 mean?)`
-              : "Ask a question about the indexed patents, or tick patents above to chat with them..."
-          }
-        />
-      </Box>
     </Box>
   );
 };
