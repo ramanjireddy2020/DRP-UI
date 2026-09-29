@@ -753,7 +753,26 @@ const TXKGPhase = ({
     return { graph, nodes, hubId: findHubId(nodes, edges) };
   })();
 
-  const traversalsFor = (t) => {
+  // A path that arrived as plain text has names but no node types, so its
+  // nodes can't be coloured. Where the subgraph has a node of that name, its
+  // type is used.
+  const withTypes = (list) => {
+    if (!subgraphIndex || !Array.isArray(list)) return list;
+    const byName = new Map();
+    subgraphIndex.nodes.forEach((n) => {
+      byName.set(String(n.label ?? "").toLowerCase(), n.type);
+      byName.set(String(n.id ?? "").toLowerCase(), n.type);
+    });
+    return list.map((tr) =>
+      tr.steps.every((st) => st.type)
+        ? tr
+        : { ...tr, steps: tr.steps.map((st) => (st.type ? st : { ...st, type: byName.get(String(st.name).toLowerCase()) ?? null })) }
+    );
+  };
+
+  const traversalsFor = (t) => withTypes(traversalsForTarget(t));
+
+  const traversalsForTarget = (t) => {
     if (t.traversals?.length) return t.traversals;
     const names = [t.id, t.name, t.fullName, t.geneName].filter(Boolean).map((v) => String(v).toLowerCase());
     const matches = (v) => v != null && names.includes(String(v).toLowerCase());
@@ -769,68 +788,67 @@ const TXKGPhase = ({
     return node ? pathsBetween(subgraphIndex.graph, subgraphIndex.hubId, node.id) : [];
   };
 
-  /** Top five targets, each expandable to list all of its sourced meta-paths. */
+  /**
+   * Top five targets, each with its meta-paths drawn as node chains.
+   *
+   * Every row shows its first path as the two-layer chain (coloured nodes and
+   * arrows, relation chips beneath) — collapsed rows used to show it as one
+   * grey string, "A → B → C (+2 more)", which was the crowded view testing
+   * kept seeing (only rank 1 started expanded). "+N more paths" opens the
+   * rest; each path sits on its own line, separated.
+   */
   const renderMetapathTraversals = () => (
-    <Box sx={{ flex: 1, display: "flex", flexDirection: "column", gap: "6px" }}>
+    <Box sx={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "6px" }}>
       <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#111827", lineHeight: "16px" }}>
         Meta-Path Traversals
       </Typography>
       {targets.slice(0, 5).map((t, i) => {
         const open = isMetapathOpen(t.name, i);
         const real = traversalsFor(t);
+        const shown = open ? real : real.slice(0, 1);
+        const hidden = real.length - shown.length;
         return (
           <Box
             key={`${t.name}-${i}`}
-            sx={{ display: "flex", flexDirection: "column", borderRadius: "8px", bgcolor: open ? "#F9FAFB" : "transparent", borderBottom: open ? "none" : `1px solid ${BORDER}` }}
+            sx={{ display: "flex", flexDirection: "column", gap: "8px", p: "10px 12px", borderBottom: `1px solid ${BORDER}` }}
           >
-            <Box
-              component="button"
-              type="button"
-              onClick={() => toggleMetapathTarget(t.name)}
-              aria-expanded={open}
-              sx={{
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                p: "8px 12px",
-                width: "100%",
-                border: "none",
-                background: "none",
-                cursor: "pointer",
-                textAlign: "left",
-                fontFamily: FONT,
-              }}
-            >
-              <ExpandMoreOutlined
-                sx={{ width: 18, height: 18, color: "#94A3B8", flexShrink: 0, transform: open ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}
-              />
-              <Typography sx={{ fontFamily: FONT, fontSize: "12px", fontWeight: 600, color: "#111827", lineHeight: "15px", minWidth: 44 }}>
+            {/* Target line: name, score, and the toggle for its other paths. */}
+            <Box sx={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <Typography sx={{ fontFamily: FONT, fontSize: "12.5px", fontWeight: 700, color: "#111827", lineHeight: "16px" }}>
                 {t.name}
               </Typography>
-              {/* Collapsed rows preview the first path and how many more there are. */}
-              <Typography sx={{ flex: 1, fontFamily: FONT, fontSize: "11px", color: "#6B7280", lineHeight: "13px", visibility: open ? "hidden" : "visible" }}>
-                {real.length
-                  ? `${real[0].text}${real.length > 1 ? ` (+${real.length - 1} more)` : ""}`
-                  : "No path available yet"}
-              </Typography>
-              <Box sx={{ display: "flex", alignItems: "center", p: "3px 8px", bgcolor: i === 0 ? "#00BCD4" : "#D1FAE5", borderRadius: "8px" }}>
+              <Box sx={{ display: "flex", alignItems: "center", p: "2px 8px", bgcolor: i === 0 ? "#00BCD4" : "#D1FAE5", borderRadius: "8px" }}>
                 <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: i === 0 ? "#FFFFFF" : "#059669", lineHeight: "13px" }}>
                   {t.score}
                 </Typography>
               </Box>
+              <Box sx={{ flex: 1 }} />
+              {real.length > 1 && (
+                <Box
+                  component="button"
+                  type="button"
+                  onClick={() => toggleMetapathTarget(t.name)}
+                  aria-expanded={open}
+                  sx={{ display: "inline-flex", alignItems: "center", gap: "2px", border: "none", background: "none", cursor: "pointer", color: TEAL, fontFamily: FONT, fontSize: "11px", fontWeight: 600, p: 0 }}
+                >
+                  {open ? "Show fewer" : `+${hidden} more path${hidden === 1 ? "" : "s"}`}
+                  <ExpandMoreOutlined sx={{ width: 16, height: 16, transform: open ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
+                </Box>
+              )}
             </Box>
-            {open && (
-              <Box sx={{ display: "flex", flexDirection: "column", gap: "8px", p: "0 12px 10px 38px" }}>
-                {real.length ? (
-                  real.map((traversal, j) => <PathChain key={j} traversal={traversal} />)
-                ) : (
-                  // Metapath types ("gene/protein → pathway") are not shown:
-                  // testing asked for actual node names only.
-                  <Typography sx={{ fontFamily: FONT, fontSize: "11px", color: "#6B7280", lineHeight: 1.35 }}>
-                    No path for this target yet. Paths appear once the knowledge graph is generated.
-                  </Typography>
-                )}
-              </Box>
+
+            {shown.length ? (
+              shown.map((traversal, j) => (
+                <Box key={j} sx={{ pl: "2px", ...(j > 0 ? { pt: "8px", borderTop: `1px dashed ${BORDER}` } : {}) }}>
+                  <PathChain traversal={traversal} />
+                </Box>
+              ))
+            ) : (
+              // Metapath types ("gene/protein → pathway") are not shown:
+              // testing asked for actual node names only.
+              <Typography sx={{ fontFamily: FONT, fontSize: "11px", color: "#6B7280", lineHeight: 1.35 }}>
+                No path for this target yet. Paths appear once the knowledge graph is generated.
+              </Typography>
             )}
           </Box>
         );
