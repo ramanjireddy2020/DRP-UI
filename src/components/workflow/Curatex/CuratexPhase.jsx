@@ -784,7 +784,7 @@ const CuratexPhase = ({
         <div className="curatex-agent-card curatex-submitted-card">
           <AgentHeader moduleKey="curatex" />
           <Typography className="curatex-body-text curatex-results-intro">
-            Profile submitted. Scoring compounds against your {targetLabel} target product
+            Profile submitted. Scoring compounds against your {targetLabel} ideal candidate
             profile...
           </Typography>
           <div className="curatex-progress-track">
