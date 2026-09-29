@@ -452,6 +452,17 @@ const CompleteWorkflow = () => {
     enabled: screensuiteStep?.phase === "screensuite-results",
   });
 
+  // Docking results arrive first; interaction profiling finishes later. Keep
+  // re-reading the results until the interaction stage settles, so rows,
+  // Mol* and files show straight away and the profiles fill in after.
+  const screensuiteReload = screensuite.reload;
+  const screensuiteSettled = !screensuite.data || screensuite.data.awaitingInput || screensuite.data.interactionsDone !== false;
+  useEffect(() => {
+    if (screensuiteSettled || screensuite.error) return undefined;
+    const timer = setTimeout(() => screensuiteReload(), 5000);
+    return () => clearTimeout(timer);
+  }, [screensuiteSettled, screensuite.error, screensuite.data, screensuiteReload]);
+
   const novsearchStep = session.steps.novsearch;
   const novsearch = usePhaseResults("novsearch", novsearchStep?.jobId, {
     enabled: novsearchStep?.phase === "novelty-results",
@@ -2460,15 +2471,16 @@ const CompleteWorkflow = () => {
         readPdbShortlist(step?.data?.summary),
         readPdbShortlist(step?.error),
       ].find((list) => Array.isArray(list) && list.length) ?? [];
-      if (options.length && !screensuite.data?.hasData) {
+      const hasResults = (screensuite.data?.results ?? []).length > 0 || (screensuite.data?.hits ?? []).length > 0;
+      if (options.length && (screensuite.data?.awaitingInput || !hasResults)) {
         const selections = step?.data?.selections ?? {};
         return (
           <PdbPicker
             target={selections.target ?? null}
             options={options}
             pending={session.pending}
-            onPick={(pdbId) =>
-              session.handOff("screensuite", { ...buildSelections("screensuite", selections), pdbId })
+            onPick={({ pdbId, structures }) =>
+              session.handOff("screensuite", buildSelections("screensuite", { ...selections, pdbId, structures }))
             }
           />
         );
@@ -2622,7 +2634,9 @@ const CompleteWorkflow = () => {
     if (moduleKey === "screensuite") {
       const sel = step?.data?.selections ?? {};
       const screenedProteins = Array.isArray(sel.targets) && sel.targets.length ? sel.targets : sel.target ? [sel.target] : [];
-      const screenedCompounds = Array.isArray(sel.compounds) ? sel.compounds : [];
+      const screenedCompounds = (Array.isArray(sel.compounds) ? sel.compounds : [])
+        .map((c) => (typeof c === "string" ? c : c?.drug_name))
+        .filter(Boolean);
       return (
         <>
         {/* The exact combination this run screens, so results stay tied to it. */}
@@ -2638,6 +2652,8 @@ const CompleteWorkflow = () => {
           lastChangeAt={screensuiteJob.lastChangeAt}
           onStopWaiting={screensuiteJob.stop}
           hits={screensuite.data?.hits ?? []}
+          screening={screensuite.data}
+          jobId={screensuiteStep?.jobId ?? null}
           loading={screensuite.loading}
           error={screensuite.error}
           onRetry={screensuite.reload}
@@ -2645,7 +2661,7 @@ const CompleteWorkflow = () => {
           unavailableMessage={SCREENSUITE_UNAVAILABLE_MESSAGE}
           actions={screensuiteActions}
           target={step?.data?.selections?.target ?? null}
-          compounds={step?.data?.selections?.compounds ?? []}
+          compounds={screenedCompounds}
         />
         </>
       );
@@ -2819,7 +2835,9 @@ const CompleteWorkflow = () => {
         case "curatex":
           return curatexResults.data?.target || curatexProfile.data?.target || join(sel.targetIds);
         case "screensuite":
-          return [join(sel.compounds), sel.target].filter(Boolean).join(" vs ");
+          return [join((sel.compounds ?? []).map((c) => (typeof c === "string" ? c : c?.drug_name))), join(sel.targets) || sel.target]
+            .filter(Boolean)
+            .join(" vs ");
         case "novsearch":
           return [sel.drug, sel.target, sel.disease].filter(Boolean).join(" + ");
         default:

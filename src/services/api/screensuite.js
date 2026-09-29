@@ -30,7 +30,7 @@ export const SCREENSUITE_UNAVAILABLE_MESSAGE =
 
 /**
  * Dock compounds against the protein. Returns 202 { jobId }.
- * @param {object} payload - { target, compoundLibrary?, compounds? }
+ * @param {object} payload - { target, targets?, compounds?: [{ drug_name, identifier? }], structures? }
  */
 export const screen = async (payload) =>
   unwrap(await apiClient.post("/agents/screensuite/screen", payload));
@@ -42,11 +42,54 @@ export const screen = async (payload) =>
 export const getHits = async (jobId) =>
   unwrap(await apiClient.get(`/agents/screensuite/${jobId}/hits`));
 
+/**
+ * The staged screening result: per result the protein × drug, score, rank,
+ * stage statuses (resolution / docking / interaction), Mol* files and
+ * downloads, plus the interaction stage's overall status. Docking results
+ * are kept even when interaction profiling fails.
+ */
+export const getResults = async (jobId) =>
+  unwrap(await apiClient.get(`/agents/screensuite/${jobId}/results`));
+
+/** One result's interaction profile (ProLIF): counts, residues, interactions by type. */
+export const getInteractions = async (jobId, resultId) =>
+  unwrap(await apiClient.get(`/agents/screensuite/${jobId}/results/${resultId}/interactions`));
+
+/**
+ * A ScreenSuite file as a Blob. `path` is a gateway path from the results
+ * (e.g. /agents/screensuite/{jobId}/results/res_001/files/complex); it is
+ * fetched through apiClient so the bearer token goes with it.
+ */
+export const fetchFileBlob = async (path) => {
+  const response = await apiClient.get(path, { responseType: "blob" });
+  return response.data;
+};
+
+/** Save a ScreenSuite file to disk under `filename`. */
+export const downloadFile = async (path, filename) => {
+  const blob = await fetchFileBlob(path);
+  const url = window.URL.createObjectURL(blob);
+  try {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  } finally {
+    window.setTimeout(() => window.URL.revokeObjectURL(url), 1000);
+  }
+};
+
 const screensuiteApi = {
   SCREENSUITE_UNAVAILABLE,
   SCREENSUITE_UNAVAILABLE_MESSAGE,
   screen,
   getHits,
+  getResults,
+  getInteractions,
+  fetchFileBlob,
+  downloadFile,
 };
 
 export default screensuiteApi;

@@ -3,175 +3,7 @@ import { Box, Typography, Button, LinearProgress } from "@mui/material";
 import { FONT, TEAL, GRAY_BG } from "../workflowConstants";
 import PhaseActions from "../PhaseActions";
 import SharedAgentHeader from "../AgentHeader";
-
-/* ============================================================================
-   DATA
-============================================================================ */
-
-
-const residueInteractions = [
-  {
-    id: 1,
-    residue: "68/ALA",
-    receptor: "A:ALA:68",
-    recBQ: "5.84",
-    resBQ: "3.41",
-    selection: "A:ALA:68",
-    ligBonds: "0",
-    intBonds: "0",
-  },
-  {
-    id: 2,
-    residue: "70/PRO",
-    receptor: "A:PRO:70",
-    recBQ: "4.90",
-    resBQ: "0.39",
-    selection: "A:PRO:70",
-    ligBonds: "0",
-    intBonds: "0",
-  },
-  {
-    id: 3,
-    residue: "74/PRO",
-    receptor: "A:PRO:74",
-    recBQ: "2.88",
-    resBQ: "0.10",
-    selection: "A:PRO:74",
-    ligBonds: "0",
-    intBonds: "0",
-  },
-  {
-    id: 4,
-    residue: "104/PHE",
-    receptor: "A:PHE:104",
-    recBQ: "6.81",
-    resBQ: "2.59",
-    selection: "A:PHE:104",
-    ligBonds: "0",
-    intBonds: "0",
-  },
-  {
-    id: 5,
-    residue: "90/PRO",
-    receptor: "A:PRO:90",
-    recBQ: "3.55",
-    resBQ: "0.57",
-    selection: "A:PRO:90",
-    ligBonds: "0",
-    intBonds: "0",
-  },
-  {
-    id: 6,
-    residue: "106/PRO",
-    receptor: "A:PRO:106",
-    recBQ: "4.08",
-    resBQ: "1.03",
-    selection: "A:PRO:106",
-    ligBonds: "0",
-    intBonds: "0",
-  },
-  {
-    id: 7,
-    residue: "110/TRP",
-    receptor: "A:TRP:110",
-    recBQ: "7.52",
-    resBQ: "4.21",
-    selection: "A:TRP:110",
-    ligBonds: "0",
-    intBonds: "0",
-  },
-];
-
-const hydrogenBonds = [
-  {
-    id: 1,
-    residue: "142/HIS",
-    receptor: "A:HIS:142",
-    donorBQ: "2.98",
-    recBQ: "1.45",
-    selection: "A:HIS:142",
-    distHA: "3.26",
-    distDA: "3.88",
-  },
-  {
-    id: 2,
-    residue: "158/LYS",
-    receptor: "A:LYS:158",
-    donorBQ: "3.12",
-    recBQ: "0.87",
-    selection: "A:LYS:158",
-    distHA: "3.41",
-    distDA: "4.02",
-  },
-  {
-    id: 3,
-    residue: "271/ASP",
-    receptor: "A:ASP:271",
-    donorBQ: "4.55",
-    recBQ: "2.11",
-    selection: "A:ASP:271",
-    distHA: "3.58",
-    distDA: "4.15",
-  },
-  {
-    id: 4,
-    residue: "84/GLU",
-    receptor: "A:GLU:84",
-    donorBQ: "3.78",
-    recBQ: "1.23",
-    selection: "A:GLU:84",
-    distHA: "3.72",
-    distDA: "4.33",
-  },
-  {
-    id: 5,
-    residue: "198/ARG",
-    receptor: "A:ARG:198",
-    donorBQ: "5.02",
-    recBQ: "2.89",
-    selection: "A:ARG:198",
-    distHA: "3.89",
-    distDA: "4.51",
-  },
-];
-
-const recommendations = [
-  {
-    target: "JAK2",
-    compound: "Gefitinib",
-    affinity: "-8.046 kcal/mol",
-    level: "High (92%)",
-    color: "#00BCD4",
-  },
-  {
-    target: "EGFR",
-    compound: "Gefitinib",
-    affinity: "-7.832 kcal/mol",
-    level: "High (88%)",
-    color: "#00BCD4",
-  },
-  {
-    target: "VEGFR2",
-    compound: "Sorafenib",
-    affinity: "-7.445 kcal/mol",
-    level: "Moderate (76%)",
-    color: "#F59E0B",
-  },
-  {
-    target: "PI3K",
-    compound: "Idelalisib",
-    affinity: "-6.918 kcal/mol",
-    level: "Moderate (71%)",
-    color: "#F59E0B",
-  },
-  {
-    target: "mTOR",
-    compound: "Everolimus",
-    affinity: "-6.502 kcal/mol",
-    level: "Low (63%)",
-    color: "#EF4444",
-  },
-];
+import ScreeningResults from "./ScreeningResults";
 
 /* ============================================================================
    COMMON STYLES
@@ -206,11 +38,10 @@ const AgentHeader = () => <SharedAgentHeader moduleKey="screensuite" />;
 
 /**
  * @param {object[]} hits - normalised rows from GET /agents/screensuite/{jobId}/hits
- *   (protein, mode, affinity, ligand, outputFile). The module-level
- *   `dockingResults` fixture is only the fallback for a caller that passes
- *   none, and is never reached from the workflow.
+ *   (protein, mode, affinity, ligand, outputFile), for runs from before the
+ *   staged /results endpoint. Those runs have no interaction profile.
  */
-const PLPTable = ({ onOpenReport, hits }) => {
+const PLPTable = ({ hits }) => {
   const rows = Array.isArray(hits) ? hits : [];
 
   // PROTEIN-LIGAND and PROTEIN only render when some row has a value: the API
@@ -226,8 +57,6 @@ const PLPTable = ({ onOpenReport, hits }) => {
     showProteinLigand && "110px",
     showProteinValue && "80px",
     "minmax(150px, 1fr)",
-    // Fits the "INTERACTION PROFILE" button (was 76px for "PLP REPORT").
-    "112px",
   ]
     .filter(Boolean)
     .join(" ");
@@ -241,7 +70,7 @@ const PLPTable = ({ onOpenReport, hits }) => {
         borderRadius: "8px",
       }}
     >
-      <Box sx={{ minWidth: "850px" }}>
+      <Box sx={{ minWidth: "600px" }}>
         {/* HEADER */}
         <Box
           sx={{
@@ -262,7 +91,6 @@ const PLPTable = ({ onOpenReport, hits }) => {
           {showProteinLigand && <Typography sx={tableHeader}>PROTEIN-LIGAND</Typography>}
           {showProteinValue && <Typography sx={tableHeader}>PROTEIN</Typography>}
           <Typography sx={tableHeader}>LIGAND</Typography>
-          <Box />
         </Box>
 
         {/* ROWS */}
@@ -324,31 +152,6 @@ const PLPTable = ({ onOpenReport, hits }) => {
               {row.ligand}
             </Typography>
 
-            <Button
-              onClick={() => onOpenReport(row)}
-              sx={{
-                minWidth: "76px",
-                width: "auto",
-                whiteSpace: "nowrap",
-                height: "21px",
-                padding: "5px 8px",
-                background: TEAL,
-                color: "#FFFFFF",
-                borderRadius: "4px",
-                fontFamily: FONT,
-                fontSize: "9px",
-                lineHeight: "11px",
-                fontWeight: 600,
-                textTransform: "uppercase",
-                boxShadow: "none",
-                "&:hover": {
-                  background: "#00A9BF",
-                  boxShadow: "none",
-                },
-              }}
-            >
-              INTERACTION PROFILE
-            </Button>
           </Box>
         ))}
       </Box>
@@ -373,743 +176,17 @@ const tableCell = {
 };
 
 /* ============================================================================
-   RESIDUE INTERACTIONS
-============================================================================ */
-
-const ResidueInteractions = () => {
-  return (
-    <Box
-      sx={{
-        width: "100%",
-        border: "1px solid #E2E8F0",
-        borderRadius: "8px",
-        overflow: "hidden",
-        background: "#FFFFFF",
-      }}
-    >
-      <Box
-        sx={{
-          height: "35px",
-          display: "flex",
-          alignItems: "center",
-          gap: "8px",
-          padding: "10px 12px",
-          boxSizing: "border-box",
-        }}
-      >
-        <Typography
-          sx={{
-            ...baseText,
-            fontSize: "12px",
-            lineHeight: "15px",
-            fontWeight: 600,
-            color: "#111827",
-          }}
-        >
-          Residue Interactions
-        </Typography>
-
-        <Typography
-          sx={{
-            ...baseText,
-            fontSize: "11px",
-            lineHeight: "13px",
-            fontWeight: 400,
-            color: "#6B7280",
-          }}
-        >
-          (7 found)
-        </Typography>
-      </Box>
-
-      {/* HEADER */}
-      <Box
-        sx={{
-          display: "grid",
-          gridTemplateColumns:
-            "30px 80px 80px 70px 70px 100px 80px 80px",
-          minWidth: "590px",
-          padding: "8px 10px",
-          background: "#F9FAFB",
-          borderTop: "1px solid #F3F4F6",
-          borderBottom: "1px solid #F3F4F6",
-          boxSizing: "border-box",
-        }}
-      >
-        {[
-          "#",
-          "RESIDUE",
-          "RECEPTOR",
-          "REC_BQ",
-          "RES_BQ",
-          "SELECTION",
-          "LIG BONDS",
-          "INT BONDS",
-        ].map((heading) => (
-          <Typography
-            key={heading}
-            sx={{
-              ...baseText,
-              fontSize: "10px",
-              lineHeight: "13px",
-              fontWeight: 600,
-              color: "#6B7280",
-            }}
-          >
-            {heading}
-          </Typography>
-        ))}
-      </Box>
-
-      {/* ROWS */}
-      {residueInteractions.map((row) => (
-        <Box
-          key={row.id}
-          sx={{
-            display: "grid",
-            gridTemplateColumns:
-              "30px 80px 80px 70px 70px 100px 80px 80px",
-            minWidth: "590px",
-            padding: "7px 10px",
-            boxSizing: "border-box",
-            borderBottom: "1px solid #F3F4F6",
-            background: "#FFFFFF",
-          }}
-        >
-          {[
-            row.id,
-            row.residue,
-            row.receptor,
-            row.recBQ,
-            row.resBQ,
-            row.selection,
-            row.ligBonds,
-            row.intBonds,
-          ].map((value, index) => (
-            <Typography
-              key={`${row.id}-${index}`}
-              sx={{
-                ...baseText,
-                fontSize: "11px",
-                lineHeight: "13px",
-                color: "#111827",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {value}
-            </Typography>
-          ))}
-        </Box>
-      ))}
-    </Box>
-  );
-};
-
-/* ============================================================================
-   HYDROGEN BONDS
-============================================================================ */
-
-const HydrogenBonds = () => {
-  return (
-    <Box
-      sx={{
-        width: "100%",
-        border: "1px solid #E2E8F0",
-        borderRadius: "8px",
-        overflow: "hidden",
-        background: "#FFFFFF",
-      }}
-    >
-      <Box
-        sx={{
-          height: "35px",
-          display: "flex",
-          alignItems: "center",
-          gap: "8px",
-          padding: "10px 12px",
-          boxSizing: "border-box",
-        }}
-      >
-        <Typography
-          sx={{
-            ...baseText,
-            fontSize: "12px",
-            lineHeight: "15px",
-            fontWeight: 600,
-          }}
-        >
-          Hydrogen Bonds
-        </Typography>
-
-        <Typography
-          sx={{
-            ...baseText,
-            fontSize: "11px",
-            color: "#6B7280",
-          }}
-        >
-          (5 found)
-        </Typography>
-      </Box>
-
-      {/* HEADER */}
-      <Box
-        sx={{
-          display: "grid",
-          gridTemplateColumns:
-            "30px 80px 80px 80px 70px 100px 80px 80px",
-          minWidth: "600px",
-          padding: "8px 10px",
-          background: "#F9FAFB",
-          borderTop: "1px solid #F3F4F6",
-          borderBottom: "1px solid #F3F4F6",
-        }}
-      >
-        {[
-          "#",
-          "RESIDUE",
-          "RECEPTOR",
-          "DONOR_BQ",
-          "REC_BQ",
-          "SELECTION",
-          "DIST H_A",
-          "DIST D_A",
-        ].map((heading) => (
-          <Typography
-            key={heading}
-            sx={{
-              ...baseText,
-              fontSize: "10px",
-              lineHeight: "13px",
-              fontWeight: 600,
-              color: "#6B7280",
-            }}
-          >
-            {heading}
-          </Typography>
-        ))}
-      </Box>
-
-      {/* ROWS */}
-      {hydrogenBonds.map((row) => (
-        <Box
-          key={row.id}
-          sx={{
-            display: "grid",
-            gridTemplateColumns:
-              "30px 80px 80px 80px 70px 100px 80px 80px",
-            minWidth: "600px",
-            padding: "7px 10px",
-            borderBottom: "1px solid #F3F4F6",
-            boxSizing: "border-box",
-          }}
-        >
-          {[
-            row.id,
-            row.residue,
-            row.receptor,
-            row.donorBQ,
-            row.recBQ,
-            row.selection,
-            row.distHA,
-            row.distDA,
-          ].map((value, index) => (
-            <Typography
-              key={`${row.id}-${index}`}
-              sx={{
-                ...baseText,
-                fontSize: "11px",
-                lineHeight: "13px",
-                color: "#111827",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {value}
-            </Typography>
-          ))}
-        </Box>
-      ))}
-    </Box>
-  );
-};
-
-/* ============================================================================
-   PROTEIN VISUALIZATION
-============================================================================ */
-
-const ProteinVisualization = () => {
-  return (
-    <Box
-      sx={{
-        width: "208px",
-        flexShrink: 0,
-        boxSizing: "border-box",
-        border: "1px solid #E2E8F0",
-        borderRadius: "8px",
-        background: "#F8FAFC",
-        padding: "12px",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        gap: "10px",
-
-        "@media (max-width: 850px)": {
-          width: "100%",
-        },
-      }}
-    >
-      <Typography
-        sx={{
-          ...baseText,
-          fontSize: "13px",
-          lineHeight: "17px",
-          fontWeight: 600,
-          color: "#1E293B",
-        }}
-      >
-        Protein Visualization
-      </Typography>
-
-      {/* ACTUAL UPLOADED IMAGE */}
-      <Box
-        component="img"
-        src="/assets/protein-visualization.png"
-        alt="JAK2 protein visualization"
-        sx={{
-          display: "block",
-          width: "100%",
-          height: "379px",
-          objectFit: "cover",
-          objectPosition: "center",
-          borderRadius: "8px",
-          background: "#FFFFFF",
-
-          "@media (max-width: 850px)": {
-            height: "auto",
-            maxHeight: "420px",
-            objectFit: "contain",
-          },
-        }}
-      />
-
-      <Typography
-        sx={{
-          ...baseText,
-          width: "166px",
-          fontSize: "11px",
-          lineHeight: "18px",
-          fontWeight: 400,
-          color: "#596673",
-        }}
-      >
-        Target: JAK2 Kinase Domain
-        <br />
-        Binding Energy: -8.045 kcal/mol
-        <br />
-        Mode: 1 of 5
-      </Typography>
-    </Box>
-  );
-};
-
-/* ============================================================================
-   EXPANDED INTERACTION PROFILE
-============================================================================ */
-
-/* Retained but NOT rendered: these read the residueInteractions /
-   hydrogenBonds / recommendations fixtures, and the API exposes no endpoint
-   for any of them (the collection lists the interaction profile, 3D view and download
-   bundles as unavailable on this deployment). Kept so the markup is ready if
-   those endpoints appear, rather than deleted and rebuilt from scratch. */
-// eslint-disable-next-line no-unused-vars
-const ExpandedPLPReport = () => {
-  return (
-    <Box
-      sx={{
-        width: "100%",
-        boxSizing: "border-box",
-        marginTop: "12px",
-        padding: "12px",
-        background: "#F8FAFC",
-        border: "1px solid #00BCD4",
-        borderRadius: "8px",
-      }}
-    >
-      {/* TITLE */}
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          gap: "8px",
-          marginBottom: "12px",
-        }}
-      >
-        <Typography
-          sx={{
-            ...baseText,
-            fontSize: "11px",
-            color: TEAL,
-            fontWeight: 500,
-          }}
-        >
-          ▼
-        </Typography>
-
-        <Typography
-          sx={{
-            ...baseText,
-            fontSize: "13px",
-            lineHeight: "16px",
-            fontWeight: 700,
-            color: TEAL,
-          }}
-        >
-          JAK2 - Expanded Interaction Profile (Mode 1, -8.045 kcal/mol)
-        </Typography>
-      </Box>
-
-      {/* REPORT CONTENT */}
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "flex-start",
-          gap: "16px",
-
-          "@media (max-width: 850px)": {
-            flexDirection: "column",
-          },
-        }}
-      >
-        {/* LEFT COLUMN */}
-        <Box
-          sx={{
-            flex: 1,
-            minWidth: 0,
-            display: "flex",
-            flexDirection: "column",
-            gap: "20px",
-          }}
-        >
-          {/* MODE BANNER */}
-          <Box
-            sx={{
-              boxSizing: "border-box",
-              width: "100%",
-              minHeight: "38px",
-              padding: "10px 16px",
-              display: "flex",
-              alignItems: "center",
-              gap: "16px",
-              background: "#FFFFFF",
-              border: "1px solid #00BCD4",
-              borderLeft: "3px solid #00BCD4",
-              borderRadius: "8px",
-              boxShadow: "0px 2px 4px rgba(0,0,0,0.03)",
-            }}
-          >
-            <Typography
-              sx={{
-                ...baseText,
-                fontSize: "13px",
-                lineHeight: "16px",
-                fontWeight: 700,
-              }}
-            >
-              JAK2 Mode 1
-            </Typography>
-
-            <Typography
-              sx={{
-                ...baseText,
-                fontSize: "13px",
-                lineHeight: "16px",
-                fontWeight: 600,
-                color: TEAL,
-              }}
-            >
-              -8.045 kcal/mol
-            </Typography>
-          </Box>
-
-          <ResidueInteractions />
-
-          <HydrogenBonds />
-
-          {/* SUMMARY */}
-          <Box
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              gap: "24px",
-              flexWrap: "wrap",
-              padding: "0 4px",
-            }}
-          >
-            <Typography
-              sx={{
-                ...baseText,
-                fontSize: "11px",
-                fontWeight: 500,
-              }}
-            >
-              7 residue interactions
-            </Typography>
-
-            <Typography
-              sx={{
-                ...baseText,
-                fontSize: "11px",
-                fontWeight: 500,
-              }}
-            >
-              5 hydrogen bonds
-            </Typography>
-
-            <Typography
-              sx={{
-                ...baseText,
-                fontSize: "11px",
-                fontWeight: 500,
-                color: TEAL,
-              }}
-            >
-              Best H-bond: 3.26 Å
-            </Typography>
-          </Box>
-        </Box>
-
-        {/* RIGHT COLUMN */}
-        <ProteinVisualization />
-      </Box>
-    </Box>
-  );
-};
-
-/* ============================================================================
-   ACTION BUTTONS
-============================================================================ */
-
-/* Retained but NOT rendered: these read the residueInteractions /
-   hydrogenBonds / recommendations fixtures, and the API exposes no endpoint
-   for any of them (the collection lists the interaction profile, 3D view and download
-   bundles as unavailable on this deployment). Kept so the markup is ready if
-   those endpoints appear, rather than deleted and rebuilt from scratch. */
-// eslint-disable-next-line no-unused-vars
-const ActionButtons = ({ expanded, actions = {} }) => {
-  const normalButton = {
-    minHeight: "32px",
-    height: "32px",
-    padding: "8px 16px",
-    border: "1px solid #E2E8F0",
-    borderRadius: "8px",
-    background: "#FFFFFF",
-    color: "#334155",
-    fontFamily: FONT,
-    fontSize: "13px",
-    lineHeight: "16px",
-    fontWeight: 500,
-    textTransform: "none",
-    boxShadow: "none",
-    whiteSpace: "nowrap",
-
-    "&:hover": {
-      background: "#F8FAFC",
-      borderColor: "#CBD5E1",
-      boxShadow: "none",
-    },
-  };
-
-  return (
-    <Box
-      sx={{
-        display: "flex",
-        alignItems: "center",
-        gap: "10px",
-        flexWrap: "wrap",
-        paddingTop: "12px",
-      }}
-    >
-      <Button sx={normalButton}>Branch</Button>
-
-      <Button sx={normalButton} onClick={actions.onRerun} disabled={!actions.onRerun || Boolean(actions.busy)}>{actions.busy === "rerun" ? "Rerunning…" : "Rerun"}</Button>
-
-      <Button
-        sx={{
-          ...normalButton,
-          background: expanded ? TEAL : "#FFFFFF",
-          color: expanded ? "#FFFFFF" : "#334155",
-          borderColor: expanded ? TEAL : "#E2E8F0",
-
-          "&:hover": {
-            background: expanded ? "#00A9BF" : "#F8FAFC",
-            borderColor: expanded ? "#00A9BF" : "#CBD5E1",
-          },
-        }}
-      >
-        Export Interaction Profile
-      </Button>
-
-      <Button sx={normalButton}>Create Bundle</Button>
-
-      <Button sx={normalButton}>Download Bundle</Button>
-    </Box>
-  );
-};
-
-/* ============================================================================
-   OVERALL RECOMMENDATION
-============================================================================ */
-
-/* Retained but NOT rendered: these read the residueInteractions /
-   hydrogenBonds / recommendations fixtures, and the API exposes no endpoint
-   for any of them (the collection lists the interaction profile, 3D view and download
-   bundles as unavailable on this deployment). Kept so the markup is ready if
-   those endpoints appear, rather than deleted and rebuilt from scratch. */
-// eslint-disable-next-line no-unused-vars
-const OverallRecommendation = () => {
-  return (
-    <Box
-      sx={{
-        width: "100%",
-        boxSizing: "border-box",
-        marginTop: "12px",
-        padding: "16px",
-        background: "#FFFFFF",
-        border: "1px solid #E2E8F0",
-        borderRadius: "8px",
-      }}
-    >
-      <Typography
-        sx={{
-          ...baseText,
-          fontSize: "14px",
-          lineHeight: "17px",
-          fontWeight: 700,
-          color: TEAL,
-          marginBottom: "8px",
-        }}
-      >
-        Overall Recommendation - All Targets
-      </Typography>
-
-      <Typography
-        sx={{
-          ...baseText,
-          fontSize: "12px",
-          lineHeight: "18px",
-          fontWeight: 400,
-          color: "#475569",
-          marginBottom: "8px",
-        }}
-      >
-        Based on molecular docking analysis across 5 protein targets, the
-        following repurposing candidates show strongest potential for Type 2
-        Diabetes:
-      </Typography>
-
-      <Box
-        sx={{
-          display: "flex",
-          flexDirection: "column",
-          gap: "2px",
-        }}
-      >
-        {recommendations.map((item) => (
-          <Box
-            key={item.target}
-            sx={{
-              display: "grid",
-              gridTemplateColumns: "80px 150px 160px 1fr",
-              alignItems: "center",
-              minHeight: "25px",
-              paddingLeft: "8px",
-
-              "@media (max-width: 700px)": {
-                gridTemplateColumns: "70px 120px 140px 1fr",
-              },
-            }}
-          >
-            <Typography
-              sx={{
-                ...baseText,
-                fontSize: "12px",
-                fontWeight: 700,
-              }}
-            >
-              {item.target}
-            </Typography>
-
-            <Typography
-              sx={{
-                ...baseText,
-                fontSize: "12px",
-                color: "#475569",
-              }}
-            >
-              {item.compound}
-            </Typography>
-
-            <Typography
-              sx={{
-                ...baseText,
-                fontSize: "12px",
-                color: "#475569",
-              }}
-            >
-              {item.affinity}
-            </Typography>
-
-            <Typography
-              sx={{
-                ...baseText,
-                fontSize: "12px",
-                fontWeight: 500,
-                color: item.color,
-              }}
-            >
-              {item.level}
-            </Typography>
-          </Box>
-        ))}
-      </Box>
-
-      <Typography
-        sx={{
-          ...baseText,
-          fontSize: "12px",
-          lineHeight: "18px",
-          fontWeight: 600,
-          color: TEAL,
-          marginTop: "4px",
-        }}
-      >
-        Top candidates: JAK2 + Gefitinib and EGFR + Gefitinib recommended for
-        further validation.
-      </Typography>
-    </Box>
-  );
-};
-
-/* ============================================================================
    MAIN COMPONENT
 ============================================================================ */
 
 /**
  * ScreenSuite — molecular docking.
  *
- * ⚠️ Docking cannot complete on this deployment: PyMOL and Vina are not
- * installable on Databricks Apps, so /agents/screensuite/screen fails. The
- * interaction profile, the residue/hydrogen-bond breakdowns, the 3D viewer and the
- * download bundles have no endpoint in the API at all.
- *
- * So everything below the affinity table is fixture-backed with nothing to
- * replace it. Rather than present that as real output, the results view shows
- * the affinity table when the API returns hits, and an explicit
- * not-available notice when it does not.
+ * The staged backend reports docking and interaction profiling separately
+ * (GET /agents/screensuite/{jobId}/results). When `screening` has results,
+ * ScreeningResults shows the ranked table, the Mol* 3D view, the ProLIF
+ * interaction profile and the downloads. `hits` (the older /hits rows) is
+ * only used for runs from before that endpoint existed.
  */
 const ScreeningSuitePhase = ({
   workflowPhase,
@@ -1120,6 +197,10 @@ const ScreeningSuitePhase = ({
   /** Stop waiting on the job (useJob.stop). */
   onStopWaiting,
   hits = [],
+  /** normalizeScreening output (usePhaseResults "screensuite"). */
+  screening = null,
+  /** The ScreenSuite job, for the results / interactions / file endpoints. */
+  jobId = null,
   loading = false,
   error = null,
   onRetry,
@@ -1145,9 +226,8 @@ const ScreeningSuitePhase = ({
     return () => clearInterval(id);
   }, [workflowPhase]);
 
-  const [selectedReport, setSelectedReport] = useState(null);
-
-  const hasHits = Array.isArray(hits) && hits.length > 0;
+  const hasScreening = Boolean(screening?.hasData);
+  const hasHits = !hasScreening && Array.isArray(hits) && hits.length > 0;
   const handedOff = (Array.isArray(compounds) ? compounds : []).filter(Boolean);
 
 
@@ -1371,104 +451,67 @@ const ScreeningSuitePhase = ({
         >
           <AgentHeader />
 
-          <Typography
-            sx={{
-              ...baseText,
-              fontSize: "14px",
-              lineHeight: "22px",
-              fontWeight: 400,
-              color: "#334155",
-              marginBottom: "12px",
-            }}
-          >
-            {/* Was "Processed 142 compounds against 5 protein targets" on every
-                run, including runs that returned nothing. */}
-            {error
-              ? error
-              : loading
-              ? "Loading docking hits…"
-              : hasHits
-              ? `Docking complete. ${hits.length} hit${hits.length === 1 ? "" : "s"} returned. Select a protein to view its detailed interaction profile:`
-              : "Docking returned no hits."}
-          </Typography>
-
-          {error && onRetry && (
-            <Button
-              onClick={onRetry}
-              sx={{ ...baseText, textTransform: "none", fontSize: "13px", color: TEAL, marginBottom: "12px" }}
-            >
-              Try again
-            </Button>
-          )}
-
-          {/* ==============================================================
-              DOCKING RESULTS
-          ============================================================== */}
-
-          {hasHits && (
-            <PLPTable
-              hits={hits}
-              onOpenReport={(row) => {
-                setSelectedReport(row);
-              }}
-            />
-          )}
-
-          {/* The expanded interaction profile, residue interactions, hydrogen bonds,
-              the 3D viewer, the download bundles and the overall
-              recommendation are NOT rendered.
-
-              /hits is the only ScreenSuite results endpoint in the API — the
-              rest have none at all, and their components read fixed residue,
-              hydrogen-bond and affinity tables (A:ALA:68, -8.046 kcal/mol,
-              "High (92%)"). Rendering those next to a real affinity table
-              would present invented structural data as measurement, which is
-              worse than showing nothing. They stay in this file, unrendered,
-              for whenever the endpoints exist. */}
-          {hasHits && selectedReport && (
-            <Box
-              sx={{
-                background: "#F8FAFC",
-                border: "1px solid #E2E8F0",
-                borderRadius: "8px",
-                padding: "16px",
-                marginTop: "12px",
-              }}
-            >
+          {/* Rows, Mol* and files show as soon as docking completes; a
+              background reload (interaction profiling) keeps them on screen
+              rather than swapping back to "Loading…". */}
+          {hasScreening ? (
+            <ScreeningResults jobId={jobId} screening={screening} />
+          ) : (
+            <>
               <Typography
-                sx={{ ...baseText, fontSize: "13px", fontWeight: 600, marginBottom: "6px" }}
+                sx={{
+                  ...baseText,
+                  fontSize: "14px",
+                  lineHeight: "22px",
+                  fontWeight: 400,
+                  color: "#334155",
+                  marginBottom: "12px",
+                }}
               >
-                No interaction profile for {selectedReport.protein}
+                {error
+                  ? error
+                  : loading
+                  ? "Loading docking results…"
+                  : hasHits
+                  ? `Docking complete. ${hits.length} hit${hits.length === 1 ? "" : "s"} returned.`
+                  : "Docking returned no results."}
               </Typography>
-              <Typography sx={{ ...baseText, fontSize: "12px", lineHeight: "18px", color: "#64748B" }}>
-                Only the binding affinity is available for this run. Residue
-                interactions, hydrogen bonds, the 3D pose view and the
-                downloadable bundle aren't available yet.
-              </Typography>
-            </Box>
-          )}
 
-          {!hasHits && !loading && !error && (
-            <Box
-              role="alert"
-              sx={{
-                background: "#F8FAFC",
-                border: "1px solid #E2E8F0",
-                borderRadius: "8px",
-                padding: "16px",
-              }}
-            >
-              <Typography
-                sx={{ ...baseText, fontSize: "13px", fontWeight: 600, color: "#0F172A", marginBottom: "6px" }}
-              >
-                Docking output is not available
-              </Typography>
-              <Typography sx={{ ...baseText, fontSize: "12px", lineHeight: "18px", color: "#64748B" }}>
-                {unavailable && unavailableMessage
-                  ? unavailableMessage
-                  : "No binding affinities were returned for this run, so there is no interaction profile, 3D view or download bundle to show."}
-              </Typography>
-            </Box>
+              {error && onRetry && (
+                <Button
+                  onClick={onRetry}
+                  sx={{ ...baseText, textTransform: "none", fontSize: "13px", color: TEAL, marginBottom: "12px" }}
+                >
+                  Try again
+                </Button>
+              )}
+
+              {/* Older runs only have the /hits affinity rows. */}
+              {hasHits && <PLPTable hits={hits} />}
+
+              {!hasHits && !loading && !error && (
+                <Box
+                  role="alert"
+                  sx={{
+                    background: "#F8FAFC",
+                    border: "1px solid #E2E8F0",
+                    borderRadius: "8px",
+                    padding: "16px",
+                  }}
+                >
+                  <Typography
+                    sx={{ ...baseText, fontSize: "13px", fontWeight: 600, color: "#0F172A", marginBottom: "6px" }}
+                  >
+                    Docking output is not available
+                  </Typography>
+                  <Typography sx={{ ...baseText, fontSize: "12px", lineHeight: "18px", color: "#64748B" }}>
+                    {unavailable && unavailableMessage
+                      ? unavailableMessage
+                      : screening?.summary || "No docking results were returned for this run."}
+                  </Typography>
+                </Box>
+              )}
+            </>
           )}
 
           {/* Branch / Rerun / Export — ScreenSuite had none at all. */}

@@ -28,6 +28,8 @@ const fromList = (list) =>
         title: item.title ?? item.name ?? item.description ?? null,
         resolution: item.resolution ?? item.resolution_angstrom ?? null,
         method: item.method ?? item.experimental_method ?? null,
+        // Which requested protein this structure is for, when several are ambiguous.
+        protein: item.protein ?? item.target ?? null,
       };
     })
     .filter(Boolean);

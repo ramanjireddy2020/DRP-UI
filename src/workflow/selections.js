@@ -112,8 +112,12 @@ export const buildSelections = (moduleKey, picks = {}) => {
       return {
         target: picks.target ?? picks.targets?.[0] ?? null,
         ...(Array.isArray(picks.targets) && picks.targets.length ? { targets: picks.targets } : {}),
-        compounds: picks.compounds ?? [],
+        // The staged backend takes compounds as [{ drug_name }].
+        compounds: (picks.compounds ?? [])
+          .map((c) => (typeof c === "string" ? { drug_name: c } : c?.drug_name ? c : c?.name ? { drug_name: c.name } : null))
+          .filter(Boolean),
         ...(picks.pdbId ? { pdbId: picks.pdbId } : {}),
+        ...(picks.structures ? { structures: picks.structures } : {}),
       };
 
     case "novsearch":

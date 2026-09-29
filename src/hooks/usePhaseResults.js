@@ -10,6 +10,7 @@ import {
   normalizeCuratexProfile,
   normalizeCuratexResults,
   normalizeDockingHits,
+  normalizeScreening,
   normalizeNoveltyReport,
   normalizePipelineResult,
   RESULTS_PAGE_SIZE,
@@ -61,7 +62,42 @@ const FETCHERS = {
     return fromJob.hasData ? fromJob : fromResults;
   },
 
-  screensuite: async (jobId) => normalizeDockingHits(await screensuiteApi.getHits(jobId)),
+  /**
+   * ScreenSuite: the staged screening. The job result says whether a
+   * structure has to be chosen first (awaitingInput + pdbOptions) — nothing
+   * is docked until then. Otherwise GET /results gives every protein × drug
+   * row with its stage statuses; the job result's own results, and finally
+   * /hits, are fallbacks. `hits` stays for the older consumers.
+   */
+  screensuite: async (jobId) => {
+    const jobResult = await getJobResult(jobId).catch(() => null);
+    const fromJob = normalizeScreening(jobResult);
+    if (fromJob.awaitingInput) return { ...fromJob, hits: [] };
+
+    const fromResults = await screensuiteApi
+      .getResults(jobId)
+      .then(normalizeScreening)
+      .catch(() => null);
+    const screening = fromResults?.hasData ? fromResults : fromJob;
+
+    const legacy = normalizeDockingHits(
+      screening.hasData ? [] : await screensuiteApi.getHits(jobId).catch(() => [])
+    );
+    const hits = screening.hasData
+      ? screening.results.map((r, i) => ({
+          id: r.resultId ?? i + 1,
+          protein: r.protein,
+          mode: String(r.mode ?? 1),
+          affinity: r.score,
+          rawAffinity: r.rawScore,
+          ligand: r.drug,
+          outputFile: "",
+          proteinLigand: "",
+          proteinValue: "",
+        }))
+      : legacy.hits;
+    return { ...screening, hasData: screening.hasData || legacy.hasData, hits, pdbOptions: screening.pdbOptions.length ? screening.pdbOptions : legacy.pdbOptions };
+  },
 
   novsearch: async (jobId) => normalizeNoveltyReport(await novsearchApi.getReport(jobId)),
 

@@ -608,6 +608,186 @@ export const normalizeCuratexResults = (payload, { pageSize: requested } = {}) =
  * In practice this normaliser will rarely run: docking cannot complete on this
  * deployment.
  */
+/* -------------------------------------------------------------------------- */
+/* ScreenSuite — staged screening (resolution → docking → interaction)          */
+/* -------------------------------------------------------------------------- */
+
+const STAGE_STATES = ["pending", "running", "completed", "failed", "unavailable", "ambiguous"];
+
+/** A stage as { status, error } whatever shape it arrives in. */
+const readStage = (stage) => {
+  if (stage == null) return { status: "pending", error: null };
+  if (typeof stage === "string") return { status: stage.toLowerCase(), error: null };
+  const status = String(stage.status ?? stage.state ?? "pending").toLowerCase();
+  return { status: STAGE_STATES.includes(status) ? status : status || "pending", error: stage.error || null };
+};
+
+/**
+ * One screening, from GET /agents/screensuite/{jobId}/results — or, before
+ * that endpoint answers, from the job result (GET /agents/jobs/{id}/result).
+ *
+ * { hasData, awaitingInput, awaitingInputKind, pdbOptions[], summary,
+ *   screeningId, results[{ resultId, protein, proteinIdentifier, proteinSource,
+ *   drug, score, rawScore, rank, mode, stages{resolution,docking,interaction},
+ *   molstar{available, complex, receptor, ligand, interactionHighlighting},
+ *   files{receptor, docked_pose, docked_pose_sdf, complex, interaction_report} }],
+ *   interactions{ [resultId]: { status, error, data } },
+ *   files{ affinityTable, bundle }, interactionStage{ status, versions },
+ *   interactionsDone, failures[{ protein, drug, stage, error }] }
+ *
+ * A result whose interaction profiling failed stays in the list: the docking
+ * score, Mol* and files are still valid.
+ */
+export const normalizeScreening = (payload) => {
+  const src = payload?.result && typeof payload.result === "object" && !payload.results ? payload.result : payload ?? {};
+
+  const awaitingInput = Boolean(src.awaitingInput) || src.stage === "awaiting_structure_confirmation";
+  const pdbOptions = readPdbShortlist(src);
+
+  const results = (Array.isArray(src.results) ? src.results : [])
+    .filter(Boolean)
+    .map((r, index) => {
+      const stages = r.stages ?? {};
+      const score = Number(r.dockingScore ?? r.docking_score ?? r.affinityKcalPerMol ?? r.affinity);
+      const files = { ...(r.files ?? {}) };
+      // The job result carries server-local paths (…Path); those can't be
+      // fetched, so only gateway paths are kept.
+      Object.keys(files).forEach((k) => {
+        if (typeof files[k] !== "string" || !files[k].startsWith("/agents/")) delete files[k];
+      });
+      const molstar = r.molstar && typeof r.molstar === "object" ? r.molstar : {};
+      return {
+        resultId: r.resultId ?? r.result_id ?? `res_${index + 1}`,
+        protein: r.protein ?? r.target ?? "—",
+        proteinIdentifier: r.proteinIdentifier ?? r.protein_identifier ?? null,
+        proteinSource: r.proteinSource ?? r.protein_source ?? null,
+        drug: r.drug ?? r.compound ?? "—",
+        score: Number.isFinite(score) ? score.toFixed(2) : "—",
+        rawScore: Number.isFinite(score) ? score : null,
+        rank: r.rank ?? null,
+        mode: r.mode ?? null,
+        status: String(r.status ?? "").toLowerCase() || null,
+        stages: {
+          resolution: readStage(stages.resolution ?? r.resolution),
+          docking: readStage(stages.docking ?? r.docking ?? (Number.isFinite(score) ? "completed" : null)),
+          interaction: readStage(stages.interaction ?? r.interaction),
+        },
+        molstar: {
+          available: Boolean(molstar.available ?? (files.complex || files.receptor)),
+          complex: molstar.complex ?? files.complex ?? null,
+          receptor: molstar.receptor ?? files.receptor ?? null,
+          ligand: molstar.ligand ?? files.docked_pose_sdf ?? null,
+          interactionHighlighting: Boolean(molstar.interactionHighlighting),
+        },
+        files,
+      };
+    });
+
+  const interactions = {};
+  Object.entries(src.interactions ?? {}).forEach(([resultId, entry]) => {
+    interactions[resultId] = { ...readStage(entry), data: entry?.data ?? null };
+  });
+  // The per-result interaction status follows the interactions map when the
+  // result row itself doesn't carry one.
+  results.forEach((r) => {
+    if (interactions[r.resultId] && r.stages.interaction.status === "pending") {
+      r.stages.interaction = { status: interactions[r.resultId].status, error: interactions[r.resultId].error };
+    }
+  });
+
+  const interactionStage = readStage(src.interactionStage);
+  const terminal = (st) => ["completed", "failed", "unavailable"].includes(st);
+  const interactionsDone =
+    !results.length ||
+    (src.interactionStage ? terminal(interactionStage.status) : results.every((r) => terminal(r.stages.interaction.status)));
+
+  const failures = [
+    ...(Array.isArray(src.failures) ? src.failures : []),
+    ...(Array.isArray(src.failureDetails) ? src.failureDetails : []),
+  ]
+    .filter(Boolean)
+    .map((f) =>
+      typeof f === "string"
+        ? { protein: null, drug: null, stage: null, error: f }
+        : {
+            protein: f.protein ?? f.target ?? null,
+            drug: f.drug ?? f.compound ?? null,
+            stage: f.stage ?? null,
+            error: f.error ?? f.message ?? f.reason ?? "Failed",
+          }
+    );
+
+  const files = src.files && typeof src.files === "object" ? src.files : {};
+  return {
+    hasData: results.length > 0,
+    awaitingInput: awaitingInput && !results.length,
+    awaitingInputKind: src.awaitingInputKind ?? (awaitingInput ? "structure" : null),
+    pdbOptions,
+    summary: src.summary ?? null,
+    screeningId: src.screeningId ?? src.jobId ?? null,
+    results,
+    interactions,
+    files: {
+      affinityTable: typeof files.affinityTable === "string" ? files.affinityTable : null,
+      bundle: typeof files.bundle === "string" ? files.bundle : null,
+    },
+    interactionStage: { ...interactionStage, versions: src.interactionStage?.versions ?? null },
+    interactionsDone,
+    failures,
+  };
+};
+
+/** Interaction types, in display order, with their labels. */
+export const INTERACTION_TYPES = [
+  { key: "hydrogen_bonds", label: "Hydrogen bonds" },
+  { key: "hydrophobic", label: "Hydrophobic" },
+  { key: "pi_stacking", label: "π-Stacking" },
+  { key: "pi_cation", label: "π-Cation" },
+  { key: "salt_bridges", label: "Salt bridges" },
+  { key: "halogen_bonds", label: "Halogen bonds" },
+  { key: "metal", label: "Metal" },
+  { key: "vdw_contacts", label: "van der Waals" },
+];
+
+/**
+ * GET …/results/{resultId}/interactions →
+ * { status, error, counts{type: n}, total, residues[], byType{type: [interaction]} }.
+ * Each interaction keeps the fields the Mol* highlight needs (chain,
+ * residue_number, residue_name, protein/ligand atoms).
+ */
+export const normalizeInteractions = (payload) => {
+  const stage = readStage(payload);
+  const data = payload?.data ?? null;
+  const byType = {};
+  const counts = {};
+  INTERACTION_TYPES.forEach(({ key }) => {
+    const list = Array.isArray(data?.interactions?.[key]) ? data.interactions[key] : [];
+    byType[key] = list.filter(Boolean).map((i, index) => ({
+      id: i.interaction_id ?? `${key}_${index + 1}`,
+      type: i.type ?? key,
+      residue: i.residue ?? [i.residue_name, i.residue_number].filter(Boolean).join(""),
+      residueName: i.residue_name ?? null,
+      residueNumber: i.residue_number ?? null,
+      chain: i.chain ?? null,
+      proteinAtoms: Array.isArray(i.protein_atoms) ? i.protein_atoms : [],
+      ligandAtoms: Array.isArray(i.ligand_atoms) ? i.ligand_atoms : [],
+      distance: Number.isFinite(Number(i.distance)) ? Number(i.distance) : null,
+      angle: Number.isFinite(Number(i.DHA_angle ?? i.angle)) ? Number(i.DHA_angle ?? i.angle) : null,
+    }));
+    const c = Number(data?.counts?.[key]);
+    counts[key] = Number.isFinite(c) ? c : byType[key].length;
+  });
+  return {
+    status: data ? "completed" : stage.status,
+    error: stage.error,
+    counts,
+    total: Number(data?.total) || Object.values(counts).reduce((a, b) => a + b, 0),
+    residues: Array.isArray(data?.residues) ? data.residues : [],
+    byType,
+    version: data?.prolifVersion ?? null,
+  };
+};
+
 export const normalizeDockingHits = (payload) => {
   const rows = Array.isArray(payload) ? payload : Array.isArray(payload?.items) ? payload.items : [];
 
@@ -751,6 +931,8 @@ const phaseResults = {
   toApiValues,
   normalizeCuratexResults,
   normalizeDockingHits,
+  normalizeScreening,
+  normalizeInteractions,
   normalizeNoveltyReport,
   normalizePipelineResult,
   CURATEX_PROFILE_FIELDS,
