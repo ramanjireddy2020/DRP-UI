@@ -277,6 +277,18 @@ const ArticleDetailPanel = ({
             sx={{ fontFamily: FONT, fontSize: "12px", color: articleNotice.isError ? "#DC2626" : "#059669" }}
           >
             {articleNotice.text}
+            {articleNotice.link && (
+              <>
+                {" "}
+                <Box
+                  component="a"
+                  href={articleNotice.link.href}
+                  sx={{ color: TEAL, fontWeight: 600, textDecoration: "none", "&:hover": { textDecoration: "underline" } }}
+                >
+                  {articleNotice.link.label} →
+                </Box>
+              </>
+            )}
           </Typography>
         )}
 
