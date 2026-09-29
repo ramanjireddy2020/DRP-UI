@@ -97,6 +97,12 @@ const initialState = {
    */
   branchSteps: {},
   /**
+   * Where each branch forked: { [branch]: { seq, runIndex, fromStepId, parent } }.
+   * The branch shows its parent's runs up to `runIndex` (the fork run) and its
+   * messages up to `seq`, and nothing its parent did afterwards.
+   */
+  branchForks: {},
+  /**
    * Append-only conversation. Each entry carries the module it belongs to, so
    * the thread can be sliced per step without ever dropping a message.
    */
@@ -483,6 +489,45 @@ function reducer(state, action) {
     case "SET_ACTIVE_BRANCH":
       return switchBranch(state, action.branch);
 
+    /**
+     * Create a branch WITHOUT running anything: record its fork point and
+     * move into it with a copy of the parent's state as it was at the fork
+     * step. Creating a branch used to post a new step for the module, which
+     * re-ran it (testing: branching from LitMineX re-ran LitMineX instead of
+     * carrying its result forward).
+     */
+    case "CREATE_BRANCH": {
+      const { branch, fromStepId } = action;
+      const parent = state.activeBranch ?? null;
+      const lineRuns = state.runs.filter((r) => (r.branch ?? null) === parent);
+      const forkIndex = lineRuns.findIndex((r) => r.stepId === fromStepId);
+      const forkRun = forkIndex >= 0 ? lineRuns[forkIndex] : null;
+      const after = forkIndex >= 0 ? lineRuns.slice(forkIndex + 1) : [];
+      // Messages up to the parent's next run (or all so far) are part of the
+      // branch's history; runs up to and including the fork run.
+      const seq = after.length ? after[0].startSeq ?? state.seq : state.seq;
+      const runIndex = forkRun ? state.runs.indexOf(forkRun) : state.runs.length - 1;
+
+      let next = switchBranch(state, branch);
+      // Modules the parent ran after the fork step aren't part of the branch.
+      if (after.length) {
+        const fresh = buildInitialSteps();
+        const steps = { ...next.steps };
+        after.forEach((r) => {
+          if (forkRun && r.key === forkRun.key) {
+            steps[r.key] = { ...steps[r.key], stepId: forkRun.stepId, jobId: forkRun.jobId };
+          } else {
+            steps[r.key] = fresh[r.key];
+          }
+        });
+        next = { ...next, steps, activeKey: forkRun?.key ?? next.activeKey };
+      }
+      return {
+        ...next,
+        branchForks: { ...state.branchForks, [branch]: { seq, runIndex, fromStepId: fromStepId ?? null, parent } },
+      };
+    }
+
     case "RESET":
       return { ...initialState, steps: buildInitialSteps() };
 
@@ -513,6 +558,8 @@ const useWorkflowSession = () => {
   activeBranchRef.current = state.activeBranch ?? null;
   const runsRef = useRef([]);
   runsRef.current = state.runs;
+  const forksRef = useRef({});
+  forksRef.current = state.branchForks;
   const withBranch = (payload, branch = activeBranchRef.current) =>
     branch ? { ...payload, branchName: branch } : payload;
 
@@ -790,6 +837,16 @@ const useWorkflowSession = () => {
     dispatch({ type: "APPEND_MESSAGES", messages: list, key });
   }, []);
 
+  /** Create a branch from a step and move into it; nothing is run. */
+  const createBranch = useCallback((branch, fromStepId) => {
+    dispatch({ type: "CREATE_BRANCH", branch, fromStepId });
+    const sessionId = sessionIdRef.current;
+    if (sessionId) {
+      // Tell the server which branch is active and where it forked from.
+      patchSessionRequest(sessionId, { activeBranch: branch, branchFromStepId: fromStepId ?? null }).catch(() => {});
+    }
+  }, []);
+
   const setActiveBranch = useCallback((branch) => {
     dispatch({ type: "SET_ACTIVE_BRANCH", branch: branch ?? null });
     // Tell the server which branch is active; switching used to fire no call,
@@ -827,6 +884,12 @@ const useWorkflowSession = () => {
           error: "There is no session to add a step to. Start a new research query.",
         });
         return null;
+      }
+
+      // The first step run on a branch starts from the branch's fork step.
+      const activeBranch = branch !== undefined ? branch : activeBranchRef.current;
+      if (!fromStepId && activeBranch && !runsRef.current.some((r) => r.branch === activeBranch && r.stepId)) {
+        fromStepId = forksRef.current[activeBranch]?.fromStepId ?? null;
       }
 
       const module = apiModuleKey(moduleKey);
@@ -1167,7 +1230,9 @@ const useWorkflowSession = () => {
     activationOrder: state.activationOrder,
     runs: state.runs,
     activeBranch: state.activeBranch,
+    branchForks: state.branchForks,
     setActiveBranch,
+    createBranch,
     conversation: state.conversation,
     pending: state.pending,
     title: state.title,

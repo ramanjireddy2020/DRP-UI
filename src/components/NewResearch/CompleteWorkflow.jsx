@@ -2367,26 +2367,24 @@ const CompleteWorkflow = () => {
       // The clicked card's picks travel with it; another step forks as it was.
       const branchSelections = stepId === branchSource.stepId ? branchSource.selections ?? {} : {};
 
-      setBranchState({ pending: true, error: null });
       // The branch is identified by its name — that is what is sent to the
       // API as `branchName` — made unique if the name is already taken.
       const taken = new Set([...branches.map((b) => b.id), ...session.runs.map((r) => r.branch).filter(Boolean)]);
       let branchId = name.trim() || "branch";
       for (let n = 2; taken.has(branchId); n += 1) branchId = `${name.trim() || "branch"}-${n}`;
-      const previousBranch = session.activeBranch ?? null;
-      const result = await session.handOff(moduleKey, branchSelections, stepId, { branch: branchId });
-      if (!result) {
-        session.setActiveBranch(previousBranch);
-        setBranchState({ pending: false, error: "The branch could not be created." });
-        return;
-      }
+
+      // Nothing is run: the branch starts from the fork step's existing
+      // results. It used to post a new step for the module, which re-ran it
+      // (testing: branching from LitMineX re-ran LitMineX). The first module
+      // run inside the branch is what creates its first step.
+      session.createBranch(branchId, stepId);
       const branch = {
         id: branchId,
         name: branchId,
         description,
         target: branchSelections?.targetIds?.[0] ?? branchSelections?.target ?? null,
-        moduleKey: result.moduleKey,
-        stepId: result.stepId ?? null,
+        moduleKey,
+        stepId: stepId ?? null,
         fromLabel,
       };
       setBranches((prev) => [...prev, branch]);
@@ -2684,15 +2682,26 @@ const CompleteWorkflow = () => {
      * that started before the branch's first run), then the branch's own.
      */
     const viewBranch = session.activeBranch ?? null;
+    // Where the branch forked (recorded when it was created); for branches
+    // restored from the server, where its first run started.
     const branchPoint = viewBranch
-      ? session.runs.find((r) => r.branch === viewBranch)?.startSeq ?? Infinity
+      ? session.branchForks?.[viewBranch]?.seq ??
+        session.runs.find((r) => r.branch === viewBranch)?.startSeq ??
+        Infinity
       : Infinity;
     const seqOf = (m) => Number(String(m.id).replace(/^m/, "")) || 0;
     const inView = (branch, seq) =>
       (branch ?? null) === viewBranch || ((branch ?? null) === null && seq <= branchPoint);
+    const fork = viewBranch ? session.branchForks?.[viewBranch] : null;
 
     const allRuns = session.runs;
-    const runs = allRuns.filter((r) => inView(r.branch, r.startSeq ?? 0));
+    // Main's runs in a branch: up to and including the fork run when the
+    // fork is known, else by position in the conversation.
+    const runs = allRuns.filter((r, index) => {
+      if ((r.branch ?? null) === viewBranch) return true;
+      if ((r.branch ?? null) === null && fork?.runIndex != null) return index <= fork.runIndex;
+      return inView(r.branch, r.startSeq ?? 0);
+    });
     const conversation = session.conversation.filter((m) => inView(m.branch, seqOf(m)));
     const keysWithRuns = new Set(runs.map((r) => r.key));
 
@@ -2759,7 +2768,7 @@ const CompleteWorkflow = () => {
     });
 
     return blocks;
-  }, [session.conversation, session.runs, session.activeBranch]);
+  }, [session.conversation, session.runs, session.activeBranch, session.branchForks]);
 
   /**
    * The Lineage page's content, from the live session: the branch in view
