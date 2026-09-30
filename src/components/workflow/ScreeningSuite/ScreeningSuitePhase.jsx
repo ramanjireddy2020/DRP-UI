@@ -226,7 +226,9 @@ const ScreeningSuitePhase = ({
     return () => clearInterval(id);
   }, [workflowPhase]);
 
-  const hasScreening = Boolean(screening?.hasData);
+  // hasData is true even when only legacy /hits data exists (results[] is empty).
+  // Only show the staged ScreeningResults panel when there are actual result rows.
+  const hasScreening = Boolean(screening?.results?.length);
   const hasHits = !hasScreening && Array.isArray(hits) && hits.length > 0;
   const handedOff = (Array.isArray(compounds) ? compounds : []).filter(Boolean);
 
