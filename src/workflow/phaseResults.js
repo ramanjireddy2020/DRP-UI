@@ -778,7 +778,13 @@ export const INTERACTION_TYPES = [
  */
 export const normalizeInteractions = (payload) => {
   const stage = readStage(payload);
-  const data = payload?.data ?? null;
+  // `unwrap` peels { data: <inner> } envelopes, so the interactions endpoint's
+  //   { status, error, data: { interactions, counts, total, residues } }
+  // arrives here already unwrapped as { interactions, counts, total, residues }.
+  // But when called from normalizeScreening the full envelope is preserved.
+  // Support both: if `payload` already carries `interactions` directly, it IS
+  // the data object; otherwise look inside payload.data.
+  const data = payload?.interactions != null ? payload : payload?.data ?? null;
   const byType = {};
   const counts = {};
   INTERACTION_TYPES.forEach(({ key }) => {
