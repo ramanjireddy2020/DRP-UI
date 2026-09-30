@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Button, CircularProgress, Typography } from "@mui/material";
 import { ExpandMoreRounded, DownloadRounded } from "@mui/icons-material";
 import { FONT, TEAL, BORDER, TEXT_DARK, TEXT_MUTED } from "../workflowConstants";
@@ -83,9 +83,9 @@ const DownloadButton = ({ path, filename, label }) => {
    RESULTS TABLE
 ============================================================================ */
 
-const COLUMNS = "minmax(90px,1fr) minmax(120px,1.4fr) 130px 56px 110px 110px";
+const COLUMNS = "minmax(90px,1fr) minmax(120px,1.4fr) 130px 56px 110px 110px 132px";
 
-const ResultsTable = ({ results, selectedId, onSelect }) => {
+const ResultsTable = ({ results, selectedId, onSelect, onOpenProfile }) => {
   // Grouped per protein, best (most negative) score first within each.
   const groups = useMemo(() => {
     const map = new Map();
@@ -104,7 +104,7 @@ const ResultsTable = ({ results, selectedId, onSelect }) => {
 
   return (
     <Box sx={{ width: "100%", overflowX: "auto", border: `1px solid ${BORDER}`, borderRadius: "8px" }}>
-      <Box sx={{ minWidth: 640 }}>
+      <Box sx={{ minWidth: 780 }}>
         <Box sx={{ display: "grid", gridTemplateColumns: COLUMNS, gap: "8px", alignItems: "center", p: "10px 12px", bgcolor: "#F8FAFC", borderBottom: `1px solid ${BORDER}` }}>
           <Typography sx={head}>Protein</Typography>
           <Typography sx={head}>Drug</Typography>
@@ -112,6 +112,7 @@ const ResultsTable = ({ results, selectedId, onSelect }) => {
           <Typography sx={head}>Rank</Typography>
           <Typography sx={head}>Docking</Typography>
           <Typography sx={head}>Interactions</Typography>
+          <Box />
         </Box>
         {groups.map(([protein, rows]) =>
           rows.map((r, i) => {
@@ -156,6 +157,30 @@ const ResultsTable = ({ results, selectedId, onSelect }) => {
                 <Typography sx={cell}>{r.rank ?? i + 1}</Typography>
                 <Box><StatusChip status={r.stages.docking.status} title={r.stages.docking.error} /></Box>
                 <Box><StatusChip status={r.stages.interaction.status} title={r.stages.interaction.error} /></Box>
+                {/* Opens this row's 3D view, interaction profile and files. */}
+                <Button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenProfile(r.resultId);
+                  }}
+                  sx={{
+                    minWidth: 0,
+                    height: "24px",
+                    px: "8px",
+                    bgcolor: TEAL,
+                    color: "#FFFFFF",
+                    borderRadius: "4px",
+                    fontFamily: FONT,
+                    fontSize: "10px",
+                    fontWeight: 600,
+                    textTransform: "uppercase",
+                    whiteSpace: "nowrap",
+                    boxShadow: "none",
+                    "&:hover": { bgcolor: "#00A9BF", boxShadow: "none" },
+                  }}
+                >
+                  Interaction profile
+                </Button>
               </Box>
             );
           })
@@ -316,6 +341,12 @@ const ScreeningResults = ({ jobId, screening }) => {
     return scored.reduce((best, r) => (r.rawScore < best.rawScore ? r : best)).resultId;
   }, [results]);
   const [selectedId, setSelectedId] = useState(null);
+  const detailRef = useRef(null);
+  const openProfile = (resultId) => {
+    setSelectedId(resultId);
+    // Let the card re-render for the new row, then bring it into view.
+    window.requestAnimationFrame(() => detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
   const [focus, setFocus] = useState(null);
   const selected = results.find((r) => r.resultId === selectedId) ?? results.find((r) => r.resultId === bestId) ?? null;
 
@@ -339,7 +370,7 @@ const ScreeningResults = ({ jobId, screening }) => {
         {" "}Lower (more negative) scores bind more strongly. Select a row to see its 3D pose and interactions.
       </Typography>
 
-      <ResultsTable results={results} selectedId={selected?.resultId ?? null} onSelect={setSelectedId} />
+      <ResultsTable results={results} selectedId={selected?.resultId ?? null} onSelect={setSelectedId} onOpenProfile={openProfile} />
 
       {failures.length > 0 && (
         <Box role="status" sx={{ p: "10px 12px", borderRadius: "8px", bgcolor: "#FEF2F2", border: "1px solid #FECACA" }}>
@@ -356,7 +387,7 @@ const ScreeningResults = ({ jobId, screening }) => {
       )}
 
       {selected && (
-        <Box sx={{ border: `1px solid ${BORDER}`, borderRadius: "10px", p: "14px", bgcolor: "#FFFFFF", display: "flex", flexDirection: "column", gap: "12px" }}>
+        <Box ref={detailRef} sx={{ border: `1px solid ${BORDER}`, borderRadius: "10px", p: "14px", bgcolor: "#FFFFFF", display: "flex", flexDirection: "column", gap: "12px", scrollMarginTop: "16px" }}>
           <Typography sx={{ ...text, fontSize: "14px", fontWeight: 600 }}>
             {selected.protein} × <Box component="span" sx={{ textTransform: "capitalize" }}>{selected.drug}</Box>
             <Box component="span" sx={{ fontWeight: 400, color: TEXT_MUTED, fontSize: "12px" }}>
