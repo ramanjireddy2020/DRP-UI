@@ -83,108 +83,139 @@ const DownloadButton = ({ path, filename, label }) => {
    RESULTS TABLE
 ============================================================================ */
 
-const COLUMNS = "minmax(90px,1fr) minmax(120px,1.4fr) 130px 56px 110px 110px 132px";
+/** File name of a gateway path, e.g. ".../files/complex" → "complex". */
+const baseName = (path) => (typeof path === "string" ? path.split("/").filter(Boolean).pop() ?? "" : "");
 
+/**
+ * The same columns and look as the earlier affinity table (PLPTable):
+ * PROTEIN NAME · MODE · BINDING AFFINITY · PROTEIN-LIGAND · PROTEIN · LIGAND.
+ * PROTEIN-LIGAND (the complex file) and PROTEIN (the PDB structure) only
+ * show when some row has a value.
+ */
 const ResultsTable = ({ results, selectedId, onSelect, onOpenProfile }) => {
   // Grouped per protein, best (most negative) score first within each.
-  const groups = useMemo(() => {
+  const rows = useMemo(() => {
     const map = new Map();
     results.forEach((r) => {
       if (!map.has(r.protein)) map.set(r.protein, []);
       map.get(r.protein).push(r);
     });
-    return [...map.entries()].map(([protein, rows]) => [
-      protein,
-      [...rows].sort((a, b) => (a.rawScore ?? Infinity) - (b.rawScore ?? Infinity)),
-    ]);
+    return [...map.values()].flatMap((list) =>
+      [...list].sort((a, b) => (a.rawScore ?? Infinity) - (b.rawScore ?? Infinity))
+    );
   }, [results]);
 
-  const head = { ...text, fontSize: "11px", fontWeight: 700, color: "#33404D", textTransform: "uppercase", letterSpacing: "0.02em" };
-  const cell = { ...text, fontSize: "13px", color: "#262B33" };
+  const proteinLigandOf = (r) => baseName(r.files.complex);
+  const showProteinLigand = rows.some((r) => proteinLigandOf(r));
+  const showProteinValue = rows.some((r) => r.proteinIdentifier);
+
+  const gridTemplateColumns = [
+    "80px",
+    "40px",
+    "100px",
+    showProteinLigand && "110px",
+    showProteinValue && "80px",
+    "minmax(150px, 1fr)",
+    // Fits the "INTERACTION PROFILE" button.
+    "112px",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const header = { ...text, fontSize: "9px", lineHeight: "11px", fontWeight: 700, color: "#33404D" };
+  const cell = { ...text, fontSize: "10px", lineHeight: "12px", fontWeight: 400, color: "#262B33" };
+  const clip = { ...cell, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
 
   return (
-    <Box sx={{ width: "100%", overflowX: "auto", border: `1px solid ${BORDER}`, borderRadius: "8px" }}>
-      <Box sx={{ minWidth: 780 }}>
-        <Box sx={{ display: "grid", gridTemplateColumns: COLUMNS, gap: "8px", alignItems: "center", p: "10px 12px", bgcolor: "#F8FAFC", borderBottom: `1px solid ${BORDER}` }}>
-          <Typography sx={head}>Protein</Typography>
-          <Typography sx={head}>Drug</Typography>
-          <Typography sx={head}>Score (kcal/mol)</Typography>
-          <Typography sx={head}>Rank</Typography>
-          <Typography sx={head}>Docking</Typography>
-          <Typography sx={head}>Interactions</Typography>
+    <Box sx={{ width: "100%", overflowX: "auto", border: "1px solid #E2E8F0", borderRadius: "8px" }}>
+      <Box sx={{ minWidth: "600px" }}>
+        {/* HEADER */}
+        <Box
+          sx={{
+            display: "grid",
+            gridTemplateColumns,
+            alignItems: "center",
+            columnGap: "4px",
+            padding: "10px",
+            background: "#F1F5F9",
+            borderRadius: "4px",
+          }}
+        >
+          <Typography sx={header}>PROTEIN NAME</Typography>
+          <Typography sx={header}>MODE</Typography>
+          <Typography sx={header}>BINDING AFFINITY (KCAL/MOL)</Typography>
+          {showProteinLigand && <Typography sx={header}>PROTEIN-LIGAND</Typography>}
+          {showProteinValue && <Typography sx={header}>PROTEIN</Typography>}
+          <Typography sx={header}>LIGAND</Typography>
           <Box />
         </Box>
-        {groups.map(([protein, rows]) =>
-          rows.map((r, i) => {
-            const selected = r.resultId === selectedId;
-            return (
-              <Box
-                key={r.resultId}
-                role="button"
-                tabIndex={0}
-                aria-pressed={selected}
-                onClick={() => onSelect(r.resultId)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    onSelect(r.resultId);
-                  }
+
+        {/* ROWS */}
+        {rows.map((r) => {
+          const selected = r.resultId === selectedId;
+          return (
+            <Box
+              key={r.resultId}
+              role="button"
+              tabIndex={0}
+              aria-pressed={selected}
+              onClick={() => onSelect(r.resultId)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onSelect(r.resultId);
+                }
+              }}
+              sx={{
+                display: "grid",
+                gridTemplateColumns,
+                alignItems: "center",
+                columnGap: "4px",
+                padding: "10px",
+                minHeight: "41px",
+                boxSizing: "border-box",
+                cursor: "pointer",
+                background: selected ? "rgba(0,188,212,0.08)" : "#FFFFFF",
+                borderTop: "1px solid #EBEDF2",
+                "&:hover": { background: selected ? "rgba(0,188,212,0.1)" : "#F8FAFC" },
+              }}
+            >
+              <Typography sx={cell}>{r.protein}</Typography>
+              <Typography sx={cell}>{r.mode ?? "—"}</Typography>
+              <Typography sx={{ ...cell, fontVariantNumeric: "tabular-nums" }}>{r.score}</Typography>
+              {showProteinLigand && <Typography sx={clip}>{proteinLigandOf(r) || "—"}</Typography>}
+              {showProteinValue && <Typography sx={clip}>{r.proteinIdentifier || "—"}</Typography>}
+              <Typography sx={{ ...clip, textTransform: "capitalize" }}>{r.drug}</Typography>
+
+              {/* Opens this row's 3D view, interaction profile and files. */}
+              <Button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenProfile(r.resultId);
                 }}
                 sx={{
-                  display: "grid",
-                  gridTemplateColumns: COLUMNS,
-                  gap: "8px",
-                  alignItems: "center",
-                  p: "10px 12px",
-                  cursor: "pointer",
-                  borderBottom: `1px solid ${BORDER}`,
-                  "&:last-of-type": { borderBottom: "none" },
-                  bgcolor: selected ? "rgba(0,188,212,0.08)" : "#FFFFFF",
-                  boxShadow: selected ? `inset 3px 0 0 ${TEAL}` : "none",
-                  "&:hover": { bgcolor: selected ? "rgba(0,188,212,0.1)" : "#F8FAFC" },
+                  minWidth: "76px",
+                  width: "auto",
+                  whiteSpace: "nowrap",
+                  height: "21px",
+                  padding: "5px 8px",
+                  background: TEAL,
+                  color: "#FFFFFF",
+                  borderRadius: "4px",
+                  fontFamily: FONT,
+                  fontSize: "9px",
+                  lineHeight: "11px",
+                  fontWeight: 600,
+                  textTransform: "uppercase",
+                  boxShadow: "none",
+                  "&:hover": { background: "#00A9BF", boxShadow: "none" },
                 }}
               >
-                <Typography sx={{ ...cell, fontWeight: 600 }}>
-                  {i === 0 ? protein : ""}
-                  {i === 0 && r.proteinIdentifier && (
-                    <Box component="span" sx={{ display: "block", fontSize: "11px", fontWeight: 400, color: TEXT_MUTED }}>
-                      {r.proteinIdentifier}
-                    </Box>
-                  )}
-                </Typography>
-                <Typography sx={{ ...cell, textTransform: "capitalize" }}>{r.drug}</Typography>
-                <Typography sx={{ ...cell, fontVariantNumeric: "tabular-nums" }}>{r.score}</Typography>
-                <Typography sx={cell}>{r.rank ?? i + 1}</Typography>
-                <Box><StatusChip status={r.stages.docking.status} title={r.stages.docking.error} /></Box>
-                <Box><StatusChip status={r.stages.interaction.status} title={r.stages.interaction.error} /></Box>
-                {/* Opens this row's 3D view, interaction profile and files. */}
-                <Button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onOpenProfile(r.resultId);
-                  }}
-                  sx={{
-                    minWidth: 0,
-                    height: "24px",
-                    px: "8px",
-                    bgcolor: TEAL,
-                    color: "#FFFFFF",
-                    borderRadius: "4px",
-                    fontFamily: FONT,
-                    fontSize: "10px",
-                    fontWeight: 600,
-                    textTransform: "uppercase",
-                    whiteSpace: "nowrap",
-                    boxShadow: "none",
-                    "&:hover": { bgcolor: "#00A9BF", boxShadow: "none" },
-                  }}
-                >
-                  Interaction profile
-                </Button>
-              </Box>
-            );
-          })
-        )}
+                INTERACTION PROFILE
+              </Button>
+            </Box>
+          );
+        })}
       </Box>
     </Box>
   );
@@ -395,6 +426,12 @@ const ScreeningResults = ({ jobId, screening }) => {
               {selected.proteinSource ? ` (${selected.proteinSource})` : ""}
             </Box>
           </Typography>
+          <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px" }}>
+            <Typography sx={{ ...text, fontSize: "12px", color: "#475569" }}>Docking</Typography>
+            <StatusChip status={selected.stages.docking.status} title={selected.stages.docking.error} />
+            <Typography sx={{ ...text, fontSize: "12px", color: "#475569", ml: "8px" }}>Interactions</Typography>
+            <StatusChip status={selected.stages.interaction.status} title={selected.stages.interaction.error} />
+          </Box>
 
           <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "minmax(0,1.2fr) minmax(0,1fr)" }, gap: "14px" }}>
             <Box sx={{ minWidth: 0 }}>
