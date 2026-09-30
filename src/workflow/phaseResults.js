@@ -642,7 +642,28 @@ export const normalizeScreening = (payload) => {
   const src = payload?.result && typeof payload.result === "object" && !payload.results ? payload.result : payload ?? {};
 
   const awaitingInput = Boolean(src.awaitingInput) || src.stage === "awaiting_structure_confirmation";
-  const pdbOptions = readPdbShortlist(src);
+  // When multiple proteins have ambiguous structures, pendingStructures lists every
+  // protein's choices. pdbOptions only carries the first protein's — reading
+  // pendingStructures lets the picker resolve all proteins in one submission.
+  const pdbOptions = (() => {
+    if (Array.isArray(src.pendingStructures) && src.pendingStructures.length > 0) {
+      const all = src.pendingStructures.flatMap((p) =>
+        (Array.isArray(p.choices) ? p.choices : []).map((c) => {
+          const id = c.id ?? c.pdbId ?? null;
+          if (!id || !/^[1-9][A-Za-z0-9]{3}$/.test(String(id))) return null;
+          return {
+            id: String(id).toUpperCase(),
+            title: c.title ?? null,
+            resolution: c.resolution ?? null,
+            method: c.method ?? null,
+            protein: p.target ?? null,
+          };
+        }).filter(Boolean)
+      );
+      if (all.length) return all;
+    }
+    return readPdbShortlist(src);
+  })();
 
   const results = (Array.isArray(src.results) ? src.results : [])
     .filter(Boolean)
