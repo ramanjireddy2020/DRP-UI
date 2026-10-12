@@ -28,7 +28,8 @@ export const getReport = async (jobId) =>
 /**
  * Question over one, several or all indexed patents. Vector search + LLM.
  *
- * @param {object} payload - { question, patentIds?, topK? }
+ * @param {object} payload - { question, jobId?, patentIds?, topK? }
+ *   jobId scopes the answer to that NovSearch run's patents.
  *   patentIds picks the scope: null = every indexed patent, an array = just
  *   those (which is what the "Compare" action sends).
  * @returns {Promise<object>} { answer, mode, patentIdsUsed, chunksUsed }

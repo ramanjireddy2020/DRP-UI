@@ -2681,6 +2681,7 @@ const CompleteWorkflow = () => {
           progressMessage={novsearchJob.progressMessage ?? null}
           isLoading={phase === "novelty-loading"}
           report={novsearch.data}
+          jobId={novsearchStep?.jobId ?? null}
           loading={novsearch.loading}
           error={novsearch.error}
           onRetry={novsearch.reload}

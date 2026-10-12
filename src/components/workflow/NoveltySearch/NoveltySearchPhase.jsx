@@ -1024,6 +1024,8 @@ const NoveltySearchPhase = ({
   progressMessage,
   /** GET /agents/novsearch/{jobId}/report, normalised. */
   report = null,
+  /** The NovSearch job on screen; patent questions are scoped to it. */
+  jobId = null,
   loading = false,
   error = null,
   onRetry,
@@ -1076,7 +1078,7 @@ const NoveltySearchPhase = ({
 
   const toggleSelected = (id) => onToggleSelected?.(id);
 
-  /** Follow-up box → ask({ question, patentIds: null, topK: null }) over every indexed patent. */
+  /** Patent question → ask({ question, jobId, patentIds, topK: null }), scoped to this run and the ticked patents. */
   const askFollowUp = async (question, existingId = null) => {
     const id = existingId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
@@ -1094,7 +1096,14 @@ const NoveltySearchPhase = ({
     );
 
     try {
-      const result = await askNovSearch({ question, patentIds: scope.length ? scope : null, topK: null });
+      // jobId scopes the answer to this run's patents; without it the
+      // backend searched every indexed patent, across sessions and branches.
+      const result = await askNovSearch({
+        question,
+        jobId: report?.jobId ?? jobId ?? undefined,
+        patentIds: scope.length ? scope : null,
+        topK: null,
+      });
       setThread((prev) =>
         prev.map((e) => (e.id === id ? { id, question, scope, pending: false, error: null, ...result } : e))
       );

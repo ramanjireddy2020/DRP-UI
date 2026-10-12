@@ -899,6 +899,8 @@ export const normalizeNoveltyReport = (payload) => {
 
   return {
     hasData: patents.length > 0 || Boolean(source?.assessment),
+    // The NovSearch run these patents belong to; /ask is scoped to it.
+    jobId: source?.jobId ?? source?.job_id ?? payload?.jobId ?? null,
     target: source?.target ?? null,
     disease: source?.disease ?? null,
     assessment: source?.assessment ?? null,
