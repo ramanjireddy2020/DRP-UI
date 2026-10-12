@@ -680,19 +680,6 @@ const TXKGPhase = ({
           </Typography>
         )}
 
-        {txkg.method && (
-          <Box sx={{ pt: "4px", borderTop: `1px solid ${BORDER}` }}>
-            <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase", letterSpacing: "0.5px", mt: "10px", mb: "6px", lineHeight: "100%" }}>Method</Typography>
-            <Typography sx={{ fontFamily: FONT, fontSize: "11px", color: "#667080", lineHeight: 1.6 }}>
-              {[
-                txkg.method.graph_nodes != null && `${txkg.method.graph_nodes.toLocaleString()} nodes`,
-                txkg.method.graph_edges != null && `${txkg.method.graph_edges.toLocaleString()} edges`,
-                txkg.method.candidate_pool != null && `pool of ${txkg.method.candidate_pool}`,
-                txkg.method.correction_method,
-              ].filter(Boolean).join(" · ")}
-            </Typography>
-          </Box>
-        )}
       </Box>
     );
   };
