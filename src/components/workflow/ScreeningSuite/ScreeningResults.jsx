@@ -3,7 +3,8 @@ import { Box, Button, CircularProgress, Typography } from "@mui/material";
 import { ExpandMoreRounded, DownloadRounded } from "@mui/icons-material";
 import { FONT, TEAL, BORDER, TEXT_DARK, TEXT_MUTED } from "../workflowConstants";
 import { getInteractions, downloadFile } from "../../../services/api/screensuite";
-import { normalizeInteractions, INTERACTION_TYPES } from "../../../workflow/phaseResults";
+import { normalizeInteractions } from "../../../workflow/phaseResults";
+import { colorForType, cssColor } from "./molstarInteractions";
 import MolstarViewer from "./MolstarViewer";
 
 /**
@@ -225,20 +226,22 @@ const ResultsTable = ({ results, selectedId, onSelect, onOpenProfile }) => {
    INTERACTION PANEL
 ============================================================================ */
 
-const InteractionPanel = ({ jobId, result, onFocus, focus }) => {
-  const status = result.stages.interaction.status;
+/**
+ * The ProLIF profile for one result (GET …/results/{resultId}/interactions),
+ * loaded once and shared by the panel and the 3D view.
+ */
+const useInteractionProfile = (jobId, result) => {
+  const status = result?.stages.interaction.status;
+  const resultId = result?.resultId;
   const [state, setState] = useState({ loading: false, error: null, data: null });
-  const [open, setOpen] = useState(null);
-
   useEffect(() => {
-    setOpen(null);
-    if (status !== "completed" || !jobId) {
+    if (status !== "completed" || !jobId || !resultId) {
       setState({ loading: false, error: null, data: null });
       return undefined;
     }
     let cancelled = false;
     setState({ loading: true, error: null, data: null });
-    getInteractions(jobId, result.resultId)
+    getInteractions(jobId, resultId)
       .then((payload) => {
         if (!cancelled) setState({ loading: false, error: null, data: normalizeInteractions(payload) });
       })
@@ -248,7 +251,17 @@ const InteractionPanel = ({ jobId, result, onFocus, focus }) => {
     return () => {
       cancelled = true;
     };
-  }, [jobId, result.resultId, status]);
+  }, [jobId, resultId, status]);
+  return state;
+};
+
+const atomList = (atoms) =>
+  atoms.map((a) => [a.name || a.element, a.index != null ? `#${a.index}` : null].filter(Boolean).join(" ")).join(", ");
+
+const InteractionPanel = ({ result, state, selectedId, onSelect }) => {
+  const status = result.stages.interaction.status;
+  const [open, setOpen] = useState(null);
+  useEffect(() => setOpen(null), [result.resultId]);
 
   const note = (title, body, color = TEXT_MUTED) => (
     <Box sx={{ p: "14px", border: `1px solid ${BORDER}`, borderRadius: "8px", bgcolor: "#F8FAFC" }}>
@@ -287,7 +300,8 @@ const InteractionPanel = ({ jobId, result, onFocus, focus }) => {
   if (data.status === "failed") return note("Interaction profiling failed", data.error || "ProLIF could not profile this pose.", "#B91C1C");
   if (!data.total) return note("No interactions detected", "ProLIF found no protein–ligand interactions for this pose.");
 
-  const types = INTERACTION_TYPES.filter(({ key }) => data.counts[key] > 0 || data.byType[key].length > 0);
+  // Every type ProLIF returned, not a fixed list.
+  const types = data.types;
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: "10px" }}>
@@ -300,8 +314,8 @@ const InteractionPanel = ({ jobId, result, onFocus, focus }) => {
       </Typography>
 
       <Box sx={{ border: `1px solid ${BORDER}`, borderRadius: "8px", overflow: "hidden" }}>
-        {types.map(({ key, label }) => {
-          const rows = data.byType[key];
+        {types.map(({ key, label, count }) => {
+          const rows = data.byType[key] ?? [];
           const expanded = open === key;
           return (
             <Box key={key} sx={{ borderBottom: `1px solid ${BORDER}`, "&:last-of-type": { borderBottom: "none" } }}>
@@ -318,8 +332,9 @@ const InteractionPanel = ({ jobId, result, onFocus, focus }) => {
                 }}
                 sx={{ display: "flex", alignItems: "center", gap: "8px", p: "8px 12px", cursor: "pointer", bgcolor: expanded ? "#F8FAFC" : "#FFFFFF", "&:hover": { bgcolor: "#F8FAFC" } }}
               >
+                <Box sx={{ width: 14, height: 0, borderTop: `2px dashed ${cssColor(colorForType(key))}`, flexShrink: 0 }} />
                 <Typography sx={{ ...text, flex: 1, fontSize: "13px", fontWeight: 500 }}>{label}</Typography>
-                <Typography sx={{ ...text, fontSize: "13px", fontWeight: 700, color: TEAL }}>{data.counts[key]}</Typography>
+                <Typography sx={{ ...text, fontSize: "13px", fontWeight: 700, color: TEAL }}>{count}</Typography>
                 <ExpandMoreRounded sx={{ fontSize: 18, color: TEXT_MUTED, transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
               </Box>
               {expanded && (
@@ -330,15 +345,35 @@ const InteractionPanel = ({ jobId, result, onFocus, focus }) => {
                     ))}
                   </Box>
                   {rows.map((row) => {
-                    const focused = focus && focus.residueNumber === row.residueNumber && focus.chain === row.chain;
+                    // Each row is one ProLIF interaction (by its id), so two
+                    // interactions on the same residue stay distinct.
+                    const isSelected = selectedId === row.id;
                     return (
                       <Box
                         key={row.id}
-                        onClick={() => onFocus?.({ chain: row.chain, residueNumber: row.residueNumber })}
-                        title={[row.proteinAtoms.length && `Protein atoms: ${row.proteinAtoms.join(", ")}`, row.ligandAtoms.length && `Ligand atoms: ${row.ligandAtoms.join(", ")}`].filter(Boolean).join("\n") || undefined}
-                        sx={{ display: "grid", gridTemplateColumns: "1.2fr 0.6fr 0.8fr 0.8fr", gap: "6px", py: "4px", borderTop: "1px solid #F1F5F9", cursor: onFocus ? "pointer" : "default", bgcolor: focused ? "rgba(0,188,212,0.08)" : "transparent" }}
+                        role="button"
+                        tabIndex={0}
+                        aria-pressed={isSelected}
+                        onClick={() => onSelect?.(isSelected ? null : row.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            onSelect?.(isSelected ? null : row.id);
+                          }
+                        }}
+                        title={[
+                          `${row.type} · ${row.id}`,
+                          row.proteinAtoms.length && `Protein atoms: ${atomList(row.proteinAtoms)}`,
+                          row.ligandAtoms.length && `Ligand atoms: ${atomList(row.ligandAtoms)}`,
+                        ].filter(Boolean).join("\n")}
+                        sx={{ display: "grid", gridTemplateColumns: "1.2fr 0.6fr 0.8fr 0.8fr", gap: "6px", py: "4px", borderTop: "1px solid #F1F5F9", cursor: onSelect ? "pointer" : "default", bgcolor: isSelected ? "rgba(0,188,212,0.12)" : "transparent", "&:hover": { bgcolor: isSelected ? "rgba(0,188,212,0.14)" : "#F8FAFC" } }}
                       >
-                        <Typography sx={{ ...text, fontSize: "12px", fontWeight: 600 }}>{row.residue || "—"}</Typography>
+                        <Typography sx={{ ...text, fontSize: "12px", fontWeight: 600 }}>
+                          {row.residue || "—"}
+                          {row.type && row.type !== row.label && (
+                            <Box component="span" sx={{ fontWeight: 400, color: TEXT_MUTED, fontSize: "11px" }}> {row.type}</Box>
+                          )}
+                        </Typography>
                         <Typography sx={{ ...text, fontSize: "12px" }}>{row.chain || "—"}</Typography>
                         <Typography sx={{ ...text, fontSize: "12px", fontVariantNumeric: "tabular-nums" }}>{row.distance != null ? row.distance.toFixed(2) : "—"}</Typography>
                         <Typography sx={{ ...text, fontSize: "12px", fontVariantNumeric: "tabular-nums" }}>{row.angle != null ? row.angle.toFixed(1) : "—"}</Typography>
@@ -378,7 +413,8 @@ const ScreeningResults = ({ jobId, screening }) => {
     // Let the card re-render for the new row, then bring it into view.
     window.requestAnimationFrame(() => detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
-  const [focus, setFocus] = useState(null);
+  // The ProLIF interaction chosen in the panel, shown in Mol*.
+  const [selectedInteractionId, setSelectedInteractionId] = useState(null);
 
   // The backend's written recommendation (which combination to take
   // forward), and the row it names, so the card can open it.
@@ -402,7 +438,8 @@ const ScreeningResults = ({ jobId, screening }) => {
   }, [recommendation, results]);
   const selected = results.find((r) => r.resultId === selectedId) ?? results.find((r) => r.resultId === bestId) ?? null;
 
-  useEffect(() => setFocus(null), [selected?.resultId]);
+  useEffect(() => setSelectedInteractionId(null), [selected?.resultId]);
+  const profile = useInteractionProfile(jobId, selected);
 
   const filePath = (r, key) => r.files[key] || (jobId ? `/agents/screensuite/${jobId}/results/${r.resultId}/files/${key}` : null);
   const jobFiles = [
@@ -477,8 +514,8 @@ const ScreeningResults = ({ jobId, screening }) => {
               {selected.molstar.available && selected.molstar.complex ? (
                 <MolstarViewer
                   complexPath={selected.molstar.complex}
-                  focus={focus}
-                  highlightAvailable={selected.molstar.interactionHighlighting || selected.stages.interaction.status === "completed"}
+                  interactions={profile.data?.list ?? null}
+                  selectedInteractionId={selectedInteractionId}
                 />
               ) : (
                 <Box sx={{ p: "14px", border: `1px solid ${BORDER}`, borderRadius: "8px", bgcolor: "#F8FAFC" }}>
@@ -489,7 +526,12 @@ const ScreeningResults = ({ jobId, screening }) => {
               )}
             </Box>
             <Box sx={{ minWidth: 0 }}>
-              <InteractionPanel jobId={jobId} result={selected} focus={focus} onFocus={setFocus} />
+              <InteractionPanel
+                result={selected}
+                state={profile}
+                selectedId={selectedInteractionId}
+                onSelect={setSelectedInteractionId}
+              />
             </Box>
           </Box>
 

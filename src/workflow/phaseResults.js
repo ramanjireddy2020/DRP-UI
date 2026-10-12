@@ -779,7 +779,11 @@ const readScreeningRecommendation = (raw) => {
   return null;
 };
 
-/** Interaction types, in display order, with their labels. */
+/**
+ * Labels and display order for the interaction types ProLIF is known to
+ * return. Only a lookup: any other type the backend sends is still shown,
+ * after these, with a label made from its key.
+ */
 export const INTERACTION_TYPES = [
   { key: "hydrogen_bonds", label: "Hydrogen bonds" },
   { key: "hydrophobic", label: "Hydrophobic" },
@@ -791,11 +795,52 @@ export const INTERACTION_TYPES = [
   { key: "vdw_contacts", label: "van der Waals" },
 ];
 
+/** "cation_pi" → "Cation pi"; "HBAcceptor" stays as written. */
+const labelForType = (key) => {
+  const known = INTERACTION_TYPES.find((t) => t.key === key);
+  if (known) return known.label;
+  const words = String(key).replace(/_/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+};
+
 /**
- * GET …/results/{resultId}/interactions →
- * { status, error, counts{type: n}, total, residues[], byType{type: [interaction]} }.
- * Each interaction keeps the fields the Mol* highlight needs (chain,
- * residue_number, residue_name, protein/ligand atoms).
+ * One ProLIF atom reference. The backend sends { index, element, name };
+ * `index` is the atom's 0-based position in the complex PDB — among the
+ * ATOM records for the protein, among the ligand's HETATM records for the
+ * ligand. Ligand atom names repeat ("C", "N"), so the index is what
+ * identifies it. Bare names or numbers are accepted for older payloads.
+ */
+const readProlifAtom = (atom) => {
+  if (atom == null) return null;
+  if (typeof atom === "number") return { index: atom, element: null, name: null };
+  if (typeof atom === "string") return { index: null, element: null, name: atom };
+  const index = Number(atom.index ?? atom.atom_index ?? atom.idx);
+  return {
+    index: Number.isInteger(index) ? index : null,
+    element: atom.element ?? null,
+    name: atom.name ?? atom.atom_name ?? null,
+  };
+};
+
+const INTERACTION_FIELDS = new Set([
+  "interaction_id", "type", "residue", "residue_name", "residue_number", "chain",
+  "protein_atoms", "ligand_atoms", "distance", "DHA_angle", "angle",
+  "ligand", "ligand_chain", "ligand_residue", "ligand_residue_name", "ligand_residue_number",
+]);
+
+/**
+ * GET …/results/{resultId}/interactions → the ProLIF profile, the single
+ * source of truth for interactions (nothing is computed in the browser).
+ *
+ * { status, error, total, residues[], version,
+ *   types[{ key, label, count }],          every type returned, known ones first
+ *   counts{key: n}, byType{key: [interaction]},
+ *   list[interaction] }                     all interactions, in id order
+ *
+ * interaction = { id, key, label, type (ProLIF's, e.g. HBDonor), residue,
+ *   residueName, residueNumber, chain, proteinAtoms[{index, element, name}],
+ *   ligandAtoms[…], ligand{chain, residueName, residueNumber} | null,
+ *   distance, angle, metadata{any other fields} }
  */
 export const normalizeInteractions = (payload) => {
   const stage = readStage(payload);
@@ -806,33 +851,63 @@ export const normalizeInteractions = (payload) => {
   // Support both: if `payload` already carries `interactions` directly, it IS
   // the data object; otherwise look inside payload.data.
   const data = payload?.interactions != null ? payload : payload?.data ?? null;
+  const raw = data?.interactions && typeof data.interactions === "object" ? data.interactions : {};
+
+  const knownOrder = INTERACTION_TYPES.map((t) => t.key);
+  const keys = [...new Set([...Object.keys(raw), ...Object.keys(data?.counts ?? {})])].sort((a, b) => {
+    const ia = knownOrder.indexOf(a);
+    const ib = knownOrder.indexOf(b);
+    return (ia === -1 ? knownOrder.length : ia) - (ib === -1 ? knownOrder.length : ib);
+  });
+
   const byType = {};
   const counts = {};
-  INTERACTION_TYPES.forEach(({ key }) => {
-    const list = Array.isArray(data?.interactions?.[key]) ? data.interactions[key] : [];
-    byType[key] = list.filter(Boolean).map((i, index) => ({
-      id: i.interaction_id ?? `${key}_${index + 1}`,
-      type: i.type ?? key,
-      residue: i.residue ?? [i.residue_name, i.residue_number].filter(Boolean).join(""),
-      residueName: i.residue_name ?? null,
-      residueNumber: i.residue_number ?? null,
-      chain: i.chain ?? null,
-      proteinAtoms: Array.isArray(i.protein_atoms) ? i.protein_atoms : [],
-      ligandAtoms: Array.isArray(i.ligand_atoms) ? i.ligand_atoms : [],
-      distance: Number.isFinite(Number(i.distance)) ? Number(i.distance) : null,
-      angle: Number.isFinite(Number(i.DHA_angle ?? i.angle)) ? Number(i.DHA_angle ?? i.angle) : null,
-    }));
+  keys.forEach((key) => {
+    const items = Array.isArray(raw[key]) ? raw[key] : [];
+    byType[key] = items.filter(Boolean).map((i, index) => {
+      const ligandChain = i.ligand_chain ?? i.ligand?.chain ?? null;
+      const ligandResidueName = i.ligand_residue_name ?? i.ligand?.residue_name ?? i.ligand?.resname ?? null;
+      const ligandResidueNumber = i.ligand_residue_number ?? i.ligand?.residue_number ?? null;
+      const metadata = Object.fromEntries(Object.entries(i).filter(([k]) => !INTERACTION_FIELDS.has(k)));
+      return {
+        id: String(i.interaction_id ?? `${key}_${index + 1}`),
+        key,
+        label: labelForType(key),
+        type: i.type ?? key,
+        residue: i.residue ?? [i.residue_name, i.residue_number].filter(Boolean).join(""),
+        residueName: i.residue_name ?? null,
+        residueNumber: i.residue_number ?? null,
+        chain: i.chain ?? null,
+        proteinAtoms: (Array.isArray(i.protein_atoms) ? i.protein_atoms : []).map(readProlifAtom).filter(Boolean),
+        ligandAtoms: (Array.isArray(i.ligand_atoms) ? i.ligand_atoms : []).map(readProlifAtom).filter(Boolean),
+        ligand:
+          ligandChain || ligandResidueName || ligandResidueNumber != null
+            ? { chain: ligandChain, residueName: ligandResidueName, residueNumber: ligandResidueNumber }
+            : null,
+        distance: Number.isFinite(Number(i.distance)) ? Number(i.distance) : null,
+        angle: Number.isFinite(Number(i.DHA_angle ?? i.angle)) ? Number(i.DHA_angle ?? i.angle) : null,
+        metadata,
+      };
+    });
     const c = Number(data?.counts?.[key]);
     counts[key] = Number.isFinite(c) ? c : byType[key].length;
   });
+
+  const types = keys
+    .map((key) => ({ key, label: labelForType(key), count: counts[key] }))
+    .filter((t) => t.count > 0 || byType[t.key].length > 0);
+  const list = keys.flatMap((key) => byType[key]).sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+
   return {
     status: data ? "completed" : stage.status,
     error: stage.error,
-    counts,
     total: Number(data?.total) || Object.values(counts).reduce((a, b) => a + b, 0),
     residues: Array.isArray(data?.residues) ? data.residues : [],
-    byType,
     version: data?.prolifVersion ?? null,
+    types,
+    counts,
+    byType,
+    list,
   };
 };
 
