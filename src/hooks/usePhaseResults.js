@@ -78,7 +78,9 @@ const FETCHERS = {
       .getResults(jobId)
       .then(normalizeScreening)
       .catch(() => null);
-    const screening = fromResults?.hasData ? fromResults : fromJob;
+    const picked = fromResults?.hasData ? fromResults : fromJob;
+    // /results has no recommendation; the job result carries it.
+    const screening = { ...picked, recommendation: picked.recommendation ?? fromJob.recommendation ?? null };
 
     const legacy = normalizeDockingHits(
       screening.hasData ? [] : await screensuiteApi.getHits(jobId).catch(() => [])

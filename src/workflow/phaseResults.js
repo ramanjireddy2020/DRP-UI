@@ -755,7 +755,28 @@ export const normalizeScreening = (payload) => {
     interactionStage: { ...interactionStage, versions: src.interactionStage?.versions ?? null },
     interactionsDone,
     failures,
+    recommendation: readScreeningRecommendation(src.recommendation ?? src.recommendations),
   };
+};
+
+/**
+ * ScreenSuite's written recommendation (backend 2026-10-09): which protein–
+ * drug combination to take forward. It arrives in the job result as a plain
+ * string; an object ({ text, protein, drug }) is accepted too.
+ * → { text, protein, drug } or null.
+ */
+const readScreeningRecommendation = (raw) => {
+  if (!raw) return null;
+  if (typeof raw === "string") return raw.trim() ? { text: raw.trim(), protein: null, drug: null } : null;
+  if (Array.isArray(raw)) return readScreeningRecommendation(raw.filter(Boolean).join("\n"));
+  if (typeof raw === "object") {
+    const text = raw.text ?? raw.summary ?? raw.message ?? raw.recommendation ?? null;
+    const best = raw.best ?? raw;
+    return text
+      ? { text: String(text).trim(), protein: best.protein ?? best.target ?? null, drug: best.drug ?? best.compound ?? null }
+      : null;
+  }
+  return null;
 };
 
 /** Interaction types, in display order, with their labels. */

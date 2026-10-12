@@ -379,6 +379,27 @@ const ScreeningResults = ({ jobId, screening }) => {
     window.requestAnimationFrame(() => detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
   const [focus, setFocus] = useState(null);
+
+  // The backend's written recommendation (which combination to take
+  // forward), and the row it names, so the card can open it.
+  const recommendation = screening?.recommendation ?? null;
+  const recommendedResult = useMemo(() => {
+    if (!recommendation) return null;
+    const same = (a, b) => a && b && String(a).toLowerCase() === String(b).toLowerCase();
+    if (recommendation.protein || recommendation.drug) {
+      const hit = results.find(
+        (r) => (!recommendation.protein || same(r.protein, recommendation.protein)) && (!recommendation.drug || same(r.drug, recommendation.drug))
+      );
+      if (hit) return hit;
+    }
+    // Plain text: the best-scoring row whose drug and protein it mentions.
+    const lower = recommendation.text.toLowerCase();
+    return (
+      [...results]
+        .filter((r) => lower.includes(String(r.drug).toLowerCase()) && lower.includes(String(r.protein).toLowerCase()))
+        .sort((a, b) => (a.rawScore ?? Infinity) - (b.rawScore ?? Infinity))[0] ?? null
+    );
+  }, [recommendation, results]);
   const selected = results.find((r) => r.resultId === selectedId) ?? results.find((r) => r.resultId === bestId) ?? null;
 
   useEffect(() => setFocus(null), [selected?.resultId]);
@@ -414,6 +435,24 @@ const ScreeningResults = ({ jobId, screening }) => {
               {f.stage ? ` (${f.stage})` : ""}: {f.error}
             </Typography>
           ))}
+        </Box>
+      )}
+
+      {recommendation && (
+        <Box sx={{ p: "12px 14px", borderRadius: "8px", bgcolor: "#F0FDFA", border: "1px solid #99F6E4" }}>
+          <Typography sx={{ ...text, fontSize: "13px", fontWeight: 700, mb: "4px" }}>Recommendation</Typography>
+          <Typography sx={{ ...text, fontSize: "13px", lineHeight: "20px", color: "#334155", whiteSpace: "pre-line" }}>
+            {recommendation.text}
+          </Typography>
+          {recommendedResult && (
+            <Button
+              size="small"
+              onClick={() => openProfile(recommendedResult.resultId)}
+              sx={{ mt: "6px", px: 0, textTransform: "none", fontFamily: FONT, fontSize: "12px", fontWeight: 600, color: TEAL }}
+            >
+              View {recommendedResult.protein} × {String(recommendedResult.drug).toLowerCase()} →
+            </Button>
+          )}
         </Box>
       )}
 
