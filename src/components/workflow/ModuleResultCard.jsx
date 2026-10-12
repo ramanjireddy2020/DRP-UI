@@ -47,6 +47,7 @@ const ModuleResultCard = ({
 
   const statusChip = {
     running: { label: "Running", color: "#B4670E", bg: "rgba(180,103,14,0.12)" },
+    input: { label: "Needs input", color: "#1D4ED8", bg: "rgba(29,78,216,0.10)" },
     done: { label: "Completed", color: "#0F766E", bg: "rgba(15,118,110,0.12)" },
     partial: {
       label: "Completed with failures",

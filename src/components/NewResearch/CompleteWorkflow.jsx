@@ -2465,14 +2465,21 @@ const CompleteWorkflow = () => {
     // ScreenSuite may stop to ask which PDB structure to dock against (e.g.
     // 7F7W, 8C09, 8C0A). That is a choice, not a failure, so it is shown as a
     // picker whether it arrives in the results or as the step's message.
+    //
+    // Only the current job decides: its data must say awaitingInput. The
+    // shortlist in the step's summary or error is read only for older runs
+    // that reported it that way, once this job's data has loaded without
+    // results (or the step failed) — never while results are still loading.
     if (moduleKey === "screensuite" && !isLoadingPhase(phase)) {
-      const options = [
-        screensuite.data?.pdbOptions,
-        readPdbShortlist(step?.data?.summary),
-        readPdbShortlist(step?.error),
-      ].find((list) => Array.isArray(list) && list.length) ?? [];
-      const hasResults = (screensuite.data?.results ?? []).length > 0 || (screensuite.data?.hits ?? []).length > 0;
-      if (options.length && (screensuite.data?.awaitingInput || !hasResults)) {
+      const current = screensuite.data;
+      const hasResults = (current?.results ?? []).length > 0 || (current?.hits ?? []).length > 0;
+      const legacyAllowed = Boolean(step?.error) || isErrorPhase(phase) || (current && !current.awaitingInput && !hasResults);
+      const options = current?.awaitingInput
+        ? current.pdbOptions ?? []
+        : legacyAllowed
+        ? [readPdbShortlist(step?.data?.summary), readPdbShortlist(step?.error)].find((list) => Array.isArray(list) && list.length) ?? []
+        : [];
+      if (options.length) {
         const selections = step?.data?.selections ?? {};
         return (
           <PdbPicker
@@ -2875,6 +2882,8 @@ const CompleteWorkflow = () => {
     if (!railStep) return "idle";
     if (railStep.isFailed) return "failed";
     if (railStep.isRunning) return "running";
+    // Waiting for the user to pick a structure is not "Completed".
+    if (moduleKey === "screensuite" && screensuite.data?.awaitingInput) return "input";
     if (railStep.isCompleted) return "done";
     return "idle";
   };

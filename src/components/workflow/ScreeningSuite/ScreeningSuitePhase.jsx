@@ -230,6 +230,10 @@ const ScreeningSuitePhase = ({
   // Only show the staged ScreeningResults panel when there are actual result rows.
   const hasScreening = Boolean(screening?.results?.length);
   const hasHits = !hasScreening && Array.isArray(hits) && hits.length > 0;
+  // Results not fetched yet for this job (the card switches to results the
+  // moment docking completes, before the first read) count as loading, not
+  // as "no results".
+  const waiting = loading || (!screening && !error && !hasHits);
   const handedOff = (Array.isArray(compounds) ? compounds : []).filter(Boolean);
 
 
@@ -472,7 +476,7 @@ const ScreeningSuitePhase = ({
               >
                 {error
                   ? error
-                  : loading
+                  : waiting
                   ? "Loading docking results…"
                   : hasHits
                   ? `Docking complete. ${hits.length} hit${hits.length === 1 ? "" : "s"} returned.`
@@ -491,7 +495,7 @@ const ScreeningSuitePhase = ({
               {/* Older runs only have the /hits affinity rows. */}
               {hasHits && <PLPTable hits={hits} />}
 
-              {!hasHits && !loading && !error && (
+              {!hasHits && !waiting && !error && (
                 <Box
                   role="alert"
                   sx={{

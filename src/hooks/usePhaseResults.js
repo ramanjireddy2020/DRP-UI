@@ -126,6 +126,15 @@ const usePhaseResults = (kind, jobId, options = {}) => {
   // Guards against a slow response for an old job overwriting a newer one.
   const requestRef = useRef(0);
 
+  // A new job starts from empty: keeping the previous job's data showed its
+  // state in the new card (ScreenSuite re-showed the structure prompt and
+  // "no results" while the docking that followed was still loading).
+  const jobRef = useRef(jobId);
+  if (jobRef.current !== jobId) {
+    jobRef.current = jobId;
+    if (data !== null) setData(null);
+  }
+
   const reload = useCallback(() => setAttempt((n) => n + 1), []);
 
   useEffect(() => {
