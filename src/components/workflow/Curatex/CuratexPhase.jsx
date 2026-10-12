@@ -125,6 +125,18 @@ const humanize = (key) =>
  * mismatched property lists. Where the API gives no measured value for a
  * property, the cell says so rather than borrowing one.
  */
+/**
+ * At most two decimals for display: 27.577238201694627 → 27.58, and the same
+ * inside ranges ("324.34–447.632 Da" → "324.34–447.63 Da"). Text such as
+ * "no" or "Phase 4" is left alone (review 2026-10-08).
+ */
+const round2 = (n) => String(Math.round(n * 100) / 100);
+const formatNumbers = (v) => {
+  if (typeof v === "number") return Number.isFinite(v) ? round2(v) : v;
+  if (typeof v !== "string") return v;
+  return v.replace(/-?\d+\.\d{3,}/g, (m) => round2(Number(m)));
+};
+
 const buildMatchDetails = (compound, profile) => {
   // The API returns a per-criterion `breakdown` for each compound. It never
   // sent matchedProps / mismatchedProps, which is what this used to be built
@@ -132,8 +144,8 @@ const buildMatchDetails = (compound, profile) => {
   if (Array.isArray(compound?.breakdown) && compound.breakdown.length) {
     return compound.breakdown.map((b) => ({
       label: b.label,
-      target: b.target ?? "—",
-      value: b.value ?? "Not returned",
+      target: formatNumbers(b.target ?? "—"),
+      value: formatNumbers(b.value ?? "Not returned"),
       status: b.status,
       source: b.source ?? null,
     }));
@@ -176,8 +188,8 @@ const buildMatchDetails = (compound, profile) => {
 
     return {
       label: (rowKey && profile?.labels?.[rowKey]) || humanize(criterion?.name),
-      target: criterion?.value ?? "—",
-      value,
+      target: formatNumbers(criterion?.value ?? "—"),
+      value: formatNumbers(value),
       status,
     };
   });
