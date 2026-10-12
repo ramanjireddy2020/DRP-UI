@@ -650,6 +650,8 @@ const CompleteWorkflow = () => {
   /** NovSearch patents ticked for chat, and the latest question about them. */
   const [selectedPatentIds, setSelectedPatentIds] = useState([]);
   const [patentQuestion, setPatentQuestion] = useState(null);
+  /** NovSearch patent Q&A, one thread per NovSearch job (so per branch). */
+  const [patentThreads, setPatentThreads] = useState({});
 
   /**
    * Each branch keeps its own picks: TxKG targets, LitMineX articles, the
@@ -2691,6 +2693,8 @@ const CompleteWorkflow = () => {
           selectedIds={selectedPatentIds}
           onToggleSelected={togglePatent}
           patentQuestion={patentQuestion}
+          threads={patentThreads}
+          onThreadsChange={setPatentThreads}
         />
       );
     }
@@ -2999,13 +3003,13 @@ const CompleteWorkflow = () => {
   const handleChatSubmit = useCallback(
     (text) => {
       if (patentScope.length) {
-        setPatentQuestion({ id: `${Date.now()}`, text });
+        setPatentQuestion({ id: `${Date.now()}`, text, jobId: session.steps.novsearch?.jobId ?? null });
         return;
       }
       session.sendMessage(text);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [session.sendMessage, patentScope.length]
+    [session.sendMessage, session.steps.novsearch?.jobId, patentScope.length]
   );
 
   return (

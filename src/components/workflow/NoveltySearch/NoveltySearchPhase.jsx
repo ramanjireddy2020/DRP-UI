@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Box, Button, Checkbox, Typography } from "@mui/material";
 import { definitionFor } from "../../../workflow/txkgResult";
@@ -1048,6 +1048,13 @@ const NoveltySearchPhase = ({
   selectedIds = [],
   onToggleSelected,
   patentQuestion = null,
+  /**
+   * Patent Q&A per NovSearch run: { [jobId]: entries[] }. Owned by the parent
+   * so a branch switch (which can remount this card) keeps each run's
+   * thread. Falls back to local state when not supplied.
+   */
+  threads: threadsProp,
+  onThreadsChange,
 }) => {
   const navigate = useNavigate();
 
@@ -1058,7 +1065,23 @@ const NoveltySearchPhase = ({
 
 
   /** Follow-up questions and their answers, in order. */
-  const [thread, setThread] = useState([]);
+  // One thread per NovSearch run. A single list used to follow the user
+  // across branches, so one branch showed another branch's questions.
+  const [localThreads, setLocalThreads] = useState({});
+  const threads = threadsProp ?? localThreads;
+  const setThreads = onThreadsChange ?? setLocalThreads;
+  const runKey = report?.jobId ?? jobId ?? "__none__";
+  const thread = threads[runKey] ?? [];
+  // Bound to the run the question was asked in, so an answer that arrives
+  // after a branch switch still lands in its own thread.
+  const setThread = useCallback(
+    (update) =>
+      setThreads((prev) => {
+        const current = prev[runKey] ?? [];
+        return { ...prev, [runKey]: typeof update === "function" ? update(current) : update };
+      }),
+    [runKey, setThreads]
+  );
 
   const [endTaskState, setEndTaskState] = useState({ pending: false, error: null });
 
@@ -1079,8 +1102,8 @@ const NoveltySearchPhase = ({
   const toggleSelected = (id) => onToggleSelected?.(id);
 
   /** Patent question → ask({ question, jobId, patentIds, topK: null }), scoped to this run and the ticked patents. */
-  const askFollowUp = async (question, existingId = null) => {
-    const id = existingId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const askFollowUp = async (question, existingId = null, newId = null) => {
+    const id = existingId ?? newId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     // Chat with the selected patent(s): the ticked patents scope the
     // question. It used to always ask across every indexed patent, so answers
@@ -1120,7 +1143,12 @@ const NoveltySearchPhase = ({
 
   // A question typed in the platform chat bar while patents are ticked.
   useEffect(() => {
-    if (patentQuestion?.text) askFollowUp(patentQuestion.text);
+    if (!patentQuestion?.text) return;
+    // Only the run it was asked in, and only once: the card can remount (a
+    // branch switch), which replayed the last question on the other branch.
+    if (patentQuestion.jobId && patentQuestion.jobId !== runKey) return;
+    if (Object.values(threads).some((list) => list.some((e) => e.id === patentQuestion.id))) return;
+    askFollowUp(patentQuestion.text, null, patentQuestion.id);
     // Once per question (its id), not on every re-render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [patentQuestion?.id]);
