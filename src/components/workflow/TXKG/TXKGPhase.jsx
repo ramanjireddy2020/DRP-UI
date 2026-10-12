@@ -87,7 +87,9 @@ const SectionAccordionSummary = ({ label }) => (
 
 /** A short "term — meaning" list; renders nothing when the API sent none. */
 const DefinitionList = ({ title, definitions }) => {
-  const entries = Object.entries(definitions ?? {});
+  // Combined header texts ("Known: …\nHidden: …") repeat the per-value
+  // entries listed beside them, so they are left out here.
+  const entries = Object.entries(definitions ?? {}).filter(([, meaning]) => !String(meaning).includes("\n"));
   if (!entries.length) return null;
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: "4px", p: "10px 12px", bgcolor: "#F8FAFC", border: `1px solid ${BORDER}`, borderRadius: "8px" }}>
@@ -275,6 +277,8 @@ const TXKGPhase = ({
 
   /** The target score and the meta-path score, as the API defines them. */
   const scoreHelp =
+    // method.label_definitions.score.meaning first (review 2026-10-08, T3).
+    definitionFor(txkg?.labelDefinitions, "score") ||
     definitionFor(txkg?.scoreDefinitions, "score") ||
     definitionFor(txkg?.scoreDefinitions, "targetScore") ||
     definitionFor(txkg?.scoreDefinitions, "target_score");
@@ -894,9 +898,10 @@ const TXKGPhase = ({
         ["Gene", detailData.geneName ?? detailTarget.geneName],
         ["UniProt ID", detailData.uniprotId ?? detailTarget.id],
         ["Organism", detailData.organism],
-        ["Score", detailData.score != null ? formatScore(detailData.score) : detailTarget.score],
-        ["Category", detailTarget.category],
-        ["Novelty", detailTarget.noveltyLabel],
+        ["Score", detailData.score != null ? formatScore(detailData.score) : detailTarget.score, scoreHelp],
+        ["Category", detailTarget.category, definitionFor(txkg?.labelDefinitions, "category")],
+        ["Novelty", detailTarget.noveltyLabel, definitionFor(txkg?.labelDefinitions, "noveltyLabel")],
+        ["Sourcing status", detailTarget.sourcingStatus, definitionFor(txkg?.labelDefinitions, "sourcingStatus")],
         ["Confirmed by sourcing", detailTarget.confirmed == null ? null : detailTarget.confirmed ? "Yes" : "No"],
         ["Literature hits", detailTarget.literatureHits],
         ["Patent hits", detailTarget.patentHits],
@@ -931,11 +936,14 @@ const TXKGPhase = ({
             <Typography role="alert" sx={{ fontFamily: FONT, fontSize: "12px", color: "#DC2626" }}>{detail.error}</Typography>
           )}
 
-          {detailRows.map(([label, value]) => (
+          {detailRows.map(([label, value, help]) => (
             <Box key={label}>
-              <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.06em", mb: "4px" }}>
-                {label}
-              </Typography>
+              {/* What the label means, from method.label_definitions. */}
+              <Tooltip title={help ? <span style={{ whiteSpace: "pre-line" }}>{help}</span> : ""} arrow placement="left">
+                <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 600, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.06em", mb: "4px", cursor: help ? "help" : "default", width: "fit-content" }}>
+                  {label}{help ? " ⓘ" : ""}
+                </Typography>
+              </Tooltip>
               <Typography sx={{ fontFamily: FONT, fontSize: "14px", color: TEXT_DARK }}>{String(value)}</Typography>
             </Box>
           ))}
@@ -1234,7 +1242,14 @@ const TXKGPhase = ({
                 <Box sx={{ flex: "0 0 52%", minWidth: 0 }}>
                   <Box sx={{ border: `1px solid ${BORDER}`, borderRadius: "8px", overflow: "hidden" }}>
                     <Box sx={{ display: "flex", bgcolor: GRAY_BG, p: "10px 12px", borderBottom: `1px solid ${BORDER}` }}>
-                      {["UNIPROT ID", "TARGET", "SCORE"].map((h, i) => <Typography key={i} sx={{ flex: i === 1 ? 1 : "0 0 100px", fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase", textAlign: i === 2 ? "right" : "left" }}>{h}</Typography>)}
+                      {["UNIPROT ID", "TARGET", "SCORE"].map((h, i) => {
+                        const help = i === 2 ? scoreHelp : null;
+                        return (
+                          <Tooltip key={i} title={help || ""} arrow placement="top">
+                            <Typography sx={{ flex: i === 1 ? 1 : "0 0 100px", fontFamily: FONT, fontSize: "11px", fontWeight: 700, color: TEXT_MUTED, textTransform: "uppercase", textAlign: i === 2 ? "right" : "left", cursor: help ? "help" : "default" }}>{h}{help ? " ⓘ" : ""}</Typography>
+                          </Tooltip>
+                        );
+                      })}
                     </Box>
                     {targets.map((t, i) => (
                       <Box

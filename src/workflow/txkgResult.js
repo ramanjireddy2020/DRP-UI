@@ -47,12 +47,29 @@ export const readDefinitions = (raw) => {
     );
   }
   if (raw && typeof raw === "object") {
-    return Object.fromEntries(
-      Object.entries(raw)
-        .map(([k, v]) => [k, typeof v === "object" && v ? v.definition ?? v.description ?? v.meaning ?? v.text : v])
-        .filter(([, v]) => v != null && v !== "")
-        .map(([k, v]) => [k, String(v)])
-    );
+    // Values are a string, an object with its own text ({ meaning }), or a
+    // map of values to their meaning ({ category: { Known: "…", Hidden:
+    // "…" } }). A map is kept both per value ("Known") and, for the header
+    // tooltip, as one combined text under its own key ("category").
+    const TEXT_KEYS = ["definition", "description", "meaning", "text"];
+    const out = {};
+    const nested = [];
+    Object.entries(raw).forEach(([k, v]) => {
+      if (v == null || v === "") return;
+      if (typeof v !== "object") {
+        out[k] = String(v);
+        return;
+      }
+      const own = TEXT_KEYS.map((t) => v[t]).find((t) => t != null && t !== "");
+      const children = Object.entries(v).filter(([ck, cv]) => !TEXT_KEYS.includes(ck) && typeof cv === "string" && cv);
+      const text = own ?? children.map(([ck, cv]) => `${ck}: ${cv}`).join("\n");
+      if (text) out[k] = String(text);
+      nested.push(...children);
+    });
+    nested.forEach(([ck, cv]) => {
+      if (!(ck in out)) out[ck] = String(cv);
+    });
+    return out;
   }
   return {};
 };
