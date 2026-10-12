@@ -36,6 +36,7 @@ import {
 } from "../../services/api/screensuite";
 import PhaseError from "../workflow/PhaseError";
 import PdbPicker from "../workflow/ScreeningSuite/PdbPicker";
+import NovSearchHandoffDialog from "../workflow/ScreeningSuite/NovSearchHandoffDialog";
 import ScreeningPicker from "../workflow/ScreeningSuite/ScreeningPicker";
 import { readPdbShortlist } from "../../workflow/pdbShortlist";
 import ChatInputBar from "../workflow/ChatInputBar";
@@ -2108,6 +2109,44 @@ const CompleteWorkflow = () => {
   );
 
   /**
+   * "Continue to NovSearch" from ScreenSuite (review 2026-10-08, S4). A
+   * docked combination starts NovSearch with { target, drug, disease,
+   * dockingId }; a typed query goes through the chat as "@NovSearch …".
+   * Both run on the branch on screen.
+   */
+  const [novsearchHandoffOpen, setNovsearchHandoffOpen] = useState(false);
+  const novsearchCombinations = useMemo(
+    () =>
+      (screensuite.data?.hits ?? []).map((h) => ({
+        id: String(h.id),
+        protein: h.protein,
+        drug: h.ligand,
+        score: h.affinity,
+        rawScore: Number.isFinite(Number(h.rawAffinity)) ? Number(h.rawAffinity) : null,
+      })),
+    [screensuite.data]
+  );
+  const handleConfirmNovSearch = useCallback(
+    ({ combination, query }) => {
+      setNovsearchHandoffOpen(false);
+      if (query) {
+        session.sendMessage(`@NovSearch ${query}`);
+        return;
+      }
+      session.handOff(
+        "novsearch",
+        buildSelections("novsearch", {
+          target: combination.protein,
+          drug: combination.drug,
+          disease: txkgResult.disease ?? null,
+          dockingId: combination.id,
+        })
+      );
+    },
+    [session, txkgResult.disease]
+  );
+
+  /**
    * Retry a failed step.
    *
    * A rerun is the real retry: re-polling a job the backend has already marked
@@ -2671,6 +2710,8 @@ const CompleteWorkflow = () => {
           actions={screensuiteActions}
           target={step?.data?.selections?.target ?? null}
           compounds={screenedCompounds}
+          onContinueToNovSearch={() => setNovsearchHandoffOpen(true)}
+          continuePending={session.pending}
         />
         </>
       );
@@ -3101,6 +3142,14 @@ const CompleteWorkflow = () => {
         pending={session.pending}
         onCancel={() => setScreeningPickerOpen(false)}
         onConfirm={handleConfirmScreening}
+      />
+      <NovSearchHandoffDialog
+        open={novsearchHandoffOpen}
+        combinations={novsearchCombinations}
+        disease={txkgResult.disease ?? null}
+        pending={session.pending}
+        onCancel={() => setNovsearchHandoffOpen(false)}
+        onConfirm={handleConfirmNovSearch}
       />
       <BranchDialog
         source={branchSource}

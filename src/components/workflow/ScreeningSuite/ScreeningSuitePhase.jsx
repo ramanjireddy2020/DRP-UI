@@ -208,6 +208,9 @@ const ScreeningSuitePhase = ({
   unavailableMessage,
   /** Branch / Rerun / Export handlers from usePhaseActions. */
   actions = {},
+  /** Opens the "Continue to NovSearch" dialog; ScreenSuite had no way forward. */
+  onContinueToNovSearch,
+  continuePending = false,
   /**
    * What CurateX handed over — the ScreenSuite step's selections
    * ({ target, compounds }). Optional: without them the loading screen says
@@ -522,7 +525,13 @@ const ScreeningSuitePhase = ({
 
           {/* Branch / Rerun / Export — ScreenSuite had none at all. */}
           <Box sx={{ marginTop: "12px" }}>
-            <PhaseActions {...actions} />
+            <PhaseActions
+              {...actions}
+              continueLabel={hasScreening || hasHits ? "Continue to NovSearch" : undefined}
+              onContinue={onContinueToNovSearch}
+              continuePending={continuePending}
+              continueDisabled={!onContinueToNovSearch}
+            />
           </Box>
         </Box>
 
