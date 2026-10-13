@@ -719,6 +719,10 @@ const CompleteWorkflow = () => {
       const response = await txkgApi.generateSubgraph({
         disease: txkgResult.disease,
         targetIds: txkgResult.targets.slice(0, 10).map((t) => t.id),
+        // Pass the TxKG job ID so the backend re-uses the candidate subgraph
+        // (with metapath paths and shared pathway clusters) rather than running
+        // an unrelated context-graph BFS.
+        txkgJobId: session.steps.txkg?.jobId ?? null,
         maxNodes: 100,
       });
       const jobId = response?.jobId ?? response?.job_id ?? null;
@@ -731,7 +735,7 @@ const CompleteWorkflow = () => {
         error: err?.userMessage || err?.message || "The knowledge graph could not be built.",
       });
     }
-  }, [txkgResult]);
+  }, [txkgResult, session.steps.txkg]);
 
   // Once the graph job finishes, read its nodes/edges and its counts.
   useEffect(() => {
