@@ -22,6 +22,11 @@ import usePhaseResults from "../../hooks/usePhaseResults";
 import { moduleForPhase, isErrorPhase, isLoadingPhase, MODULE_BY_KEY } from "../../workflow/moduleMap";
 import { normalizeTxkgResult, normalizeMetapath } from "../../workflow/txkgResult";
 import { getArtifacts } from "../../services/api/sessions";
+import {
+  getSessionProject, setSessionProject, fileSessionResults,
+  getCompoundsJob, setCompoundsJob, getPatentThread, setPatentThread,
+} from "../../workflow/sessionStore";
+import AddToProjectDialog from "../Projects/AddToProjectDialog";
 import { toGeneNames, buildSelections, geneNameForTarget } from "../../workflow/selections";
 import { toApiWeights, toApiValues } from "../../workflow/phaseResults";
 import { withProductWording } from "../../workflow/wording";
@@ -159,8 +164,12 @@ const CompleteWorkflow = () => {
    * without one.
    */
   const entryState = location.state || {};
-  const entrySessionId = entryState.sessionId ?? null;
-  const entryQuery = typeof entryState.query === "string" ? entryState.query.trim() : "";
+  // A session can also be opened from its URL (?session=…), which is what
+  // Share → Copy link gives out and what keeps a reload on the same session.
+  // The URL wins, so a reload never starts the original query again.
+  const urlSessionId = new URLSearchParams(location.search).get("session");
+  const entrySessionId = urlSessionId || entryState.sessionId || null;
+  const entryQuery = !urlSessionId && typeof entryState.query === "string" ? entryState.query.trim() : "";
   
   // ---------------------------------------------------------------------------
   // Session state.
@@ -331,6 +340,36 @@ const CompleteWorkflow = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Keep the open session in the URL (see urlSessionId above).
+  useEffect(() => {
+    if (!session.sessionId) return;
+    const params = new URLSearchParams(location.search);
+    if (params.get("session") === session.sessionId) return;
+    params.set("session", session.sessionId);
+    navigate({ pathname: location.pathname, search: `?${params}` }, { replace: true, state: location.state });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.sessionId]);
+
+  /**
+   * The project this session belongs to (testing 2026-10-13). Sessions don't
+   * store or return projectId, so it comes from the composer for a new
+   * session and from this browser's record when one is reopened.
+   */
+  const [sessionProject, setSessionProjectState] = useState(() =>
+    entryState.projectId ? { projectId: entryState.projectId, projectName: entryState.projectName ?? null } : null
+  );
+  useEffect(() => {
+    if (!session.sessionId) return;
+    if (entryState.projectId && !entrySessionId) {
+      setSessionProject(session.sessionId, { projectId: entryState.projectId, projectName: entryState.projectName ?? null });
+      return;
+    }
+    const saved = getSessionProject(session.sessionId);
+    if (saved) setSessionProjectState(saved);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.sessionId]);
+  const [addToProjectOpen, setAddToProjectOpen] = useState(false);
+
   // ---------------------------------------------------------------------------
   // Job polling.
   //
@@ -383,6 +422,17 @@ const CompleteWorkflow = () => {
    * belongs to the session step, so the second needs its own id and poll.
    */
   const compoundsJobId = session.steps.curatex?.data?.compoundsJobId ?? null;
+  const curatexStepId = session.steps.curatex?.stepId ?? null;
+
+  // Reopened sessions lost CurateX's candidates on every branch (testing
+  // 2026-10-13): the candidates job isn't recorded on the session, so it is
+  // remembered per CurateX step and restored here.
+  useEffect(() => {
+    if (!curatexStepId || compoundsJobId) return;
+    const saved = getCompoundsJob(curatexStepId);
+    if (saved) session.setStepData({ compoundsJobId: saved }, "curatex");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [curatexStepId, compoundsJobId]);
   const compoundsJob = useJob(compoundsJobId, {
     enabled: Boolean(compoundsJobId),
     // The compounds come from /agents/curatex/{jobId}/results, which is
@@ -625,6 +675,14 @@ const CompleteWorkflow = () => {
    * was fixed at "2". Unknown (null) hides the badge.
    */
   const [artifactCount, setArtifactCount] = useState(null);
+
+  // A session in a project files its results there as they appear: the
+  // Project page lists project items, and sessions can't be filed
+  // themselves. Already-filed results are skipped.
+  useEffect(() => {
+    if (!sessionProject?.projectId || !session.sessionId) return;
+    fileSessionResults(sessionProject.projectId, session.sessionId).catch(() => {});
+  }, [sessionProject?.projectId, session.sessionId, sessionRefreshTick]);
   useEffect(() => {
     if (!session.sessionId) return undefined;
     let cancelled = false;
@@ -653,6 +711,18 @@ const CompleteWorkflow = () => {
   const [patentQuestion, setPatentQuestion] = useState(null);
   /** NovSearch patent Q&A, one thread per NovSearch job (so per branch). */
   const [patentThreads, setPatentThreads] = useState({});
+  // Patent Q&A vanished on reopen (testing 2026-10-13): /ask stores nothing,
+  // so each NovSearch job's thread is kept in the browser and restored.
+  const novsearchThreadJobId = session.steps.novsearch?.jobId ?? null;
+  useEffect(() => {
+    if (!novsearchThreadJobId || patentThreads[novsearchThreadJobId]) return;
+    const saved = getPatentThread(novsearchThreadJobId);
+    if (saved) setPatentThreads((prev) => (prev[novsearchThreadJobId] ? prev : { ...prev, [novsearchThreadJobId]: saved }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [novsearchThreadJobId]);
+  useEffect(() => {
+    Object.entries(patentThreads).forEach(([jobId, thread]) => setPatentThread(jobId, thread));
+  }, [patentThreads]);
 
   /**
    * Each branch keeps its own picks: TxKG targets, LitMineX articles, the
@@ -1177,7 +1247,7 @@ const CompleteWorkflow = () => {
                 the TxKG result, and falls back to the project name rather than
                 naming a disease the session is not about. */}
             {[
-              location.state?.projectName || "New Project",
+              sessionProject?.projectName || "New Project",
               txkgResult.disease || null,
               lastCrumb,
             ].filter(Boolean).map((crumb, i, arr) => (
@@ -1188,6 +1258,16 @@ const CompleteWorkflow = () => {
                 {i < arr.length-1 && <Typography sx={{ fontFamily: "'Geist',sans-serif", fontSize: "13px", color: "#94A3B8", mx: "2px" }}>/</Typography>}
               </React.Fragment>
             ))}
+            {/* There was no way to put a running session into a project. */}
+            {!sessionProject && session.sessionId && (
+              <Button
+                size="small"
+                onClick={() => setAddToProjectOpen(true)}
+                sx={{ ml: "6px", minWidth: 0, px: "6px", py: 0, textTransform: "none", fontFamily: "'Geist',sans-serif", fontSize: "12px", color: "#00BCD4" }}
+              >
+                + Add to project
+              </Button>
+            )}
           </Box>
           {saveIndicator && (
             <Box sx={{ display: "flex", alignItems: "center", gap: "6px" }} role="status">
@@ -2041,6 +2121,10 @@ const CompleteWorkflow = () => {
         // changed value re-shapes the ranking instead of being ignored.
         values: toApiValues(editedValues, curatexProfile.data),
         numResults: 20,
+        // So the backend can record the job on the session (accepted and
+        // ignored today; the browser keeps it meanwhile).
+        sessionId: session.sessionId,
+        stepId: session.steps.curatex?.stepId ?? null,
       });
 
       const jobId = response?.jobId ?? response?.job_id ?? null;
@@ -2051,6 +2135,7 @@ const CompleteWorkflow = () => {
       // Stored on the step rather than in local state so it survives
       // navigating away to another module and back.
       session.setStepData({ compoundsJobId: jobId }, "curatex");
+      setCompoundsJob(session.steps.curatex?.stepId, jobId);
     } catch (err) {
       session.setStepError(
         err?.userMessage || err?.message || "Compound scoring could not be started.",
@@ -2286,14 +2371,14 @@ const CompleteWorkflow = () => {
     setArticleNotice(null);
     try {
       // { success, message } — a 200 is not proof of a save; `success` is.
-      const response = await litminexApi.saveArticle(selectedArticle.id, location.state?.projectId ?? null);
+      const response = await litminexApi.saveArticle(selectedArticle.id, sessionProject?.projectId ?? null);
       if (response?.success === true) {
         // Say where it went, as far as the app knows (testing: "no
         // indication of where the article is saved"). A session in a project
         // saves into that project, linked; otherwise it is saved to the
         // account with no project. No other location is claimed.
-        const projectId = location.state?.projectId ?? null;
-        const projectName = location.state?.projectName ?? null;
+        const projectId = sessionProject?.projectId ?? null;
+        const projectName = sessionProject?.projectName ?? null;
         setArticleNotice(
           projectId
             ? {
@@ -2320,7 +2405,7 @@ const CompleteWorkflow = () => {
     } finally {
       setArticleBusy(null);
     }
-  }, [selectedArticle, location.state]);
+  }, [selectedArticle, sessionProject]);
 
   /** Item 22: ask a question about this article. */
   const handleAskArticle = useCallback(
@@ -2952,7 +3037,7 @@ const CompleteWorkflow = () => {
         <Box sx={{ flex: 1, p: "24px", overflow: "auto" }}>
           <ArtifactsPage
             sessionId={session.sessionId}
-            projectId={entryState.projectId ?? null}
+            projectId={sessionProject?.projectId ?? null}
             refreshKey={sessionRefreshTick}
             onLoaded={(list) => setArtifactCount(list.length)}
           />
@@ -3181,7 +3266,22 @@ const CompleteWorkflow = () => {
         onAsk={handleAskArticle}
       />
       <CompoundDetailDialog />
-      <ShareModal open={showShareDialog} onClose={() => setShowShareDialog(false)} />
+      <ShareModal
+        open={showShareDialog}
+        onClose={() => setShowShareDialog(false)}
+        sessionId={session.sessionId}
+        sessionTitle={session.title || query}
+      />
+      <AddToProjectDialog
+        open={addToProjectOpen}
+        sessionId={session.sessionId}
+        sessionTitle={session.title || query}
+        onClose={() => setAddToProjectOpen(false)}
+        onAdded={(link) => {
+          setAddToProjectOpen(false);
+          setSessionProjectState({ projectId: link.projectId, projectName: link.projectName });
+        }}
+      />
     </Box>
   );
 };

@@ -134,6 +134,8 @@ const useComposer = () => {
     query: query.trim(),
     module: module || null,
     projectId: project?.id || null,
+    // For the workspace breadcrumb and messages; the session doesn't return it.
+    projectName: project?.name || null,
     fileIds: files.map((f) => f.fileId),
   });
 

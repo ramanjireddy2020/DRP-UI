@@ -27,6 +27,10 @@ import {
   PROJECT_STATUSES,
 } from "../../services/api/projects";
 
+import { getSession } from "../../services/api/sessions";
+import { sessionsLinkedTo } from "../../workflow/sessionStore";
+import { formatUtcDateTime } from "../../utils/formatDate";
+
 import "./ProjectDetails.css";
 
 const WORKFLOW_ROUTE = "/dashboard/new-research/workflow";
@@ -83,6 +87,34 @@ const ProjectDetails = () => {
   const [itemsError, setItemsError] = useState(null);
 
   const [reloadKey, setReloadKey] = useState(0);
+
+  /**
+   * Sessions in this project (testing 2026-10-13: a session started in a
+   * project never showed here). The backend keeps no session → project
+   * link, so they come from the filed results (each carries its sessionId)
+   * plus the sessions this browser linked to the project.
+   */
+  const [sessions, setSessions] = useState([]);
+  useEffect(() => {
+    const ids = [...new Set([...items.map((i) => i?.sessionId).filter(Boolean), ...sessionsLinkedTo(projectId)])];
+    if (!ids.length) {
+      setSessions([]);
+      return undefined;
+    }
+    let active = true;
+    Promise.allSettled(ids.slice(0, 30).map((id) => getSession(id))).then((all) => {
+      if (!active) return;
+      setSessions(
+        all
+          .map((r, i) => (r.status === "fulfilled" && r.value ? { ...r.value, id: r.value.id ?? ids[i] } : null))
+          .filter(Boolean)
+          .sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")))
+      );
+    });
+    return () => {
+      active = false;
+    };
+  }, [items, projectId]);
 
   /* Edit dialog — PATCH /projects/{id} { name, status } */
   const [editOpen, setEditOpen] = useState(false);
@@ -307,6 +339,38 @@ const ProjectDetails = () => {
 
           </div>
         </section>
+
+        {/* =====================================================
+            SESSIONS — research sessions in this project
+        ===================================================== */}
+
+        {sessions.length > 0 && (
+          <section className="project-details__section">
+            <div className="project-details__section-header">
+              <h2 className="project-details__section-title">Sessions ({sessions.length})</h2>
+            </div>
+            <div className="project-details__section-content">
+              {sessions.map((s) => (
+                <div
+                  key={s.id}
+                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", padding: "6px 0" }}
+                >
+                  <p>
+                    <strong>{s.title || s.id}</strong>
+                    {[s.module, s.status, s.updatedAt ? `updated ${formatUtcDateTime(s.updatedAt)}` : null]
+                      .filter(Boolean)
+                      .map((part) => ` · ${part}`)
+                      .join("")}
+                  </p>
+                  <button type="button" className="project-details__session-link" onClick={() => openSession(s.id)}>
+                    <span>Open session</span>
+                    <ArrowForward />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* =====================================================
             PIPELINE — result types filed into this project

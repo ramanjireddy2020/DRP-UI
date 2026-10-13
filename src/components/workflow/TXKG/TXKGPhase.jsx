@@ -86,6 +86,28 @@ const SectionAccordionSummary = ({ label }) => (
 );
 
 /** A short "term — meaning" list; renders nothing when the API sent none. */
+/**
+ * What the target score means, as agreed with testing (2026-10-13). Shown for
+ * every "score" definition in place of the backend's wording.
+ */
+const TXKG_SCORE_DEFINITION =
+  "The score indicates how strongly a protein is statistically associated with the disease based on its connections " +
+  "to the disease-relevant region of the biological knowledge graph. The calculation accounts for the number of " +
+  "connections each protein has, helping identify potential hidden targets whose connections are stronger than " +
+  "expected by chance. Higher scores indicate stronger statistical evidence for prioritising a protein for further " +
+  "investigation.";
+
+const isTargetScoreKey = (key) => ["score", "targetscore"].includes(String(key).toLowerCase().replace(/[\s_-]+/g, ""));
+
+/** The definitions with the target score's text replaced (added if missing). */
+const withScoreDefinition = (definitions, { addIfMissing = false } = {}) => {
+  const entries = Object.entries(definitions ?? {});
+  const hasScore = entries.some(([key]) => isTargetScoreKey(key));
+  const replaced = entries.map(([key, meaning]) => [key, isTargetScoreKey(key) ? TXKG_SCORE_DEFINITION : meaning]);
+  if (!hasScore && addIfMissing) replaced.unshift(["Score", TXKG_SCORE_DEFINITION]);
+  return Object.fromEntries(replaced);
+};
+
 const DefinitionList = ({ title, definitions }) => {
   // Combined header texts ("Known: …\nHidden: …") repeat the per-value
   // entries listed beside them, so they are left out here.
@@ -275,13 +297,11 @@ const TXKGPhase = ({
       return next;
     });
 
-  /** The target score and the meta-path score, as the API defines them. */
-  const scoreHelp =
-    // method.label_definitions.score.meaning first (review 2026-10-08, T3).
-    definitionFor(txkg?.labelDefinitions, "score") ||
-    definitionFor(txkg?.scoreDefinitions, "score") ||
-    definitionFor(txkg?.scoreDefinitions, "targetScore") ||
-    definitionFor(txkg?.scoreDefinitions, "target_score");
+  /**
+   * The target score: the agreed wording (testing 2026-10-13), used for the
+   * SCORE headers and the target panel. The meta-path score keeps the API's.
+   */
+  const scoreHelp = TXKG_SCORE_DEFINITION;
   const metapathScoreHelp =
     definitionFor(txkg?.scoreDefinitions, "metapath") ||
     definitionFor(txkg?.scoreDefinitions, "metapathScore") ||
@@ -635,8 +655,8 @@ const TXKGPhase = ({
           {/* What the labels mean, from method.label_definitions. Testing asked
               how targets are marked and what "well explored", "moderate" and
               "high" mean. */}
-          <DefinitionList title="What the labels mean" definitions={txkg.labelDefinitions} />
-          <DefinitionList title="What the scores mean" definitions={txkg.scoreDefinitions} />
+          <DefinitionList title="What the labels mean" definitions={withScoreDefinition(txkg.labelDefinitions)} />
+          <DefinitionList title="What the scores mean" definitions={withScoreDefinition(txkg.scoreDefinitions, { addIfMissing: true })} />
         </Box>
       );
     }

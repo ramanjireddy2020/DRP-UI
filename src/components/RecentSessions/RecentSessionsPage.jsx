@@ -15,8 +15,11 @@ import {
   ChevronLeftOutlined,
   ChevronRightOutlined,
   DeleteOutlineOutlined,
+  CreateNewFolderOutlined,
   SearchOutlined,
 } from "@mui/icons-material";
+import AddToProjectDialog from "../Projects/AddToProjectDialog";
+import { getSessionProject } from "../../workflow/sessionStore";
 import { listSessions, deleteSession } from "../../services/api/sessions";
 import { formatUtcDateTime, buildPageList } from "../../utils/formatDate";
 
@@ -170,6 +173,9 @@ const RecentSessionsPage = () => {
   const [error, setError] = useState(null);
 
   const [deleteTarget, setDeleteTarget] = useState(null);
+  // "Add to project" for an existing session (testing 2026-10-13).
+  const [projectTarget, setProjectTarget] = useState(null);
+  const [projectNotice, setProjectNotice] = useState(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState(null);
 
@@ -487,11 +493,42 @@ const RecentSessionsPage = () => {
                         </Box>
                       </Box>
 
-                      {/* right cluster: timestamp (updatedAt, UTC) + delete */}
+                      {/* right cluster: project, timestamp (updatedAt, UTC), add to project, delete */}
                       <Box sx={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
+                        {getSessionProject(s.id)?.projectName && (
+                          <Typography sx={{ fontFamily: FONT, fontSize: "11px", color: "#0E7490", bgcolor: "#ECFEFF", px: "6px", py: "2px", borderRadius: "4px", whiteSpace: "nowrap" }}>
+                            {getSessionProject(s.id).projectName}
+                          </Typography>
+                        )}
                         <Typography sx={{ fontFamily: FONT, fontSize: "11px", fontWeight: 400, color: TEXT_MUTED_LIGHT, lineHeight: 1, whiteSpace: "nowrap" }}>
                           {formatUtcDateTime(s.updatedAt)}
                         </Typography>
+                        <Box
+                          component="button"
+                          type="button"
+                          title="Add to project"
+                          aria-label={`Add session ${s.title || s.id} to a project`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setProjectNotice(null);
+                            setProjectTarget(s);
+                          }}
+                          sx={{
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            width: "22px",
+                            height: "22px",
+                            p: 0,
+                            border: "none",
+                            borderRadius: "4px",
+                            bgcolor: "transparent",
+                            cursor: "pointer",
+                            "&:hover": { bgcolor: "#ECFEFF", "& svg": { color: "#00BCD4" } },
+                          }}
+                        >
+                          <CreateNewFolderOutlined sx={{ fontSize: 15, color: TEXT_MUTED_LIGHT }} />
+                        </Box>
                         <Box
                           component="button"
                           type="button"
@@ -588,6 +625,31 @@ const RecentSessionsPage = () => {
       </Box>
 
       {/* Delete confirm — DELETE /sessions/{id} */}
+      <AddToProjectDialog
+        open={Boolean(projectTarget)}
+        sessionId={projectTarget?.id ?? null}
+        sessionTitle={projectTarget?.title ?? ""}
+        onClose={() => setProjectTarget(null)}
+        onAdded={({ projectName, added }) => {
+          setProjectTarget(null);
+          setProjectNotice(
+            added > 0
+              ? `Added to "${projectName}": ${added} result${added === 1 ? "" : "s"} filed.`
+              : `Added to "${projectName}". It has no new results to file yet; results are filed when you open the session.`
+          );
+        }}
+      />
+      {projectNotice && (
+        <Box
+          role="status"
+          sx={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", zIndex: 1400, display: "flex", alignItems: "center", gap: "12px", px: "16px", py: "10px", bgcolor: "#0F172A", color: "#FFFFFF", borderRadius: "8px", boxShadow: "0 8px 24px rgba(15,23,42,0.2)" }}
+        >
+          <Typography sx={{ fontFamily: FONT, fontSize: "13px" }}>{projectNotice}</Typography>
+          <Button size="small" onClick={() => setProjectNotice(null)} sx={{ color: "#67E8F9", textTransform: "none", minWidth: 0 }}>
+            Dismiss
+          </Button>
+        </Box>
+      )}
       <Dialog open={Boolean(deleteTarget)} onClose={() => !deleting && setDeleteTarget(null)} fullWidth maxWidth="xs">
         <DialogTitle sx={{ fontFamily: FONT, fontWeight: 700, fontSize: "18px" }}>Delete session?</DialogTitle>
         <DialogContent>
