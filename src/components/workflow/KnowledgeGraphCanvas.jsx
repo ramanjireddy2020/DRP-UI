@@ -23,6 +23,10 @@ const BACKGROUND = "#0F172A";
 const LINK_COLOR = "rgba(148,163,184,0.35)";
 const LABEL_COLOR = "#D1D9E6";
 
+// Hidden candidates (no confirmed disease-protein association in KG) render
+// lighter than Known ones, which use the full gene/protein orange (#F28C33).
+const HIDDEN_CANDIDATE_COLOR = "#FBBF77";
+
 // Canvas sizes are in graph units; the SVG radii were tuned for an 840px wide
 // picture, so they are scaled down to keep nodes from dominating the layout.
 const NODE_SCALE = 0.5;
@@ -114,14 +118,30 @@ const KnowledgeGraphCanvas = ({ graph, height = 420, onNodeClick }) => {
 
   const drawNode = useCallback((node, ctx, globalScale) => {
     const radius = radiusOf(node);
+
+    // Known candidates use the full gene/protein colour; Hidden ones (no
+    // curated KG association with the disease) get a lighter shade so the
+    // user can tell them apart at a glance.
+    let fillColor = styleForType(node.type).color;
+    if (node.isCandidate && node.category === "Hidden") {
+      fillColor = HIDDEN_CANDIDATE_COLOR;
+    }
+
     ctx.beginPath();
     ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI);
-    ctx.fillStyle = styleForType(node.type).color;
+    ctx.fillStyle = fillColor;
     ctx.fill();
     if (node.__hub) {
       ctx.lineWidth = 2 / globalScale;
       ctx.strokeStyle = HUB_STROKE;
       ctx.stroke();
+    } else if (node.isCandidate && node.confirmed === false) {
+      // Dashed ring marks a candidate that has not been sourcing-confirmed.
+      ctx.setLineDash([3 / globalScale, 3 / globalScale]);
+      ctx.lineWidth = 1.5 / globalScale;
+      ctx.strokeStyle = "#94A3B8";
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
 
     // Keep labels a constant on-screen size regardless of zoom.
