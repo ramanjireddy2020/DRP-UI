@@ -123,7 +123,7 @@ const KnowledgeGraphCanvas = ({ graph, height = 420, onNodeClick }) => {
     // curated KG association with the disease) get a lighter shade so the
     // user can tell them apart at a glance.
     let fillColor = styleForType(node.type).color;
-    if (node.isCandidate && node.category === "Hidden") {
+    if (node.isCandidate && node.category && node.category.startsWith("Hidden")) {
       fillColor = HIDDEN_CANDIDATE_COLOR;
     }
 
