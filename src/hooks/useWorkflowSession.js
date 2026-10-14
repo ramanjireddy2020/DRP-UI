@@ -528,6 +528,55 @@ function reducer(state, action) {
       };
     }
 
+    /**
+     * Branches the server lists for a reopened session (GET /sessions/{id}
+     * → branches: [{ name, fromStepId }]). Without this a branch was known
+     * only from steps carrying its name, so one with no run of its own
+     * vanished from the BRANCH menu on reopen. Records each fork point (as
+     * CREATE_BRANCH does) and, for a branch with no runs yet, the module
+     * state it starts from: its parent as it was at the fork step.
+     */
+    case "RESTORE_BRANCHES": {
+      const list = Array.isArray(action.branches) ? action.branches : [];
+      const serverSteps = Array.isArray(action.steps) ? action.steps : [];
+      const branchForks = { ...state.branchForks };
+      const branchSteps = { ...state.branchSteps };
+      let changed = false;
+
+      list.forEach((b) => {
+        const name = typeof b === "string" ? b : b?.name;
+        if (!name || branchForks[name]) return;
+        const fromStepId = (typeof b === "object" && b?.fromStepId) || null;
+        const forkStep = serverSteps.find((st) => st?.id === fromStepId);
+        const parent = forkStep?.branchName || null;
+
+        const lineRuns = state.runs.filter((r) => (r.branch ?? null) === parent);
+        const forkIndex = lineRuns.findIndex((r) => r.stepId === fromStepId);
+        const forkRun = forkIndex >= 0 ? lineRuns[forkIndex] : null;
+        const after = forkIndex >= 0 ? lineRuns.slice(forkIndex + 1) : [];
+        const seq = after.length ? after[0].startSeq ?? state.seq : state.seq;
+        const runIndex = forkRun ? state.runs.indexOf(forkRun) : state.runs.length - 1;
+        branchForks[name] = { seq, runIndex, fromStepId, parent };
+        changed = true;
+
+        const hasRuns = state.runs.some((r) => r.branch === name);
+        if (hasRuns || branchSteps[branchKeyOf(name)] || (state.activeBranch ?? null) === name) return;
+        const parentSteps =
+          (state.activeBranch ?? null) === parent
+            ? state.steps
+            : branchSteps[branchKeyOf(parent)]?.steps ?? state.steps;
+        const fresh = buildInitialSteps();
+        const steps = { ...parentSteps };
+        after.forEach((r) => {
+          if (!forkRun || r.key !== forkRun.key) steps[r.key] = fresh[r.key];
+        });
+        if (forkRun) steps[forkRun.key] = { ...steps[forkRun.key], stepId: forkRun.stepId, jobId: forkRun.jobId };
+        branchSteps[branchKeyOf(name)] = { steps, activeKey: forkRun?.key ?? state.activeKey };
+      });
+
+      return changed ? { ...state, branchForks, branchSteps } : state;
+    }
+
     case "RESET":
       return { ...initialState, steps: buildInitialSteps() };
 
@@ -761,6 +810,10 @@ const useWorkflowSession = () => {
         }),
       });
     }
+
+    // Every branch the server knows, with its fork point, including ones
+    // that have no run of their own yet.
+    dispatch({ type: "RESTORE_BRANCHES", branches: raw?.branches, steps });
 
     // Reopen on the branch the session was last on.
     dispatch({ type: "SET_ACTIVE_BRANCH", branch: raw?.activeBranch || null });

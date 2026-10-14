@@ -545,11 +545,15 @@ const CompleteWorkflow = () => {
   const lastSectionByKey = useRef({});
   const [runSnapshots, setRunSnapshots] = useState({});
   useEffect(() => {
+    // Superseded per branch: only a later run of the same module on the same
+    // branch replaces a run. A branch's run used to "supersede" Main's, so
+    // Main's run was archived (with nothing captured) on Main too.
+    const lineKey = (r) => `${r.key}|${r.branch ?? ""}`;
     const latest = {};
     session.runs.forEach((r) => {
-      latest[r.key] = r.id;
+      latest[lineKey(r)] = r.id;
     });
-    const superseded = session.runs.filter((r) => latest[r.key] !== r.id && !(r.id in runSnapshots));
+    const superseded = session.runs.filter((r) => latest[lineKey(r)] !== r.id && !(r.id in runSnapshots));
     if (!superseded.length) return;
     setRunSnapshots((prev) => {
       const next = { ...prev };
@@ -1183,14 +1187,25 @@ const CompleteWorkflow = () => {
     };
     const tabInfo = getTabInfo();
     // The second entry here was an invented "Alt · JAK2 + TPOR (MPL)" branch.
-    // Branches are created from each card's Branch button; there is no
-    // endpoint that lists them, so only the main path is shown.
-    // Branches created here, plus any the server reports on reopened steps.
+    // Branches created here, plus every branch the session knows: the
+    // server's branch list (restored as fork points on reopen) and branches
+    // named on its runs. A branch with no run of its own used to vanish
+    // from this menu on reopen.
+    const forkRunKey = (id) => {
+      const fork = session.branchForks?.[id];
+      return fork?.runIndex != null && fork.runIndex >= 0 ? session.runs[fork.runIndex]?.key : null;
+    };
     const knownBranches = [
       ...branches,
-      ...[...new Set(session.runs.map((r) => r.branch).filter(Boolean))]
+      ...[...new Set([...Object.keys(session.branchForks ?? {}), ...session.runs.map((r) => r.branch)].filter(Boolean))]
         .filter((id) => !branches.some((b) => b.id === id))
-        .map((id) => ({ id, name: id, description: "", target: null, moduleKey: session.runs.find((r) => r.branch === id)?.key })),
+        .map((id) => ({
+          id,
+          name: id,
+          description: "",
+          target: null,
+          moduleKey: session.runs.find((r) => r.branch === id)?.key ?? forkRunKey(id),
+        })),
     ];
     const BRANCHES = [
       { id: "main", label: "Main", sub: "Main research path" },
@@ -3075,6 +3090,7 @@ const CompleteWorkflow = () => {
           <ArchivedRunCard
             moduleKey={block.moduleKey}
             snapshot={runSnapshots[block.runId]}
+            run={session.runs.find((r) => r.id === block.runId) ?? null}
             // Which line the run belongs to, when it isn't an earlier run of
             // the branch in view (e.g. Main's run seen from a branch).
             label={

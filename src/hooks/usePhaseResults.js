@@ -30,7 +30,7 @@ import {
  * `kind` rather than a module key, because CurateX has two result sets behind
  * two different jobs: the editable profile, then the scored compounds.
  */
-const FETCHERS = {
+export const FETCHERS = {
   litminex: async (jobId, { page, pageSize = RESULTS_PAGE_SIZE }) => {
     // Insights are a separate call and a nice-to-have: a failure there must not
     // blank out the article table, which is the actual content.
