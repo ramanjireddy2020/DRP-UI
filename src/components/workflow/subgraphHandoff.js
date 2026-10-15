@@ -34,7 +34,7 @@ export const openSubgraphInNewTab = ({ graph, stats, diseaseLabel }) => {
   } catch (error) {
     return false;
   }
-  window.open(`${SUBGRAPH_VIEW_PATH}?id=${id}`, "_blank", "noopener");
+  window.open(`/#${SUBGRAPH_VIEW_PATH}?id=${id}`, "_blank", "noopener");
   return true;
 };
 

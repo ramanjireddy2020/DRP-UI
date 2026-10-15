@@ -391,11 +391,11 @@ const SignUp = () => {
             {/* Real links now, opened in a new tab so the half-filled form
                 (and the checkbox this label toggles) isn't lost. */}
             I agree to the{" "}
-            <a className="terms-link" href="/terms" target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+            <a className="terms-link" href="/#/terms" target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
               Terms of Service
             </a>{" "}
             &amp;{" "}
-            <a className="terms-link" href="/privacy" target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+            <a className="terms-link" href="/#/privacy" target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
               Privacy Policy
             </a>
           </span>

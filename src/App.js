@@ -25,7 +25,7 @@ import MainLayout from "./components/Layout/MainLayout";
 import RequireAuth from "./components/Auth/RequireAuth";
 
 import {
-  createBrowserRouter,
+  createHashRouter,
   RouterProvider,
   Navigate,
 } from "react-router-dom";
@@ -33,7 +33,10 @@ import {
 import { CurrentUserProvider } from "./context/CurrentUserContext";
 
 
-const router = createBrowserRouter([
+// Hash URLs (/#/dashboard/...): the static host only has index.html, so a
+// browser URL like /dashboard/subgraph-view opened in a new tab, reloaded or
+// shared would be looked up as a file and come back "Access Denied".
+const router = createHashRouter([
   // =====================================================
   // ROOT
   // =====================================================

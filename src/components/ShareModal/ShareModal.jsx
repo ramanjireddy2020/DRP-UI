@@ -23,7 +23,7 @@ export default function ShareModal({ open, onClose, sessionId = null, sessionTit
   }, [open]);
 
   const link = sessionId
-    ? `${window.location.origin}/dashboard/new-research/workflow?session=${encodeURIComponent(sessionId)}`
+    ? `${window.location.origin}/#/dashboard/new-research/workflow?session=${encodeURIComponent(sessionId)}`
     : null;
 
   const copyLink = async () => {

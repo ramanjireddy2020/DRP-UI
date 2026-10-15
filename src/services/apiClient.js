@@ -45,9 +45,11 @@ let onUnauthorized = () => {
   // every provider, fires the same unauthenticated request, and lands back
   // here — an endless refresh. The `redirecting` latch below cannot stop it,
   // because a page load resets module state.
-  if (AUTH_ROUTES.includes(window.location.pathname)) return;
+  // The app uses hash routes, so the current route is in the hash (#/login?...).
+  const route = window.location.hash.replace(/^#/, "").split("?")[0] || "/";
+  if (AUTH_ROUTES.includes(route)) return;
 
-  window.location.assign("/login");
+  window.location.assign("/#/login");
 };
 
 export const setUnauthorizedHandler = (handler) => {
