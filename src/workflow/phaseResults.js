@@ -364,8 +364,12 @@ export const normalizeCuratexProfile = (payload) => {
  * returns e.g. `weight: 1.0`, and the table shows and edits that same number).
  * Only weights go out: the compounds contract has no field for criterion
  * values.
+ *
+ * A parameter the researcher removed (gone from `formValues`) is sent with
+ * weight 0. Leaving it out made the backend score it with its default weight
+ * (demo 2026-10-15); weight 0 is what excludes it.
  */
-export const toApiWeights = (formWeights, profile) => {
+export const toApiWeights = (formWeights, profile, formValues) => {
   if (!formWeights || typeof formWeights !== "object") return profile?.apiWeights ?? {};
 
   const map = profile?.fieldToCriterion ?? {};
@@ -379,8 +383,20 @@ export const toApiWeights = (formWeights, profile) => {
     out[apiName] = Number.isFinite(n) ? n : value;
   });
 
+  if (formValues && typeof formValues === "object") {
+    Object.entries(map).forEach(([key, apiName]) => {
+      if (!(key in formValues)) out[apiName] = 0;
+    });
+  }
+
   return out;
 };
+
+/** The criteria a weights map leaves out of scoring (weight 0). */
+export const zeroWeightCriteria = (apiWeights) =>
+  Object.entries(apiWeights ?? {})
+    .filter(([, w]) => Number(w) === 0)
+    .map(([name]) => name);
 
 /**
  * The profile form's criterion values, keyed by the API's criterion names,
@@ -439,14 +455,14 @@ const candidateList = (payload) => {
  * map → [{ label, target, value, status, source }]. `status` is "match",
  * "mismatch" or "unknown", from a status word, a boolean or a 0–1 score.
  */
-const readBreakdown = (raw) => {
+const readBreakdown = (raw, excluded) => {
   const entries = Array.isArray(raw)
     ? raw.map((b) => [b?.criterion ?? b?.name ?? b?.label ?? b?.field, b])
     : raw && typeof raw === "object"
     ? Object.entries(raw)
     : [];
   return entries
-    .filter(([name, b]) => name && b != null)
+    .filter(([name, b]) => name && b != null && !excluded?.has(squash(name)))
     .map(([name, b]) => {
       const row = typeof b === "object" ? b : { value: b };
       const flag = row.status ?? row.match ?? row.matched ?? row.passed ?? row.pass;
@@ -522,8 +538,17 @@ const readCuratexRecommendation = (payload) => {
   return text || items.length ? { text, items } : null;
 };
 
-export const normalizeCuratexResults = (payload, { pageSize: requested } = {}) => {
+export const normalizeCuratexResults = (payload, { pageSize: requested, excludeCriteria } = {}) => {
   const items = candidateList(payload);
+
+  // Criteria the researcher removed before scoring. The backend still returns
+  // them in every compound's breakdown, so Match Details listed and judged
+  // them (demo 2026-10-15). Matched by API name or by its display label.
+  const excluded = new Set(
+    (excludeCriteria ?? []).flatMap((name) => [squash(name), squash(humanize(name))])
+  );
+  const keep = (v) =>
+    excluded.size && Array.isArray(v) ? v.filter((p) => !excluded.has(squash(p))) : v;
 
   const page = Number(payload?.page) || 1;
   const pageSize = derivePageSize(payload, items.filter(Boolean).length, requested);
@@ -540,10 +565,10 @@ export const normalizeCuratexResults = (payload, { pageSize: requested } = {}) =
       // The results table's matched / mismatched columns. The API never sent
       // matchedProps, so they were always empty; they are derived from the
       // per-criterion breakdown the API does send.
-      const breakdown = readBreakdown(c.breakdown);
+      const breakdown = readBreakdown(c.breakdown, excluded);
       const byStatus = (status) => breakdown.filter((b) => b.status === status).map((b) => b.label);
-      const matched = c.matchedProps ?? c.matched_props ?? c.matched ?? byStatus("match");
-      const mismatched = c.mismatchedProps ?? c.mismatched_props ?? c.mismatched ?? byStatus("mismatch");
+      const matched = keep(c.matchedProps ?? c.matched_props ?? c.matched ?? byStatus("match"));
+      const mismatched = keep(c.mismatchedProps ?? c.mismatched_props ?? c.mismatched ?? byStatus("mismatch"));
       const asText = (v) => (Array.isArray(v) ? v.join(", ") : String(v ?? ""));
 
       // The API sends the composite score as camelCase `compositeScore`; only
@@ -1053,6 +1078,7 @@ const phaseResults = {
   normalizeArticlePreview,
   normalizeCuratexProfile,
   toApiWeights,
+  zeroWeightCriteria,
   toApiValues,
   normalizeCuratexResults,
   normalizeDockingHits,

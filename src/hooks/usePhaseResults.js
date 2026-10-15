@@ -4,6 +4,7 @@ import curatexApi from "../services/api/curatex";
 import screensuiteApi from "../services/api/screensuite";
 import novsearchApi from "../services/api/novsearch";
 import { getJobResult } from "../services/api/jobs";
+import { getExcludedCriteria } from "../workflow/sessionStore";
 import {
   normalizeLitminexResults,
   normalizeInsights,
@@ -50,15 +51,16 @@ export const FETCHERS = {
   "curatex-profile": async (jobId) => normalizeCuratexProfile(await curatexApi.getProfile(jobId)),
 
   "curatex-results": async (jobId, { page, pageSize = RESULTS_PAGE_SIZE }) => {
+    const excludeCriteria = getExcludedCriteria(jobId);
     const fromResults = normalizeCuratexResults(
       await curatexApi.getResults(jobId, { page, pageSize }),
-      { pageSize }
+      { pageSize, excludeCriteria }
     );
     if (fromResults.hasData) return fromResults;
     // The results endpoint came back empty although the job finished: fall
     // back to the job's own result, which is where the "N candidate(s)
     // ranked" summary comes from, rather than showing an empty table.
-    const fromJob = normalizeCuratexResults(await getJobResult(jobId).catch(() => null), { pageSize });
+    const fromJob = normalizeCuratexResults(await getJobResult(jobId).catch(() => null), { pageSize, excludeCriteria });
     return fromJob.hasData ? fromJob : fromResults;
   },
 

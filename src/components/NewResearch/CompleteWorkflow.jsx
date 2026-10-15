@@ -24,11 +24,11 @@ import { normalizeTxkgResult, normalizeMetapath } from "../../workflow/txkgResul
 import { getArtifacts } from "../../services/api/sessions";
 import {
   getSessionProject, setSessionProject, fileSessionResults,
-  getCompoundsJob, setCompoundsJob, getPatentThread, setPatentThread,
+  getCompoundsJob, setCompoundsJob, setExcludedCriteria, getPatentThread, setPatentThread,
 } from "../../workflow/sessionStore";
 import AddToProjectDialog from "../Projects/AddToProjectDialog";
 import { toGeneNames, buildSelections, geneNameForTarget } from "../../workflow/selections";
-import { toApiWeights, toApiValues } from "../../workflow/phaseResults";
+import { toApiWeights, toApiValues, zeroWeightCriteria } from "../../workflow/phaseResults";
 import { withProductWording } from "../../workflow/wording";
 import { buildSessionReport } from "../../workflow/sessionReport";
 import curatexApi from "../../services/api/curatex";
@@ -2136,13 +2136,15 @@ const CompleteWorkflow = () => {
 
     setWorkflowPhase("curatex-submitted");
 
+    // The researcher's edits, translated from the form's field names back to
+    // the criterion names the scorer keys on. Removed parameters go out as 0.
+    const weights = toApiWeights(editedWeights, curatexProfile.data, editedValues);
+
     try {
       const response = await curatexApi.scoreCompounds({
         target,
         disease: txkgResult.disease ?? null,
-        // The researcher's edits, translated from the form's field names back
-        // to the criterion names the scorer keys on.
-        weights: toApiWeights(editedWeights, curatexProfile.data),
+        weights,
         // The edited target values: the endpoint accepts them now, so a
         // changed value re-shapes the ranking instead of being ignored.
         values: toApiValues(editedValues, curatexProfile.data),
@@ -2160,6 +2162,9 @@ const CompleteWorkflow = () => {
 
       // Stored on the step rather than in local state so it survives
       // navigating away to another module and back.
+      // Remembered before the results load, so Match Details can leave out
+      // the criteria this job was scored without.
+      setExcludedCriteria(jobId, zeroWeightCriteria(weights));
       session.setStepData({ compoundsJobId: jobId }, "curatex");
       setCompoundsJob(session.steps.curatex?.stepId, jobId);
     } catch (err) {

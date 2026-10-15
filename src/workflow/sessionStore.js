@@ -7,6 +7,8 @@
  *    projectId (POST /sessions and PATCH /sessions/{id} ignore it);
  *  - CurateX's candidates job per CurateX step: POST
  *    /agents/curatex/compounds isn't recorded on the session;
+ *  - the criteria a candidates job was scored without: its results still
+ *    list every criterion;
  *  - NovSearch patent Q&A per NovSearch job: /agents/novsearch/ask doesn't
  *    store answers.
  *
@@ -20,6 +22,7 @@ import { addProjectResult, getProjectItems } from "../services/api/projects";
 const KEYS = {
   projects: "drp.sessionProjects",
   compounds: "drp.curatexCompoundsJobs",
+  excludedCriteria: "drp.curatexExcludedCriteria",
   patentQa: "drp.patentQa",
 };
 
@@ -95,6 +98,11 @@ export const fileSessionResults = async (projectId, sessionId) => {
 
 export const getCompoundsJob = (stepId) => (stepId ? read(KEYS.compounds)[stepId] ?? null : null);
 export const setCompoundsJob = (stepId, jobId) => update(KEYS.compounds, stepId, jobId || null);
+
+/** API criterion names a candidates job was scored without (removed or weight 0). */
+export const getExcludedCriteria = (jobId) => (jobId ? read(KEYS.excludedCriteria)[jobId] ?? [] : []);
+export const setExcludedCriteria = (jobId, names) =>
+  update(KEYS.excludedCriteria, jobId, Array.isArray(names) && names.length ? names : null);
 
 /* NovSearch patent Q&A per NovSearch job ---------------------------------- */
 
