@@ -132,6 +132,7 @@ const SummaryCard = ({ sessionReport, researcherName, onNewResearch }) => {
           <Divider />
           <Typography sx={summaryText}>
             {`${section.title}:\n✓ ${section.summary}`}
+            {section.note ? `\n${section.note}` : ""}
             {section.items.length ? `\n${section.items.map((item, i) => `${i + 1}. ${item}`).join("\n")}` : ""}
           </Typography>
         </React.Fragment>

@@ -5,6 +5,7 @@ import { TEAL, GRAY_BG } from "../workflowConstants";
 import PhaseActions from "../PhaseActions";
 import FormattedText from "../FormattedText";
 import novsearchApi from "../../../services/api/novsearch";
+import { estimateViability } from "../../../workflow/sessionReport";
 
 import SharedAgentHeader from "../AgentHeader";
 import { useCurrentUser } from "../../../context/CurrentUserContext";
@@ -315,16 +316,15 @@ const tableCell = {
  * now taken from the highest relevance in the list and says it is an estimate;
  * with no scored patents there is no badge at all.
  */
-const viabilityFor = (report) => {
-  const scores = (report?.patents ?? [])
-    .map((p) => p?.rawRelevance)
-    .filter((n) => Number.isFinite(n));
-  if (!scores.length) return null;
+const VIABILITY_COLORS = {
+  LOW: { bg: "#FEE2E2", color: "#DC2626" },
+  MODERATE: { bg: "#FEF3C7", color: "#B45309" },
+  HIGH: { bg: "#DCFCE7", color: "#16A34A" },
+};
 
-  const top = Math.max(...scores);
-  if (top >= 0.9) return { top, label: "EST. LOW VIABILITY", bg: "#FEE2E2", color: "#DC2626" };
-  if (top >= 0.75) return { top, label: "EST. MODERATE VIABILITY", bg: "#FEF3C7", color: "#B45309" };
-  return { top, label: "EST. HIGH VIABILITY", bg: "#DCFCE7", color: "#16A34A" };
+const viabilityFor = (report) => {
+  const estimate = estimateViability(report?.patents);
+  return estimate ? { ...estimate, ...VIABILITY_COLORS[estimate.level] } : null;
 };
 
 const InsightsCard = ({ report }) => {
