@@ -1,11 +1,9 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { Box, Button, Checkbox, Typography } from "@mui/material";
 import { definitionFor } from "../../../workflow/txkgResult";
 import { TEAL, GRAY_BG } from "../workflowConstants";
 import PhaseActions from "../PhaseActions";
 import FormattedText from "../FormattedText";
-import { printSessionReport } from "../../../workflow/sessionReport";
 import novsearchApi from "../../../services/api/novsearch";
 
 import SharedAgentHeader from "../AgentHeader";
@@ -90,19 +88,6 @@ const buttonBase = {
     background: "#F8FAFC",
     borderColor: "#CBD5E1",
     boxShadow: "none",
-  },
-};
-
-const primaryButton = {
-  ...buttonBase,
-  background: TEAL,
-  borderColor: TEAL,
-  color: "#FFFFFF",
-  fontWeight: 600,
-
-  "&:hover": {
-    background: "#00A9BF",
-    borderColor: "#00A9BF",
   },
 };
 
@@ -730,253 +715,6 @@ const ResultsScreen = ({
 };
 
 /* ============================================================================
-   END TASK
-============================================================================ */
-
-const DecisionScreen = ({ onContinue, onEndTask, pending = false, error = null, diseaseLabel }) => (
-  <>
-    <Box
-      sx={{
-        width: "100%",
-        maxWidth: "760px",
-        boxSizing: "border-box",
-        border: "1px solid #E2E8F0",
-        borderRadius: "12px",
-        background: "#FFFFFF",
-        padding: "16px",
-        mb: "34px",
-      }}
-    >
-      <AgentHeader />
-
-      <Typography
-        sx={{
-          ...text,
-          fontSize: "15px",
-          lineHeight: "22px",
-          color: "#1E293B",
-          mb: "16px",
-        }}
-      >
-        Would you like to continue exploring or conclude this research
-        session? Ending the task saves the session.
-      </Typography>
-
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          gap: "10px",
-          flexWrap: "wrap",
-        }}
-      >
-        <Button
-          onClick={onContinue}
-          disabled={pending}
-          sx={primaryButton}
-        >
-          Continue Research
-        </Button>
-
-        <Button
-          onClick={onEndTask}
-          disabled={!onEndTask || pending}
-          title={onEndTask ? undefined : "Saving the session is not available here"}
-          sx={buttonBase}
-        >
-          {pending ? "Saving the session…" : "End Task"}
-        </Button>
-
-        {pending && <LoadingDots />}
-      </Box>
-
-      {error && (
-        <Typography role="alert" sx={{ ...text, fontSize: "13px", lineHeight: "20px", color: "#DC2626", mt: "12px" }}>
-          {error}
-        </Typography>
-      )}
-    </Box>
-  </>
-);
-
-/* ============================================================================
-   SUMMARY SCREEN
-============================================================================ */
-
-const Divider = () => (
-  <Box
-    sx={{
-      width: "176px",
-      borderTop: "1px solid #7B8491",
-      mt: "12px",
-      mb: "10px",
-    }}
-  />
-);
-
-const summaryText = {
-  ...text,
-  fontSize: "13px",
-  lineHeight: "22px",
-  whiteSpace: "pre-line",
-};
-
-/**
- * The closing summary, from the novelty report this component actually holds.
- *
- * This was fixed text — "124 articles", "17 patents, HIGH novelty confirmed",
- * five Type 2 Diabetes candidates with binding scores, and a Metformin
- * recommendation — on every session. Anything the report does not carry is
- * left out rather than filled in.
- */
-const SummaryScreen = ({ report, sessionReport, researcherName, actions = {}, onNewResearch }) => {
-  const diseaseLabel = report?.disease || sessionReport?.disease || "";
-  const [exportBlocked, setExportBlocked] = useState(false);
-  // The other modules' sections; NovSearch's own is drawn below from `report`.
-  const earlierSections = (sessionReport?.sections ?? []).filter((s) => !s.title.startsWith("NovSearch"));
-
-  // The whole session, printed from the browser. This used to call the
-  // per-job PDF export for the NovSearch job, which covered NovSearch only
-  // and was seen to re-run the module instead of exporting.
-  const exportReport = () => {
-    if (!sessionReport) {
-      actions.onExport?.("pdf");
-      return;
-    }
-    setExportBlocked(!printSessionReport(sessionReport, { researcherName }));
-  };
-  const topPatents = [...(report?.patents ?? [])]
-    .filter((p) => Number.isFinite(p.rawRelevance))
-    .sort((a, b) => b.rawRelevance - a.rawRelevance)
-    .slice(0, 3);
-
-  return (
-  <>
-    <Box
-      sx={{
-        width: "100%",
-        boxSizing: "border-box",
-        border: "1px solid #E2E8F0",
-        borderRadius: "12px",
-        background: "#FFFFFF",
-        padding: "16px 20px 20px",
-      }}
-    >
-      <AgentHeader />
-
-      <Typography
-        sx={{
-          ...text,
-          fontSize: "15px",
-          lineHeight: "22px",
-          fontWeight: 500,
-          mb: "14px",
-        }}
-      >
-        Research task completed and the session is saved. Here is your final summary:
-      </Typography>
-
-      <Typography sx={{ ...summaryText, lineHeight: "21px" }}>
-        {`Research Summary - ${diseaseLabel || "Drug Repurposing"}\n`}
-        {report?.target ? `Target: ${report.target}\n` : ""}
-        {diseaseLabel ? `Disease: ${diseaseLabel}\n` : ""}
-        {researcherName ? `Researcher: ${researcherName}\n` : ""}
-        {"Status: SAVED ✓"}
-      </Typography>
-
-      {/* The whole session, not just NovSearch: testing found the closing
-          report covered only the last module run. */}
-      {earlierSections.map((section) => (
-        <React.Fragment key={section.title}>
-          <Divider />
-          <Typography sx={summaryText}>
-            {`${section.title}:\n✓ ${section.summary}`}
-            {section.items.length ? `\n${section.items.map((item, i) => `${i + 1}. ${item}`).join("\n")}` : ""}
-          </Typography>
-        </React.Fragment>
-      ))}
-
-      <Divider />
-
-      <Typography sx={summaryText}>
-        {"Novelty Search:\n"}
-        {report
-          ? `✓ ${report.patents?.length ?? report.total} patent${(report.patents?.length ?? report.total) === 1 ? "" : "s"} found`
-          : "The novelty report is not available."}
-      </Typography>
-
-      {report?.assessment && (
-        <Typography sx={{ ...summaryText, mt: "6px" }}>
-          {`Assessment: ${report.assessment}`}
-        </Typography>
-      )}
-
-      {topPatents.length > 0 && (
-        <>
-          <Divider />
-          <Typography sx={summaryText}>
-            {"Most relevant patents:\n"}
-            {topPatents
-              .map((p, i) => `${i + 1}. ${p.id} - ${p.title} - Relevance: ${p.relevance}`)
-              .join("\n")}
-          </Typography>
-        </>
-      )}
-
-      {report?.recommendations?.length > 0 && (
-        <>
-          <Divider />
-          <Typography sx={summaryText}>
-            {"Recommendations:\n"}
-            {report.recommendations.map((rec) => `• ${rec}`).join("\n")}
-          </Typography>
-        </>
-      )}
-
-
-      <Typography
-        sx={{
-          ...text,
-          fontSize: "13px",
-          lineHeight: "20px",
-          fontWeight: 600,
-          mt: "12px",
-          mb: "10px",
-        }}
-      >
-        What would you like to do next?
-      </Typography>
-
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          gap: "10px",
-          flexWrap: "wrap",
-        }}
-      >
-        <Button sx={primaryButton} onClick={exportReport} disabled={!sessionReport && (!actions.onExport || Boolean(actions.busy))}>{actions.busy === "export" ? "Exporting…" : "Export Report"}</Button>
-        <Button sx={buttonBase} onClick={actions.onBranch} disabled={!actions.onBranch || Boolean(actions.busy)}>{actions.busy === "branch" ? "Branching…" : "Branch"}</Button>
-        <Button sx={buttonBase} onClick={onNewResearch}>+ New Research</Button>
-        {/* "Share Results" is gone: there is no sharing endpoint. */}
-      </Box>
-
-      {actions.error && (
-        <Typography role="alert" sx={{ ...text, fontSize: "12px", color: "#DC2626", mt: "8px" }}>
-          {actions.error}
-        </Typography>
-      )}
-      {exportBlocked && (
-        <Typography role="alert" sx={{ ...text, fontSize: "12px", color: "#DC2626", mt: "8px" }}>
-          The report window was blocked. Allow pop-ups for this site and try again.
-        </Typography>
-      )}
-    </Box>
-  </>
-  );
-};
-
-/* ============================================================================
    PHASE NORMALIZATION
 ============================================================================ */
 
@@ -987,14 +725,6 @@ const getInitialStage = (workflowPhase) => {
 
   if (value.includes("loading")) {
     return "loading";
-  }
-
-  if (value.includes("summary")) {
-    return "summary";
-  }
-
-  if (value.includes("decision") || value.includes("endtask")) {
-    return "decision";
   }
 
   return "results";
@@ -1034,12 +764,10 @@ const NoveltySearchPhase = ({
   /** The assessment job is still running — shows the loading stage. */
   isLoading = false,
   /**
-   * End Task → marks the session Saved (PATCH /sessions/{id}). Awaited; the
-   * summary only appears once it succeeds.
+   * Opens Finish Research (Continue / End Task, then the session summary),
+   * which the workspace draws for the whole session; see FinishResearch.jsx.
    */
-  onEndTask,
-  /** Every module's results; see workflow/sessionReport.js. */
-  sessionReport = null,
+  onFinishResearch,
   /**
    * Chat with patent goes through the platform chat bar (one query box, not a
    * second one inside NovSearch). The parent owns the ticked patents and
@@ -1056,8 +784,6 @@ const NoveltySearchPhase = ({
   threads: threadsProp,
   onThreadsChange,
 }) => {
-  const navigate = useNavigate();
-
   const [stage, setStage] = useState(() =>
     getInitialStage(workflowPhase)
   );
@@ -1082,13 +808,6 @@ const NoveltySearchPhase = ({
       }),
     [runKey, setThreads]
   );
-
-  const [endTaskState, setEndTaskState] = useState({ pending: false, error: null });
-
-  // Review points 6 and 20: the closing screens named Type 2 Diabetes and
-  // Dr. Priya whatever the session was about. Both come from the run now.
-  const { displayName: researcherName } = useCurrentUser();
-  const diseaseLabel = report?.disease || "";
 
   /** Follow the parent's phase when it changes (e.g. loading → results). */
   useEffect(() => {
@@ -1153,22 +872,6 @@ const NoveltySearchPhase = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [patentQuestion?.id]);
 
-  const handleEndTask = async () => {
-    if (!onEndTask) return;
-
-    setEndTaskState({ pending: true, error: null });
-    try {
-      await onEndTask();
-      setEndTaskState({ pending: false, error: null });
-      setStage("summary");
-    } catch (err) {
-      setEndTaskState({
-        pending: false,
-        error: askError(err, "The session could not be saved. Please try again."),
-      });
-    }
-  };
-
   return (
     <Box
       sx={{
@@ -1215,10 +918,7 @@ const NoveltySearchPhase = ({
             RESULTS
         ================================================================= */}
 
-        {/* Stays on screen after End Task: the summary used to REPLACE the
-            results, so the patent table and assessment could no longer be
-            viewed once the session was ended (testing). */}
-        {!running && (stage === "results" || stage === "summary") && (
+        {!running && stage === "results" && (
           <ResultsScreen
             actions={actions}
             report={report}
@@ -1227,21 +927,7 @@ const NoveltySearchPhase = ({
             onRetry={onRetry}
             selectedIds={selectedIds}
             onToggle={toggleSelected}
-            onFinish={stage === "summary" ? undefined : () => setStage("decision")}
-          />
-        )}
-
-        {/* ================================================================
-            END TASK
-        ================================================================= */}
-
-        {!running && stage === "decision" && (
-          <DecisionScreen
-            diseaseLabel={diseaseLabel}
-            onContinue={() => setStage("results")}
-            onEndTask={onEndTask ? handleEndTask : undefined}
-            pending={endTaskState.pending}
-            error={endTaskState.error}
+            onFinish={onFinishResearch}
           />
         )}
 
@@ -1256,20 +942,6 @@ const NoveltySearchPhase = ({
               <AnswerCard entry={entry} onRetry={() => askFollowUp(entry.question, entry.id)} />
             </React.Fragment>
           ))}
-
-        {/* ================================================================
-            FINAL SUMMARY
-        ================================================================= */}
-
-        {!running && stage === "summary" && (
-          <SummaryScreen
-            actions={actions}
-            report={report}
-            sessionReport={sessionReport}
-            researcherName={researcherName}
-            onNewResearch={() => navigate("/dashboard/new-research")}
-          />
-        )}
 
       </Box>
 

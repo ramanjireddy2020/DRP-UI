@@ -16,6 +16,7 @@ import LiteminexPhase from "../workflow/Liteminex/LiteminexPhase";
 import CuratexPhase from "../workflow/Curatex/CuratexPhase";
 import ScreeningSuitePhase from "../workflow/ScreeningSuite/ScreeningSuitePhase";
 import NoveltySearchPhase from "../workflow/NoveltySearch/NoveltySearchPhase";
+import FinishResearch from "../workflow/FinishResearch";
 import useWorkflowSession from "../../hooks/useWorkflowSession";
 import useJob from "../../hooks/useJob";
 import usePhaseResults from "../../hooks/usePhaseResults";
@@ -684,6 +685,22 @@ const CompleteWorkflow = () => {
       throw new Error(message);
     }
   }, [updateSession]);
+
+  /**
+   * Finish Research: null (closed), "decision" (Continue / End Task) or
+   * "summary" (after End Task). It used to exist only inside the NovSearch
+   * card; it is now drawn at the end of the conversation and opened from the
+   * toolbar once any module has results, or from NovSearch's own button.
+   */
+  const [finishStage, setFinishStage] = useState(null);
+  const finishRef = useRef(null);
+  const canFinish = sessionReport.sections.length > 0;
+  const openFinishResearch = useCallback(() => {
+    setFinishStage((stage) => (stage === "summary" ? stage : "decision"));
+  }, []);
+  useEffect(() => {
+    if (finishStage) finishRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [finishStage]);
 
   /**
    * The Artifacts tab badge: how many artifacts the session really has. It
@@ -1474,6 +1491,20 @@ const CompleteWorkflow = () => {
                 </div>
               )}
             </div>
+
+            {/* finish-btn: Finish Research from any module with results. */}
+            <button
+              className="finish-btn"
+              onClick={openFinishResearch}
+              disabled={!canFinish}
+              title={canFinish ? "Continue or end this research task" : "Available once a module has results"}
+            >
+              <svg className="icon" width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.5"/>
+                <path d="M4.5 7L6.3 8.8L9.5 5.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              <span className="label">Finish Research</span>
+            </button>
 
             {/* share-btn */}
             <button className="share-btn" onClick={() => setShowShareDialog(true)} style={{ cursor: "pointer" }}>
@@ -2849,8 +2880,7 @@ const CompleteWorkflow = () => {
           error={novsearch.error}
           onRetry={novsearch.reload}
           actions={novsearchActions}
-          onEndTask={handleEndTask}
-          sessionReport={sessionReport}
+          onFinishResearch={openFinishResearch}
           selectedIds={selectedPatentIds}
           onToggleSelected={togglePatent}
           patentQuestion={patentQuestion}
@@ -3102,6 +3132,20 @@ const CompleteWorkflow = () => {
         blocks={timelineBlocks}
         pending={session.pending}
         scrollAnchors={moduleAnchors}
+        footer={
+          finishStage && (
+            <Box ref={finishRef}>
+              <FinishResearch
+                stage={finishStage}
+                onContinue={() => setFinishStage(null)}
+                onEndTask={handleEndTask}
+                onSaved={() => setFinishStage("summary")}
+                sessionReport={sessionReport}
+                onNewResearch={() => navigate("/dashboard/new-research")}
+              />
+            </Box>
+          )
+        }
         renderArchivedRun={(block) => (
           <ArchivedRunCard
             moduleKey={block.moduleKey}

@@ -150,6 +150,7 @@ const AgentBubble = ({ text, titleKey, agentName, isError }) => {
  * @param {boolean} pending - a message is in flight.
  * @param {object} scrollAnchors - ref object the parent can read to scroll a
  *   module's card into view from the rail.
+ * @param {React.ReactNode} footer - drawn after every block (Finish Research).
  */
 const ConversationTimeline = ({
   blocks,
@@ -158,6 +159,7 @@ const ConversationTimeline = ({
   renderArchivedRun,
   pending = false,
   scrollAnchors,
+  footer = null,
 }) => {
   const { chatLabel: userLabel } = useCurrentUser();
 
@@ -253,6 +255,8 @@ const ConversationTimeline = ({
           </Box>
         );
       })}
+
+      {footer}
 
       {pending && (
         <Box sx={{ display: "flex", alignItems: "center", gap: "10px", pl: "4px" }}>
