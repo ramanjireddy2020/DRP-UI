@@ -1312,8 +1312,8 @@ const CompleteWorkflow = () => {
                       }
                     >
                       <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                        <rect x="1" y="1" width="10" height="7" rx="1.5" stroke={viewMode === "chat" ? "#FFFFFF" : "#FFFFFF"} strokeWidth="1.2"/>
-                        <path d="M3 11L6 8H10" stroke={viewMode === "chat" ? "#FFFFFF" : "#FFFFFF"} strokeWidth="1.2" strokeLinecap="round"/>
+                        <rect x="1" y="1" width="10" height="7" rx="1.5" stroke={viewMode === "chat" ? "#FFFFFF" : "#64748B"} strokeWidth="1.2"/>
+                        <path d="M3 11L6 8H10" stroke={viewMode === "chat" ? "#FFFFFF" : "#64748B"} strokeWidth="1.2" strokeLinecap="round"/>
                       </svg>
                       <span className="label">Chat</span>
                     </div>

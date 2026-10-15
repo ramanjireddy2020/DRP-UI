@@ -183,6 +183,7 @@
   width: 72px;
   height: 27px;
   background: #1E293B;
+  color: #FFFFFF;
   border-radius: 20px;
   flex: none;
   order: 0;
@@ -205,7 +206,8 @@
   font-weight: 600;
   font-size: 13px;
   line-height: 17px;
-  color: #FFFFFF;
+  /* Follow the pill's colour so the unselected tab isn't white on white. */
+  color: inherit;
   flex: none;
   order: 1;
   flex-grow: 0;
