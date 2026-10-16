@@ -264,11 +264,15 @@ const CuratexPhase = ({
   /** Snapshot taken on entering edit mode, so Cancel really cancels. */
   const editSnapshotRef = useRef(null);
 
-  const weightsSeededRef = useRef(false);
+  // Seeded per profile (its weights' content), not once per mount: a second
+  // profile, on another branch or for another protein, kept the first one's
+  // weights (testing 2026-10-16). A re-fetch of the same profile keeps edits.
+  const weightsSeededRef = useRef(null);
   useEffect(() => {
-    if (weightsSeededRef.current) return;
     if (!profile?.weights || !Object.keys(profile.weights).length) return;
-    weightsSeededRef.current = true;
+    const key = `${profile.target ?? ""}|${JSON.stringify(profile.weights)}`;
+    if (weightsSeededRef.current === key) return;
+    weightsSeededRef.current = key;
     setWeights(toPercentWeights(profile.weights));
   }, [profile]);
   /**

@@ -100,11 +100,38 @@ export const toGeneNames = (selectedIds, targets) => {
  * for each: LitMineX wants targetIds, ScreenSuite wants compounds, NovSearch
  * wants the drug/target/disease triple.
  */
+/**
+ * One compound for ScreenSuite. A ChEMBL ID or PubChem CID goes as an
+ * `identifier`, not a `drug_name`: sent as a name, CHEMBL113442 failed the
+ * name lookup and the run stopped with "Name at least one compound to
+ * screen" (testing 2026-10-16).
+ */
+export const toCompound = (value) => {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  if (/^CHEMBL\d+$/i.test(text)) return { identifier: text.toUpperCase(), identifierType: "chembl" };
+  const cid = text.match(/^(?:CID[:\s]*)?(\d+)$/i);
+  if (cid) return { identifier: cid[1], identifierType: "pubchem" };
+  return { drug_name: text };
+};
+
+/** A compound's display name: its drug name, else its identifier. */
+export const compoundLabel = (c) => (typeof c === "string" ? c : c?.drug_name ?? c?.identifier ?? null);
+
 export const buildSelections = (moduleKey, picks = {}) => {
   switch (moduleKey) {
     case "litminex":
-    case "curatex":
       return { targetIds: picks.targetIds ?? [] };
+
+    case "curatex":
+      // The UniProt accession from the TxKG table goes with the symbol. The
+      // symbol alone failed for targets whose TxKG name is a UniProt entry
+      // name, e.g. SODM (gene SOD2): "No reviewed human UniProt entry matched
+      // 'SODM'" (testing 2026-10-16).
+      return {
+        targetIds: picks.targetIds ?? [],
+        ...(Array.isArray(picks.uniprotIds) && picks.uniprotIds.length ? { uniprotIds: picks.uniprotIds } : {}),
+      };
 
     case "screensuite":
       // One or more proteins × one or more compounds. `target` (the first
@@ -112,9 +139,18 @@ export const buildSelections = (moduleKey, picks = {}) => {
       return {
         target: picks.target ?? picks.targets?.[0] ?? null,
         ...(Array.isArray(picks.targets) && picks.targets.length ? { targets: picks.targets } : {}),
-        // The staged backend takes compounds as [{ drug_name }].
+        // The staged backend takes compounds as [{ drug_name }] or, for a
+        // structure ID, [{ identifier }]; see toCompound.
         compounds: (picks.compounds ?? [])
-          .map((c) => (typeof c === "string" ? { drug_name: c } : c?.drug_name ? c : c?.name ? { drug_name: c.name } : null))
+          .map((c) =>
+            typeof c === "string"
+              ? toCompound(c)
+              : c?.drug_name || c?.identifier
+              ? c
+              : c?.name
+              ? toCompound(c.name)
+              : null
+          )
           .filter(Boolean),
         ...(picks.pdbId ? { pdbId: picks.pdbId } : {}),
         ...(picks.structures ? { structures: picks.structures } : {}),

@@ -202,6 +202,8 @@ const ScreeningSuitePhase = ({
   /** The ScreenSuite job, for the results / interactions / file endpoints. */
   jobId = null,
   loading = false,
+  /** An empty result being re-read just after docking started; not "no results" yet. */
+  starting = false,
   error = null,
   onRetry,
   unavailable = false,
@@ -236,7 +238,7 @@ const ScreeningSuitePhase = ({
   // Results not fetched yet for this job (the card switches to results the
   // moment docking completes, before the first read) count as loading, not
   // as "no results".
-  const waiting = loading || (!screening && !error && !hasHits);
+  const waiting = loading || starting || (!screening && !error && !hasHits);
   const handedOff = (Array.isArray(compounds) ? compounds : []).filter(Boolean);
 
 
@@ -479,6 +481,8 @@ const ScreeningSuitePhase = ({
               >
                 {error
                   ? error
+                  : starting
+                  ? "Docking is starting… results will appear here when it finishes."
                   : waiting
                   ? "Loading docking results…"
                   : hasHits

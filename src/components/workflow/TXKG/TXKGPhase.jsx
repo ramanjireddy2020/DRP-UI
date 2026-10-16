@@ -219,6 +219,12 @@ const TXKGPhase = ({
    */
   onContinue,
   continuePending = false,
+  /**
+   * LitMineX has already been started from here on this branch. The proceed
+   * buttons stayed on screen (and enabled) once the request returned, so the
+   * same hand-off could be sent again (testing 2026-10-16).
+   */
+  continued = false,
   /** Branch / Rerun / Export handlers from usePhaseActions. */
   actions = {},
   /** Live subgraph from /agents/subgraph/* — replaces the static SVG. */
@@ -1197,6 +1203,12 @@ const TXKGPhase = ({
             <div className="agent-icon"></div>
             <div className="bridge-content">
               <h3 className="bridge-header">READY FOR LITERATURE MINING</h3>
+              {continued ? (
+              <p className="bridge-message">
+                LitMineX has been started with the selected targets. Its results appear in the LitMineX card below.
+              </p>
+              ) : (
+              <>
               <p className="bridge-message">
                 TxKG analysis is complete. Would you like to proceed to LitMinex with the recommended targets, or select specific targets from the identified list?
               </p>
@@ -1227,6 +1239,8 @@ const TXKGPhase = ({
                   </button>
                 </div>
               </div>
+              </>
+              )}
             </div>
           </div>
         {detailDrawer}
@@ -1480,7 +1494,12 @@ const TXKGPhase = ({
           <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: TEXT_DARK }}>{selectedTargets.length} targets selected</Typography>
             <Box sx={{ display: "flex", gap: "12px" }}>
-              <Button onClick={() => setWorkflowPhase("txkg-results")} sx={{ textTransform: "none", fontFamily: FONT, fontSize: "13px", color: TEXT_DARK }}>Cancel</Button>
+              <Button onClick={() => setWorkflowPhase("txkg-results")} sx={{ textTransform: "none", fontFamily: FONT, fontSize: "13px", color: TEXT_DARK }}>{continued ? "Back" : "Cancel"}</Button>
+              {continued ? (
+                <Typography sx={{ fontFamily: FONT, fontSize: "13px", color: "#64748B", alignSelf: "center" }}>
+                  LitMineX has been started
+                </Typography>
+              ) : (
               <Button
                 disabled={selectedTargets.length === 0 || continuePending}
                 onClick={() => onContinue?.()}
@@ -1488,6 +1507,7 @@ const TXKGPhase = ({
               >
                 {continuePending ? "Starting LitMineX…" : "Proceed to LitMinex"}
               </Button>
+              )}
             </Box>
           </Box>
         </Box>

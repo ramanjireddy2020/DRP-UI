@@ -30,7 +30,7 @@ export const SCREENSUITE_UNAVAILABLE_MESSAGE =
 
 /**
  * Dock compounds against the protein. Returns 202 { jobId }.
- * @param {object} payload - { target, targets?, compounds?: [{ drug_name, identifier? }], structures? }
+ * @param {object} payload - { target, targets?, compounds?: [{ drug_name } | { identifier, identifierType }], structures? }
  */
 export const screen = async (payload) =>
   unwrap(await apiClient.post("/agents/screensuite/screen", payload));

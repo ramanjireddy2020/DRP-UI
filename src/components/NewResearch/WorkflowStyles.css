@@ -481,7 +481,11 @@
   align-items: center;
   padding: 3px 8px;
   gap: 6px;
-  width: 80px;
+  /* Grows with the branch name up to a limit; longer names are cut with an
+     ellipsis instead of spilling out of the selector (testing 2026-10-16). */
+  width: auto;
+  min-width: 80px;
+  max-width: 220px;
   height: 22px;
   background: #F8FAFC;
   border: 1px solid #E2E8F0;
@@ -500,7 +504,10 @@
 }
 
 .branch-selector .name {
-  width: 28px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   height: 16px;
   font-family: 'Geist', sans-serif;
   font-style: normal;
@@ -508,9 +515,8 @@
   font-size: 12px;
   line-height: 16px;
   color: #1E293B;
-  flex: none;
+  flex: 0 1 auto;
   order: 1;
-  flex-grow: 0;
 }
 
 .branch-selector .chevron {
@@ -727,12 +733,16 @@
   padding: 0px;
   gap: 1px;
   height: 30px;
-  flex: none;
+  flex: 1 1 auto;
+  min-width: 0;
   order: 1;
-  flex-grow: 1;
 }
 
 .text-group .branch-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   height: 16px;
   font-family: 'Geist', sans-serif;
   font-style: normal;
@@ -750,6 +760,10 @@
 }
 
 .text-group .branch-description {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   height: 13px;
   font-family: 'Geist', sans-serif;
   font-style: normal;

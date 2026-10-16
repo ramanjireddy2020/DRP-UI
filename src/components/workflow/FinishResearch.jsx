@@ -77,26 +77,39 @@ const Divider = () => (
 
 const Header = () => <AgentHeader label="Research Summary" />;
 
-const DecisionCard = ({ onContinue, onEndTask, pending, error }) => (
+/**
+ * With branches, a branch can be finished on its own (it does not finish the
+ * others, testing 2026-10-16) or every branch at once, which saves the
+ * session and summarises all of them. Without branches it is End Task.
+ */
+const DecisionCard = ({ onContinue, hasBranches, branchLabel, onFinishBranch, onFinishAll, pending, error }) => (
   <Box sx={card}>
     <Header />
     <Typography sx={{ ...text, fontSize: "15px", lineHeight: "22px", mb: "16px" }}>
-      Would you like to continue exploring or conclude this research
-      session? Ending the task saves the session.
+      {hasBranches
+        ? `Would you like to continue exploring, finish the ${branchLabel} branch, or finish every branch? Finishing all branches saves the session.`
+        : "Would you like to continue exploring or conclude this research session? Ending the task saves the session."}
     </Typography>
 
     <Box sx={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-      <Button onClick={onContinue} disabled={pending} sx={primaryButton}>
+      <Button onClick={onContinue} disabled={Boolean(pending)} sx={primaryButton}>
         Continue Research
       </Button>
       <Button
-        onClick={onEndTask}
-        disabled={!onEndTask || pending}
-        title={onEndTask ? undefined : "Saving the session is not available here"}
+        onClick={onFinishBranch}
+        disabled={!onFinishBranch || Boolean(pending)}
+        title={onFinishBranch ? undefined : "Saving the session is not available here"}
         sx={buttonBase}
       >
-        {pending ? "Saving the session…" : "End Task"}
+        {pending === "branch"
+          ? hasBranches ? "Finishing…" : "Saving the session…"
+          : hasBranches ? `Finish ${branchLabel}` : "End Task"}
       </Button>
+      {hasBranches && (
+        <Button onClick={onFinishAll} disabled={!onFinishAll || Boolean(pending)} sx={buttonBase}>
+          {pending === "all" ? "Finishing all branches…" : "Finish all branches"}
+        </Button>
+      )}
     </Box>
 
     {error && (
@@ -107,7 +120,7 @@ const DecisionCard = ({ onContinue, onEndTask, pending, error }) => (
   </Box>
 );
 
-const SummaryCard = ({ sessionReport, researcherName, onNewResearch }) => {
+const SummaryCard = ({ sessionReport, researcherName, onNewResearch, heading, intro, status }) => {
   const [exportBlocked, setExportBlocked] = useState(false);
   const sections = sessionReport?.sections ?? [];
   const diseaseLabel = sessionReport?.disease || "";
@@ -116,15 +129,15 @@ const SummaryCard = ({ sessionReport, researcherName, onNewResearch }) => {
     <Box sx={card}>
       <Header />
       <Typography sx={{ ...text, fontSize: "15px", lineHeight: "22px", fontWeight: 500, mb: "14px" }}>
-        Research task completed and the session is saved. Here is your final summary:
+        {intro}
       </Typography>
 
       <Typography sx={summaryText}>
-        {`Research Summary - ${diseaseLabel || "Drug Repurposing"}\n`}
+        {`${heading} - ${diseaseLabel || "Drug Repurposing"}\n`}
         {sessionReport?.target ? `Target: ${sessionReport.target}\n` : ""}
         {diseaseLabel ? `Disease: ${diseaseLabel}\n` : ""}
         {researcherName ? `Researcher: ${researcherName}\n` : ""}
-        {"Status: SAVED ✓"}
+        {`Status: ${status}`}
       </Typography>
 
       {sections.map((section) => (
@@ -145,7 +158,7 @@ const SummaryCard = ({ sessionReport, researcherName, onNewResearch }) => {
       <Box sx={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
         <Button
           sx={primaryButton}
-          onClick={() => setExportBlocked(!printSessionReport(sessionReport, { researcherName }))}
+          onClick={() => setExportBlocked(!printSessionReport(sessionReport, { researcherName, heading }))}
           disabled={!sections.length}
         >
           Export Report
@@ -163,33 +176,88 @@ const SummaryCard = ({ sessionReport, researcherName, onNewResearch }) => {
 };
 
 /**
- * @param {"decision"|"summary"} stage
- * @param {() => Promise<void>} onEndTask - saves the session; rejects with the reason.
- * @param {() => void} onContinue - closes the panel.
- * @param {() => void} onSaved - End Task succeeded; the parent moves to "summary".
+ * @param {"decision"|"summary"|"all"} stage
+ * @param {boolean} hasBranches - the session has branches besides Main.
+ * @param {string} branchLabel - the branch in view ("Main" for Main).
+ * @param {() => Promise<void>} onFinishBranch - finishes the branch in view
+ *   (without branches: saves the session); rejects with the reason.
+ * @param {() => Promise<void>} onFinishAll - saves the session and builds the
+ *   summary across branches; rejects with the reason.
+ * @param {object} sessionReport - the branch in view's report.
+ * @param {{ status: "loading"|"ready", report?: object }} allReport - the
+ *   report across branches, for stage "all".
  */
-const FinishResearch = ({ stage, onContinue, onEndTask, onSaved, sessionReport, onNewResearch }) => {
+const FinishResearch = ({
+  stage,
+  onContinue,
+  hasBranches = false,
+  branchLabel = "Main",
+  onFinishBranch,
+  onFinishAll,
+  sessionReport,
+  allReport = null,
+  onNewResearch,
+}) => {
   const { displayName: researcherName } = useCurrentUser();
-  const [state, setState] = useState({ pending: false, error: null });
+  const [state, setState] = useState({ pending: null, error: null });
 
-  const handleEndTask = async () => {
-    setState({ pending: true, error: null });
+  const run = (which, action) => async () => {
+    setState({ pending: which, error: null });
     try {
-      await onEndTask();
-      setState({ pending: false, error: null });
-      onSaved?.();
+      await action();
+      setState({ pending: null, error: null });
     } catch (err) {
-      setState({ pending: false, error: err?.message || "The session could not be saved. Please try again." });
+      setState({ pending: null, error: err?.message || "The session could not be saved. Please try again." });
     }
   };
 
-  if (stage === "summary") {
-    return <SummaryCard sessionReport={sessionReport} researcherName={researcherName} onNewResearch={onNewResearch} />;
+  if (stage === "all") {
+    if (allReport?.status !== "ready") {
+      return (
+        <Box sx={card}>
+          <Header />
+          <Typography sx={{ ...text, fontSize: "14px", lineHeight: "22px" }}>
+            Building the summary for every branch…
+          </Typography>
+        </Box>
+      );
+    }
+    return (
+      <SummaryCard
+        sessionReport={allReport.report}
+        researcherName={researcherName}
+        onNewResearch={onNewResearch}
+        heading="Research Summary — all branches"
+        intro="Every branch is finished and the session is saved. Here is the overall summary, then each branch:"
+        status="SAVED ✓"
+      />
+    );
   }
+
+  if (stage === "summary") {
+    return (
+      <SummaryCard
+        sessionReport={sessionReport}
+        researcherName={researcherName}
+        onNewResearch={onNewResearch}
+        heading={hasBranches ? `Research Summary — ${branchLabel}` : "Research Summary"}
+        intro={
+          hasBranches
+            ? `The ${branchLabel} branch is finished; the other branches are unchanged. Here is its summary:`
+            : "Research task completed and the session is saved. Here is your final summary:"
+        }
+        status={hasBranches ? "BRANCH FINISHED ✓" : "SAVED ✓"}
+      />
+    );
+  }
+
   return (
     <DecisionCard
       onContinue={onContinue}
-      onEndTask={onEndTask ? handleEndTask : undefined}
+      hasBranches={hasBranches}
+      branchLabel={branchLabel}
+      onFinishBranch={onFinishBranch ? run("branch", onFinishBranch) : undefined}
+      onFinishAll={onFinishAll ? run("all", onFinishAll) : undefined}
       pending={state.pending}
       error={state.error}
     />

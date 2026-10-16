@@ -1,6 +1,7 @@
 import axios from "axios";
 import { fetchAuthSession, signOut } from "@aws-amplify/auth";
 import API_CONFIG from "../apiconfig";
+import { redactDeep, redactSecrets } from "../workflow/redact";
 
 const apiClient = axios.create({
   baseURL: API_CONFIG.API_BASE_URL,
@@ -59,7 +60,15 @@ export const setUnauthorizedHandler = (handler) => {
 let redirecting = false;
 
 apiClient.interceptors.response.use(
-  (response) => response,
+  // Credentials never reach the screen, whatever the backend puts in a
+  // message (testing 2026-10-16: an OpenAI key inside a NovSearch analysis).
+  (response) => {
+    const { data } = response;
+    if (typeof data === "string" || (data && typeof data === "object" && data.constructor === Object) || Array.isArray(data)) {
+      response.data = redactDeep(data);
+    }
+    return response;
+  },
   async (error) => {
     const status = error.response?.status;
 
@@ -87,7 +96,7 @@ apiClient.interceptors.response.use(
         ? `Backend request failed (${error.response.status}).`
         : "Unable to reach the backend.");
 
-    return Promise.reject(Object.assign(error, { userMessage: message, status }));
+    return Promise.reject(Object.assign(error, { userMessage: redactSecrets(message), status }));
   }
 );
 

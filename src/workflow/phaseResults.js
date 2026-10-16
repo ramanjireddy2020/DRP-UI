@@ -550,6 +550,20 @@ export const normalizeCuratexResults = (payload, { pageSize: requested, excludeC
   const keep = (v) =>
     excluded.size && Array.isArray(v) ? v.filter((p) => !excluded.has(squash(p))) : v;
 
+  // The score's scale, decided once for the whole list. Each score used to be
+  // judged on its own ("<= 1 means 0–1"), so on the backend's 0–100 scale a
+  // low score of 1.0 was shown as 100.0 — e.g. a candidate with 0 of 3
+  // criteria met (testing 2026-10-16). A scale the payload states wins.
+  const rawScoreOf = (c) =>
+    Number(
+      c?.score ?? c?.compositeScore ?? c?.composite_score ?? c?.matchScore ?? c?.match_score ??
+      c?.total_score ?? c?.totalScore ?? c?.final_score ?? c?.weighted_score
+    );
+  const statedMax = Number(payload?.scoreScale ?? payload?.maxScore ?? payload?.score_scale ?? payload?.max_score);
+  const scoreFactor = Number.isFinite(statedMax) && statedMax > 0
+    ? 100 / statedMax
+    : items.some((c) => rawScoreOf(c) > 1) ? 1 : 100;
+
   const page = Number(payload?.page) || 1;
   const pageSize = derivePageSize(payload, items.filter(Boolean).length, requested);
 
@@ -573,10 +587,7 @@ export const normalizeCuratexResults = (payload, { pageSize: requested, excludeC
 
       // The API sends the composite score as camelCase `compositeScore`; only
       // `composite_score` was read, so the score column showed "—".
-      const rawScore =
-        c.score ?? c.compositeScore ?? c.composite_score ?? c.matchScore ?? c.match_score ??
-        c.total_score ?? c.totalScore ?? c.final_score ?? c.weighted_score;
-      const scoreNum = Number(rawScore);
+      const scoreNum = rawScoreOf(c);
 
       return {
         // Ranks continue across pages instead of restarting at 1.
@@ -584,12 +595,8 @@ export const normalizeCuratexResults = (payload, { pageSize: requested, excludeC
         name,
         matchedProps: asText(matched),
         mismatchedProps: asText(mismatched),
-        // The API's example score is 0.82 while the fixture showed 93.5, so a
-        // 0–1 score is scaled to a percentage and anything larger is left
-        // alone.
-        score: Number.isFinite(scoreNum)
-          ? (scoreNum <= 1 ? scoreNum * 100 : scoreNum).toFixed(1)
-          : "—",
+        // Shown as a percentage, on the list's own scale (scoreFactor).
+        score: Number.isFinite(scoreNum) ? (scoreNum * scoreFactor).toFixed(1) : "—",
         rawScore: Number.isFinite(scoreNum) ? scoreNum : null,
         smiles: c.smiles ?? null,
         chemblId: c.chemblId ?? c.chembl_id ?? null,

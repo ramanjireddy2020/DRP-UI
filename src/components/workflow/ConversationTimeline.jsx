@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useRef } from "react";
+import React, { useEffect, useRef } from "react";
 import { Box, Typography, CircularProgress } from "@mui/material";
 import { FONT, TEAL, BORDER, TEXT_DARK, USER_MSG_BG } from "./workflowConstants";
 import FormattedText from "./FormattedText";
@@ -164,16 +164,13 @@ const ConversationTimeline = ({
   const { chatLabel: userLabel } = useCurrentUser();
 
   const scrollerRef = useRef(null);
+  const contentRef = useRef(null);
+  // Whether to follow new content. Set only from scrolling (the reader's, or
+  // ours to the bottom). It used to be re-measured after every render — after
+  // the new content was already in the DOM — so growth itself read as "the
+  // reader scrolled up" and results arriving below stayed out of view
+  // (testing 2026-10-16).
   const stickToBottom = useRef(true);
-
-  // Record whether the reader was at the bottom BEFORE this render's DOM
-  // changes are painted, so the decision is not made against the new height.
-  useLayoutEffect(() => {
-    const el = scrollerRef.current;
-    if (!el) return;
-    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-    stickToBottom.current = distance <= NEAR_BOTTOM_PX;
-  });
 
   // When the researcher sends a message, always bring it into view, even if
   // they had scrolled up into a module card to read it before typing.
@@ -188,8 +185,22 @@ const ConversationTimeline = ({
     const userJustSent = lastUserMessageId !== seenUserMessageId.current;
     seenUserMessageId.current = lastUserMessageId;
     if (!userJustSent && !stickToBottom.current) return;
+    stickToBottom.current = true;
     el.scrollTop = el.scrollHeight;
   }, [blocks, pending, lastUserMessageId]);
+
+  // A module card grows as its results load without the block list changing,
+  // so the content's height is watched too and followed while pinned.
+  useEffect(() => {
+    const el = scrollerRef.current;
+    const content = contentRef.current;
+    if (!el || !content || typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(() => {
+      if (stickToBottom.current) el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
 
   const onScroll = () => {
     const el = scrollerRef.current;
@@ -208,11 +219,9 @@ const ConversationTimeline = ({
         overflowX: "hidden",
         px: { xs: "16px", md: "32px" },
         py: "20px",
-        display: "flex",
-        flexDirection: "column",
-        gap: "18px",
       }}
     >
+      <Box ref={contentRef} sx={{ display: "flex", flexDirection: "column", gap: "18px" }}>
       {blocks.map((block) => {
         if (block.kind === "message") {
           const m = block.message;
@@ -266,6 +275,7 @@ const ConversationTimeline = ({
           </Typography>
         </Box>
       )}
+      </Box>
     </Box>
   );
 };

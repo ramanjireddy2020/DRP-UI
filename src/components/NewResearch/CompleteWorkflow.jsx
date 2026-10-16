@@ -19,19 +19,21 @@ import NoveltySearchPhase from "../workflow/NoveltySearch/NoveltySearchPhase";
 import FinishResearch from "../workflow/FinishResearch";
 import useWorkflowSession from "../../hooks/useWorkflowSession";
 import useJob from "../../hooks/useJob";
-import usePhaseResults from "../../hooks/usePhaseResults";
+import usePhaseResults, { FETCHERS } from "../../hooks/usePhaseResults";
 import { moduleForPhase, isErrorPhase, isLoadingPhase, MODULE_BY_KEY } from "../../workflow/moduleMap";
 import { normalizeTxkgResult, normalizeMetapath } from "../../workflow/txkgResult";
 import { getArtifacts } from "../../services/api/sessions";
 import {
   getSessionProject, setSessionProject, fileSessionResults,
   getCompoundsJob, setCompoundsJob, setExcludedCriteria, getPatentThread, setPatentThread,
+  getBranchPicks, setBranchPicks, getFinishedBranches, setBranchFinished,
 } from "../../workflow/sessionStore";
 import AddToProjectDialog from "../Projects/AddToProjectDialog";
-import { toGeneNames, buildSelections, geneNameForTarget } from "../../workflow/selections";
+import { toGeneNames, buildSelections, geneNameForTarget, looksLikeAccession, compoundLabel } from "../../workflow/selections";
 import { toApiWeights, toApiValues, zeroWeightCriteria } from "../../workflow/phaseResults";
 import { withProductWording } from "../../workflow/wording";
-import { buildSessionReport } from "../../workflow/sessionReport";
+import { buildSessionReport, buildAllBranchesReport } from "../../workflow/sessionReport";
+import { getJobResult, getJobStatus, isTerminalSuccess, isTerminalFailure, readJobError } from "../../services/api/jobs";
 import curatexApi from "../../services/api/curatex";
 import litminexApi from "../../services/api/litminex";
 import txkgApi from "../../services/api/txkg";
@@ -143,6 +145,17 @@ const useModuleJob = (
  */
 /** Modules whose automatic lead-in agent text is hidden; see timelineBlocks. */
 const CARD_IS_THE_ANSWER = new Set(["txkg", "curatex"]);
+
+/** Identity of a CurateX profile's content, for re-seeding the form. */
+const profileKeyOf = (profile) =>
+  `${profile?.target ?? ""}|${JSON.stringify(profile?.profileData ?? {})}|${JSON.stringify(profile?.weights ?? {})}`;
+
+/** How often jobs on branches not in view are checked. */
+const BACKGROUND_POLL_MS = 15000;
+
+/** Re-reads of an empty ScreenSuite result before it counts as "no results". */
+const SCREENSUITE_EMPTY_READS = 12;
+const SCREENSUITE_EMPTY_READ_MS = 10000;
 
 const liveProgress = (job) => {
   const text = job?.progressMessage;
@@ -409,6 +422,50 @@ const CompleteWorkflow = () => {
     setSessionRefreshTick((n) => n + 1);
   }, [refreshSession]);
 
+  /**
+   * Jobs running on branches that are not in view. Only the branch on screen
+   * is polled by useModuleJob, so another branch kept showing "running" until
+   * it was opened (testing 2026-10-16). Their status is checked here, and a
+   * finished or failed job moves that branch's module on.
+   */
+  const [backgroundTick, setBackgroundTick] = useState(0);
+  useEffect(() => {
+    const here = (session.activeBranch ?? null) ?? "__main__";
+    const running = [];
+    Object.entries(session.branchSteps ?? {}).forEach(([branchKey, saved]) => {
+      if (branchKey === here) return;
+      Object.entries(saved?.steps ?? {}).forEach(([key, step]) => {
+        if (MODULE_BY_KEY[key] && step?.jobId && isLoadingPhase(step.phase ?? "")) {
+          running.push({ branch: branchKey === "__main__" ? null : branchKey, key, jobId: step.jobId });
+        }
+      });
+    });
+    if (!running.length) return undefined;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      for (const job of running) {
+        try {
+          const payload = await getJobStatus(job.jobId);
+          if (cancelled) return;
+          if (isTerminalFailure(payload)) {
+            setStepError(readJobError(payload) || "The job failed.", job.key, job.branch);
+          } else if (isTerminalSuccess(payload)) {
+            session.setPhase(MODULE_BY_KEY[job.key].resultsPhase, job.key, job.branch);
+            handleJobCompleted();
+          }
+        } catch {
+          // Checked again next round.
+        }
+      }
+      if (!cancelled) setBackgroundTick((n) => n + 1);
+    }, BACKGROUND_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.branchSteps, session.activeBranch, backgroundTick]);
+
   const jobOptions = { setPhase, setStepData, setStepError, onCompleted: handleJobCompleted };
   const txkgJob = useModuleJob("txkg", session.steps.txkg, { ...jobOptions, fetchResult: true });
   const litminexJob = useModuleJob("litminex", session.steps.litminex, jobOptions);
@@ -526,6 +583,33 @@ const CompleteWorkflow = () => {
     return () => clearTimeout(timer);
   }, [screensuiteSettled, screensuite.error, screensuite.data, screensuiteReload]);
 
+  // Right after a PDB is picked the job can report "completed" before docking
+  // has run, so the card said "Docking returned no results" while docking
+  // was still going; Rerun was the only way out (testing 2026-10-16). An
+  // empty result that isn't asking for a structure is re-read for a while,
+  // shown as "starting", before it counts as no results.
+  const screensuiteJobId = screensuiteStep?.jobId ?? null;
+  const [screensuiteEmptyReads, setScreensuiteEmptyReads] = useState({});
+  const screensuiteEmpty =
+    Boolean(screensuite.data) &&
+    !screensuite.loading &&
+    !screensuite.error &&
+    !screensuite.data.awaitingInput &&
+    !(screensuite.data.results ?? []).length &&
+    !(screensuite.data.hits ?? []).length;
+  const screensuiteReadsLeft = screensuiteJobId
+    ? SCREENSUITE_EMPTY_READS - (screensuiteEmptyReads[screensuiteJobId] ?? 0)
+    : 0;
+  const screensuiteStarting = screensuiteEmpty && screensuiteReadsLeft > 0;
+  useEffect(() => {
+    if (!screensuiteStarting) return undefined;
+    const timer = setTimeout(() => {
+      setScreensuiteEmptyReads((prev) => ({ ...prev, [screensuiteJobId]: (prev[screensuiteJobId] ?? 0) + 1 }));
+      screensuiteReload();
+    }, SCREENSUITE_EMPTY_READ_MS);
+    return () => clearTimeout(timer);
+  }, [screensuiteStarting, screensuiteJobId, screensuiteReadsLeft, screensuiteReload]);
+
   const novsearchStep = session.steps.novsearch;
   const novsearch = usePhaseResults("novsearch", novsearchStep?.jobId, {
     enabled: novsearchStep?.phase === "novelty-results",
@@ -570,15 +654,20 @@ const CompleteWorkflow = () => {
     setRunSnapshots((prev) => {
       const next = { ...prev };
       superseded.forEach((r) => {
-        next[r.id] = lastSectionByKey.current[r.key] ?? null;
+        next[r.id] = lastSectionByKey.current[`${r.key}|${r.branch ?? ""}`] ?? null;
       });
       return next;
     });
   }, [session.runs, runSnapshots]);
   useEffect(() => {
     sessionReport.sections.forEach((section) => {
-      lastSectionByKey.current[section.key] = section;
+      // Per module AND branch: keyed by module only, an archived run could
+      // capture another branch's section.
+      lastSectionByKey.current[`${section.key}|${session.activeBranch ?? ""}`] = section;
     });
+    // Recorded when the report changes, not on a branch switch: right after a
+    // switch the report still holds the previous branch's data.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionReport]);
 
   const pipelineStep = session.steps.pipeline;
@@ -692,15 +781,108 @@ const CompleteWorkflow = () => {
    * card; it is now drawn at the end of the conversation and opened from the
    * toolbar once any module has results, or from NovSearch's own button.
    */
-  const [finishStage, setFinishStage] = useState(null);
+  //
+  // Per branch (testing 2026-10-16): finishing one branch leaves the others
+  // as they are, and "Finish all branches" saves the session and summarises
+  // every branch. The stage is kept per branch; the all-branches summary is
+  // the session's, so it shows on any branch.
+  const viewBranchKey = (session.activeBranch ?? null) ?? "__main__";
+  const [finishByBranch, setFinishByBranch] = useState({});
+  const [allBranchesReport, setAllBranchesReport] = useState(null);
+  const finishStage = allBranchesReport ? "all" : finishByBranch[viewBranchKey] ?? null;
   const finishRef = useRef(null);
   const canFinish = sessionReport.sections.length > 0;
+
+  /** Main plus every branch the session knows of: { key, branch, label }. */
+  const branchList = useMemo(() => {
+    const ids = [
+      ...new Set(
+        [...branches.map((b) => b.id), ...Object.keys(session.branchForks ?? {}), ...session.runs.map((r) => r.branch)].filter(Boolean)
+      ),
+    ];
+    return [
+      { key: "__main__", branch: null, label: "Main" },
+      ...ids.map((id) => ({ key: id, branch: id, label: branches.find((b) => b.id === id)?.name || id })),
+    ];
+  }, [branches, session.branchForks, session.runs]);
+  const viewBranchLabel = branchList.find((b) => b.key === viewBranchKey)?.label ?? "Main";
+  const hasBranches = branchList.length > 1;
+
+  const [finishedBranches, setFinishedBranches] = useState({});
+  useEffect(() => {
+    setFinishedBranches(getFinishedBranches(session.sessionId));
+  }, [session.sessionId]);
+
   const openFinishResearch = useCallback(() => {
-    setFinishStage((stage) => (stage === "summary" ? stage : "decision"));
-  }, []);
+    setFinishByBranch((prev) => ({
+      ...prev,
+      [viewBranchKey]: prev[viewBranchKey] === "summary" ? "summary" : "decision",
+    }));
+  }, [viewBranchKey]);
   useEffect(() => {
     if (finishStage) finishRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [finishStage]);
+  }, [finishStage, viewBranchKey]);
+
+  const markFinished = useCallback((keys) => {
+    keys.forEach((key) => setBranchFinished(session.sessionId, key));
+    setFinishedBranches(getFinishedBranches(session.sessionId));
+  }, [session.sessionId]);
+
+  /** Finish the branch in view; with no branches, End Task saves the session. */
+  const handleFinishBranch = useCallback(async () => {
+    if (!hasBranches) await handleEndTask();
+    markFinished([viewBranchKey]);
+    setFinishByBranch((prev) => ({ ...prev, [viewBranchKey]: "summary" }));
+  }, [hasBranches, handleEndTask, markFinished, viewBranchKey]);
+
+  /**
+   * One branch's report from its saved module slots. The branch in view
+   * already has its results loaded; any other branch's are fetched from its
+   * own steps' jobs.
+   */
+  const loadBranchReport = useCallback(async (steps) => {
+    const settled = (key) => {
+      const step = steps?.[key];
+      return Boolean(step?.jobId) && !step.error && !isLoadingPhase(step.phase ?? "") && !isErrorPhase(step.phase ?? "");
+    };
+    const fetchKind = (kind, jobId) => (jobId ? FETCHERS[kind](jobId, {}).catch(() => null) : Promise.resolve(null));
+    const compoundsJob = steps?.curatex?.data?.compoundsJobId ?? getCompoundsJob(steps?.curatex?.stepId);
+    const txkgRaw =
+      steps?.txkg?.data?.jobResult ??
+      (settled("txkg") ? await getJobResult(steps.txkg.jobId).catch(() => null) : null);
+    const [litminexData, profileData, curatexData, dockingData, noveltyData] = await Promise.all([
+      settled("litminex") ? fetchKind("litminex", steps.litminex.jobId) : null,
+      settled("curatex") ? fetchKind("curatex-profile", steps.curatex.jobId) : null,
+      compoundsJob ? fetchKind("curatex-results", compoundsJob) : null,
+      settled("screensuite") ? fetchKind("screensuite", steps.screensuite.jobId) : null,
+      settled("novsearch") ? fetchKind("novsearch", steps.novsearch.jobId) : null,
+    ]);
+    return buildSessionReport({
+      txkg: normalizeTxkgResult(txkgRaw),
+      litminex: litminexData,
+      curatexTarget: curatexData?.target || profileData?.target || null,
+      curatex: curatexData,
+      docking: dockingData,
+      novelty: noveltyData,
+    });
+  }, []);
+
+  /** Save the session, finish every branch and summarise them all. */
+  const handleFinishAll = useCallback(async () => {
+    await handleEndTask();
+    markFinished(branchList.map((b) => b.key));
+    setAllBranchesReport({ status: "loading" });
+    const reports = await Promise.all(
+      branchList.map(async (b) => ({
+        label: b.label,
+        report:
+          b.key === viewBranchKey
+            ? sessionReport
+            : await loadBranchReport(session.branchSteps?.[b.key]?.steps ?? null),
+      }))
+    );
+    setAllBranchesReport({ status: "ready", report: buildAllBranchesReport(reports) });
+  }, [handleEndTask, markFinished, branchList, viewBranchKey, sessionReport, loadBranchReport, session.branchSteps]);
 
   /**
    * The Artifacts tab badge: how many artifacts the session really has. It
@@ -769,7 +951,10 @@ const CompleteWorkflow = () => {
     const from = pickBranchRef.current;
     const to = session.activeBranch ?? null;
     if (from === to) return;
-    branchPicksRef.current[from ?? "__main__"] = { selectedTargets, selectedArticles, selectedCompound, profileData, selectedPatentIds };
+    branchPicksRef.current[from ?? "__main__"] = {
+      selectedTargets, selectedArticles, selectedCompound, profileData, selectedPatentIds,
+      profileSeeded: profileSeededRef.current,
+    };
     const saved = branchPicksRef.current[to ?? "__main__"];
     if (saved) {
       setSelectedTargets(saved.selectedTargets);
@@ -777,11 +962,54 @@ const CompleteWorkflow = () => {
       setSelectedCompound(saved.selectedCompound);
       setProfileData(saved.profileData);
       setSelectedPatentIds(saved.selectedPatentIds ?? []);
+      profileSeededRef.current = saved.profileSeeded ?? null;
     }
     pickBranchRef.current = to;
+    justSwitchedRef.current = true;
+    setBranchPicks(session.sessionId, branchPicksRef.current);
     // Only a branch switch triggers this; the picks are read as they were.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.activeBranch]);
+
+  // Picks per branch are kept in this browser too, so a reload no longer
+  // falls back to whichever branch's picks happened to load first (testing
+  // 2026-10-16). Restored once per session, then saved on every change.
+  const justSwitchedRef = useRef(false);
+  const restoredPicksFor = useRef(null);
+  useEffect(() => {
+    const sessionId = session.sessionId;
+    if (!sessionId || restoredPicksFor.current === sessionId) return;
+    restoredPicksFor.current = sessionId;
+    const stored = getBranchPicks(sessionId);
+    branchPicksRef.current = { ...stored, ...branchPicksRef.current };
+    const saved = stored[(session.activeBranch ?? null) ?? "__main__"];
+    if (saved) {
+      if (Array.isArray(saved.selectedTargets) && saved.selectedTargets.length) setSelectedTargets(saved.selectedTargets);
+      if (Array.isArray(saved.selectedArticles) && saved.selectedArticles.length) setSelectedArticles(saved.selectedArticles);
+      if (saved.selectedCompound) setSelectedCompound(saved.selectedCompound);
+      if (saved.profileData && Object.keys(saved.profileData).length) {
+        setProfileData(saved.profileData);
+        profileSeededRef.current = saved.profileSeeded ?? null;
+      }
+      if (Array.isArray(saved.selectedPatentIds)) setSelectedPatentIds(saved.selectedPatentIds);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.sessionId]);
+  useEffect(() => {
+    // The render right after a switch still holds the previous branch's
+    // picks; they were saved under that branch by the switch itself.
+    if (justSwitchedRef.current) {
+      justSwitchedRef.current = false;
+      return;
+    }
+    if (!session.sessionId || restoredPicksFor.current !== session.sessionId) return;
+    branchPicksRef.current[(session.activeBranch ?? null) ?? "__main__"] = {
+      selectedTargets, selectedArticles, selectedCompound, profileData, selectedPatentIds,
+      profileSeeded: profileSeededRef.current,
+    };
+    setBranchPicks(session.sessionId, branchPicksRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTargets, selectedArticles, selectedCompound, profileData, selectedPatentIds]);
 
   const handleToggleArticle = useCallback((articleId) => {
     setSelectedArticles((prev) =>
@@ -1022,11 +1250,17 @@ const CompleteWorkflow = () => {
    * arrive, then left alone so the researcher's edits are not overwritten by a
    * re-fetch.
    */
-  const profileSeededRef = useRef(false);
+  // Seeded per profile, not once per page load: a once-only flag meant a
+  // second CurateX profile (Main after a branch, or another protein) never
+  // reached the form (testing 2026-10-16). The key is the profile's content,
+  // and it is saved with each branch's picks so returning to a branch keeps
+  // its edits instead of re-seeding over them.
+  const profileSeededRef = useRef(null);
   useEffect(() => {
-    if (profileSeededRef.current) return;
     if (!curatexProfile.data?.hasData) return;
-    profileSeededRef.current = true;
+    const key = profileKeyOf(curatexProfile.data);
+    if (profileSeededRef.current === key) return;
+    profileSeededRef.current = key;
     setProfileData(curatexProfile.data.profileData);
   }, [curatexProfile.data]);
 
@@ -1235,12 +1469,14 @@ const CompleteWorkflow = () => {
           moduleKey: session.runs.find((r) => r.branch === id)?.key ?? forkRunKey(id),
         })),
     ];
+    // A finished branch says so; finishing is per branch now.
+    const finishedTag = (key) => (finishedBranches[key] ? ` · Finished ${finishedBranches[key]}` : "");
     const BRANCHES = [
-      { id: "main", label: "Main", sub: "Main research path" },
+      { id: "main", label: "Main", sub: `Main research path${finishedTag("__main__")}` },
       ...knownBranches.map((b) => ({
         id: b.id,
         label: b.name,
-        sub: b.description || [MODULE_BY_KEY[b.moduleKey]?.label, b.target].filter(Boolean).join(" · "),
+        sub: (b.description || [MODULE_BY_KEY[b.moduleKey]?.label, b.target].filter(Boolean).join(" · ")) + finishedTag(b.id),
         branch: b,
       })),
     ];
@@ -1420,7 +1656,7 @@ const CompleteWorkflow = () => {
                   <circle cx="3" cy="9" r="1.5" stroke="#64748B" strokeWidth="1.2" />
                   <path d="M3 4.5V7.5M3 4.5C5 4.5 7.5 4 7.5 3" stroke="#64748B" strokeWidth="1.2" strokeLinecap="round" />
                 </svg>
-                <span className="name">{selectedBranchLabel}</span>
+                <span className="name" title={selectedBranchLabel}>{selectedBranchLabel}</span>
                 <svg className="chevron" width="12" height="12" viewBox="0 0 12 12" fill="none">
                   <path d="M3 4.5L6 7.5L9 4.5" stroke="#64748B" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
@@ -1467,10 +1703,10 @@ const CompleteWorkflow = () => {
                       )}
                       
                       <div className="text-group">
-                        <span className={`branch-name ${selectedBranch === branch.id ? 'selected' : ''}`}>
+                        <span className={`branch-name ${selectedBranch === branch.id ? 'selected' : ''}`} title={branch.label}>
                           {branch.label}
                         </span>
-                        <span className="branch-description">{branch.sub}</span>
+                        <span className="branch-description" title={branch.sub}>{branch.sub}</span>
                       </div>
 
                       <div className="icon-edit">
@@ -2166,6 +2402,9 @@ const CompleteWorkflow = () => {
     }
 
     setWorkflowPhase("curatex-submitted");
+    // The branch this scoring run belongs to; the job is recorded there even
+    // if the researcher switches branch before the request returns.
+    const branch = session.activeBranch ?? null;
 
     // The researcher's edits, translated from the form's field names back to
     // the criterion names the scorer keys on. Removed parameters go out as 0.
@@ -2184,6 +2423,7 @@ const CompleteWorkflow = () => {
         // ignored today; the browser keeps it meanwhile).
         sessionId: session.sessionId,
         stepId: session.steps.curatex?.stepId ?? null,
+        branchName: branch,
       });
 
       const jobId = response?.jobId ?? response?.job_id ?? null;
@@ -2196,12 +2436,13 @@ const CompleteWorkflow = () => {
       // Remembered before the results load, so Match Details can leave out
       // the criteria this job was scored without.
       setExcludedCriteria(jobId, zeroWeightCriteria(weights));
-      session.setStepData({ compoundsJobId: jobId }, "curatex");
+      session.setStepData({ compoundsJobId: jobId }, "curatex", branch);
       setCompoundsJob(session.steps.curatex?.stepId, jobId);
     } catch (err) {
       session.setStepError(
         err?.userMessage || err?.message || "Compound scoring could not be started.",
-        "curatex"
+        "curatex",
+        branch
       );
     }
   }, [curatexProfile.data, selectedTargets, txkgResult, session, setWorkflowPhase]);
@@ -2223,6 +2464,33 @@ const CompleteWorkflow = () => {
     setScreeningPickerOpen(true);
   }, []);
 
+  /**
+   * The proteins in play on this branch, for every downstream picker: the
+   * TxKG targets plus the custom proteins the researcher added (TxKG's custom
+   * box) and the targets carried in the LitMineX / CurateX steps' selections.
+   * The pickers used to list TxKG's own rows only, so a custom protein had to
+   * be typed again at each step (testing 2026-10-16).
+   */
+  const proteinsInPlay = useMemo(() => {
+    const disease = String(txkgResult.disease ?? "").trim().toLowerCase();
+    const known = new Set(txkgResult.targets.map((t) => String(geneNameForTarget(t) ?? "").toUpperCase()).filter(Boolean));
+    const knownIds = new Set(txkgResult.targets.map((t) => String(t.id)));
+    const carried = [
+      ...selectedTargets.filter((id) => !knownIds.has(String(id))),
+      ...(session.steps.litminex?.data?.selections?.targetIds ?? []),
+      ...(session.steps.curatex?.data?.selections?.targetIds ?? []),
+    ];
+    const custom = [];
+    carried.forEach((value) => {
+      const symbol = String(value ?? "").trim();
+      if (!symbol || symbol.toLowerCase() === disease || looksLikeAccession(symbol)) return;
+      if (known.has(symbol.toUpperCase()) || custom.some((c) => c.toUpperCase() === symbol.toUpperCase())) return;
+      custom.push(symbol);
+    });
+    const customRows = custom.map((symbol) => ({ id: symbol, name: symbol, geneName: symbol, fullName: "Custom target", score: null }));
+    return { rows: [...txkgResult.targets, ...customRows], custom };
+  }, [txkgResult.targets, txkgResult.disease, selectedTargets, session.steps.litminex, session.steps.curatex]);
+
   const screeningOptions = useMemo(() => {
     const curatexTarget = curatexResults.data?.target || curatexProfile.data?.target || null;
     const seen = new Set();
@@ -2233,7 +2501,10 @@ const CompleteWorkflow = () => {
       seen.add(key.toUpperCase());
       proteins.push({ value: key, detail: detail || "" });
     };
+    const carriedProteins = [...new Set([...(curatexTarget ? [curatexTarget] : []), ...proteinsInPlay.custom])];
     if (curatexTarget) addProtein(curatexTarget, "CurateX target");
+    // Custom proteins carried from TxKG / LitMineX, next to TxKG's own.
+    proteinsInPlay.custom.forEach((symbol) => addProtein(symbol, "Custom target"));
     txkgResult.targets.forEach((t) => addProtein(geneNameForTarget(t), t.fullName));
     const compounds = (curatexResults.data?.compounds ?? []).map((c) => ({
       value: c.name,
@@ -2242,14 +2513,16 @@ const CompleteWorkflow = () => {
     return {
       proteins,
       compounds,
-      initialProteins: curatexTarget ? [curatexTarget] : proteins.slice(0, 1).map((p) => p.value),
+      // Ticked already: the CurateX target and any custom protein carried
+      // forward, so neither has to be selected again.
+      initialProteins: carriedProteins.length ? carriedProteins : proteins.slice(0, 1).map((p) => p.value),
       initialCompounds: screeningPreset
         ? screeningPreset
         : selectedCompound
         ? [selectedCompound.name]
         : compounds.slice(0, 1).map((c) => c.value),
     };
-  }, [curatexResults.data, curatexProfile.data, txkgResult.targets, selectedCompound, screeningPreset]);
+  }, [curatexResults.data, curatexProfile.data, txkgResult.targets, proteinsInPlay, selectedCompound, screeningPreset]);
 
   const handleConfirmScreening = useCallback(
     ({ proteins, compounds }) => {
@@ -2330,8 +2603,12 @@ const CompleteWorkflow = () => {
    */
   const [curatexPickerOpen, setCuratexPickerOpen] = useState(false);
 
-  /** A sensible default for the picker: the first carried target that isn't the disease. */
+  /**
+   * A sensible default for the picker: a custom protein the researcher
+   * carried forward, else the first carried target that isn't the disease.
+   */
   const curatexDefaultTarget = useMemo(() => {
+    if (proteinsInPlay.custom.length) return proteinsInPlay.custom[0];
     const fromStep = session.steps.litminex?.data?.selections?.targetIds;
     const carried = [
       ...(Array.isArray(fromStep) ? fromStep : []),
@@ -2339,14 +2616,22 @@ const CompleteWorkflow = () => {
     ];
     const disease = String(txkgResult.disease ?? "").trim().toLowerCase();
     return carried.find((id) => id && String(id).trim().toLowerCase() !== disease) ?? null;
-  }, [session.steps.litminex, selectedTargets, txkgResult.targets, txkgResult.disease]);
+  }, [proteinsInPlay, session.steps.litminex, selectedTargets, txkgResult.targets, txkgResult.disease]);
 
   const handleContinueToCurateX = useCallback(() => setCuratexPickerOpen(true), []);
 
   const handleConfirmCurateXTarget = useCallback((symbol) => {
     setCuratexPickerOpen(false);
-    session.handOff("curatex", buildSelections("curatex", { targetIds: [symbol] }));
-  }, [session]);
+    const key = String(symbol ?? "").trim().toUpperCase();
+    const row = txkgResult.targets.find(
+      (t) => String(geneNameForTarget(t) ?? "").toUpperCase() === key || String(t.id ?? "").toUpperCase() === key
+    );
+    const accession = row && looksLikeAccession(String(row.id)) ? String(row.id) : looksLikeAccession(symbol) ? symbol : null;
+    session.handOff(
+      "curatex",
+      buildSelections("curatex", { targetIds: [symbol], uniprotIds: accession ? [accession] : [] })
+    );
+  }, [session, txkgResult.targets]);
 
   /** The article the detail panel is showing, enriched from /articles/{id}. */
   const [articleDetail, setArticleDetail] = useState(null);
@@ -2749,6 +3034,9 @@ const CompleteWorkflow = () => {
           setActiveStep={setActiveStep}
           onContinue={handleContinueToLitMineX}
           continuePending={session.pending}
+          continued={session.runs.some(
+            (r) => r.key === "litminex" && (r.branch ?? null) === (session.activeBranch ?? null)
+          )}
           jobId={session.steps.txkg?.jobId ?? null}
           actions={txkgActions}
           subgraph={subgraph}
@@ -2834,7 +3122,7 @@ const CompleteWorkflow = () => {
       const sel = step?.data?.selections ?? {};
       const screenedProteins = Array.isArray(sel.targets) && sel.targets.length ? sel.targets : sel.target ? [sel.target] : [];
       const screenedCompounds = (Array.isArray(sel.compounds) ? sel.compounds : [])
-        .map((c) => (typeof c === "string" ? c : c?.drug_name))
+        .map(compoundLabel)
         .filter(Boolean);
       return (
         <>
@@ -2854,6 +3142,7 @@ const CompleteWorkflow = () => {
           screening={screensuite.data}
           jobId={screensuiteStep?.jobId ?? null}
           loading={screensuite.loading}
+          starting={screensuiteStarting}
           error={screensuite.error}
           onRetry={screensuite.reload}
           unavailable={SCREENSUITE_UNAVAILABLE}
@@ -3038,7 +3327,7 @@ const CompleteWorkflow = () => {
         case "curatex":
           return curatexResults.data?.target || curatexProfile.data?.target || join(sel.targetIds);
         case "screensuite":
-          return [join((sel.compounds ?? []).map((c) => (typeof c === "string" ? c : c?.drug_name))), join(sel.targets) || sel.target]
+          return [join((sel.compounds ?? []).map(compoundLabel)), join(sel.targets) || sel.target]
             .filter(Boolean)
             .join(" vs ");
         case "novsearch":
@@ -3137,10 +3426,16 @@ const CompleteWorkflow = () => {
             <Box ref={finishRef}>
               <FinishResearch
                 stage={finishStage}
-                onContinue={() => setFinishStage(null)}
-                onEndTask={handleEndTask}
-                onSaved={() => setFinishStage("summary")}
+                onContinue={() => {
+                  setAllBranchesReport(null);
+                  setFinishByBranch((prev) => ({ ...prev, [viewBranchKey]: null }));
+                }}
+                hasBranches={hasBranches}
+                branchLabel={viewBranchLabel}
+                onFinishBranch={handleFinishBranch}
+                onFinishAll={hasBranches ? handleFinishAll : undefined}
                 sessionReport={sessionReport}
+                allReport={allBranchesReport}
                 onNewResearch={() => navigate("/dashboard/new-research")}
               />
             </Box>
@@ -3291,7 +3586,7 @@ const CompleteWorkflow = () => {
 
       <ProteinTargetPickerDialog
         open={curatexPickerOpen}
-        targets={txkgResult.targets}
+        targets={proteinsInPlay.rows}
         initialSymbol={curatexDefaultTarget}
         disease={txkgResult.disease}
         pending={session.pending}

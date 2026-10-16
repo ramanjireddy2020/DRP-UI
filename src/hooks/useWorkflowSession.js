@@ -144,7 +144,38 @@ const switchBranch = (state, branch) => {
   };
 };
 
+/**
+ * An action that carries `onBranch` is written to THAT branch, whichever one
+ * is in view. A request's reply lands after an await, by which time the
+ * researcher may have switched branch; it used to be written into the branch
+ * in view, so one branch's job showed up on another (testing 2026-10-16).
+ * A branch out of view keeps its module state in `branchSteps`, so the action
+ * is applied there, and the shared parts (runs, thread) are kept.
+ */
 function reducer(state, action) {
+  if (action.onBranch === undefined || (action.onBranch ?? null) === (state.activeBranch ?? null)) {
+    return reduceInView(state, action);
+  }
+  const branchKey = branchKeyOf(action.onBranch);
+  const saved = state.branchSteps[branchKey];
+  if (!saved) return reduceInView(state, action);
+  const { onBranch, ...inner } = action;
+  const result = reduceInView(
+    { ...state, steps: saved.steps, activeKey: saved.activeKey, activeBranch: onBranch ?? null },
+    inner
+  );
+  return {
+    ...state,
+    runs: result.runs,
+    runSeq: result.runSeq,
+    activationOrder: result.activationOrder,
+    conversation: result.conversation,
+    seq: result.seq,
+    branchSteps: { ...state.branchSteps, [branchKey]: { steps: result.steps, activeKey: saved.activeKey } },
+  };
+}
+
+function reduceInView(state, action) {
   switch (action.type) {
     case "SESSION_CREATING":
       return { ...state, status: "creating", error: null };
@@ -868,20 +899,22 @@ const useWorkflowSession = () => {
     if (module) dispatch({ type: "GO_TO_MODULE", key: module.key });
   }, []);
 
-  const setPhase = useCallback((phase, key) => {
-    dispatch({ type: "SET_PHASE", phase, key });
+  // `branch` (optional): the branch the write belongs to, captured before an
+  // await; see reducer().
+  const setPhase = useCallback((phase, key, branch) => {
+    dispatch({ type: "SET_PHASE", phase, key, onBranch: branch });
   }, []);
 
-  const setStepData = useCallback((data, key) => {
-    dispatch({ type: "SET_STEP_DATA", data, key });
+  const setStepData = useCallback((data, key, branch) => {
+    dispatch({ type: "SET_STEP_DATA", data, key, onBranch: branch });
   }, []);
 
   const setStepJob = useCallback((jobId, stepId, key) => {
     dispatch({ type: "SET_STEP_JOB", jobId, stepId, key });
   }, []);
 
-  const setStepError = useCallback((error, key) => {
-    dispatch({ type: "SET_STEP_ERROR", error, key });
+  const setStepError = useCallback((error, key, branch) => {
+    dispatch({ type: "SET_STEP_ERROR", error, key, onBranch: branch });
   }, []);
 
   const appendMessages = useCallback((messages, key) => {
@@ -967,17 +1000,19 @@ const useWorkflowSession = () => {
       });
       dispatch({ type: "SET_PENDING", pending: true });
 
+      // The branch this step belongs to; the reply is written there even if
+      // the researcher has switched branch meanwhile.
+      const originBranch = branch !== undefined ? branch : activeBranchRef.current;
+
       let raw;
       try {
-        raw = await createStepRequest(
-          sessionId,
-          withBranch({ module, selections, fromStepId }, branch !== undefined ? branch : activeBranchRef.current)
-        );
+        raw = await createStepRequest(sessionId, withBranch({ module, selections, fromStepId }, originBranch));
       } catch (err) {
         dispatch({
           type: "SET_STEP_ERROR",
           key: moduleKey,
           error: err?.userMessage || err?.message || `Could not start ${module}.`,
+          onBranch: originBranch,
         });
         dispatch({ type: "SET_PENDING", pending: false });
         return null;
@@ -995,12 +1030,14 @@ const useWorkflowSession = () => {
         phase: MODULE_BY_KEY[landedKey].loadingPhase,
         jobId: parsed.jobId,
         stepId: parsed.stepId,
+        onBranch: originBranch,
       });
 
       dispatch({
         type: "SET_STEP_DATA",
         key: landedKey,
         data: { selections: raw?.selections ?? selections },
+        onBranch: originBranch,
       });
 
       return { ...parsed, moduleKey: landedKey };
@@ -1064,11 +1101,12 @@ const useWorkflowSession = () => {
 
       let raw;
       try {
-        raw = await postMessageRequest(sessionId, withBranch({ message, stepId }));
+        raw = await postMessageRequest(sessionId, withBranch({ message, stepId }, viewBranch));
       } catch (err) {
         dispatch({
           type: "APPEND_MESSAGES",
           key: originKey,
+          onBranch: viewBranch,
           messages: [
             {
               role: "agent",
@@ -1100,6 +1138,7 @@ const useWorkflowSession = () => {
         dispatch({
           type: "APPEND_MESSAGES",
           key: originKey,
+          onBranch: viewBranch,
           messages: [
             {
               role: parsed.role,
@@ -1122,6 +1161,7 @@ const useWorkflowSession = () => {
         dispatch({
           type: "APPEND_MESSAGES",
           key: originKey,
+          onBranch: viewBranch,
           messages: [
             {
               role: "agent",
@@ -1145,6 +1185,7 @@ const useWorkflowSession = () => {
             phase: MODULE_BY_KEY[landedKey].loadingPhase,
             jobId: parsed.jobId,
             stepId: parsed.stepId ?? undefined,
+            onBranch: viewBranch,
           });
         }
       }
@@ -1174,15 +1215,17 @@ const useWorkflowSession = () => {
       }
 
       dispatch({ type: "SET_PENDING", pending: true });
+      const originBranch = activeBranchRef.current;
 
       let raw;
       try {
-        raw = await rerunStepRequest(sessionId, stepId, withBranch({ params }));
+        raw = await rerunStepRequest(sessionId, stepId, withBranch({ params }, originBranch));
       } catch (err) {
         dispatch({
           type: "SET_STEP_ERROR",
           key,
           error: err?.userMessage || err?.message || "The rerun could not be started.",
+          onBranch: originBranch,
         });
         dispatch({ type: "SET_PENDING", pending: false });
         return null;
@@ -1200,6 +1243,7 @@ const useWorkflowSession = () => {
         stepId: parsed.stepId,
         // A rerun replaces the run in place rather than adding a new card.
         replace: true,
+        onBranch: originBranch,
       });
 
       return { ...parsed, moduleKey: landedKey };
@@ -1284,6 +1328,8 @@ const useWorkflowSession = () => {
     runs: state.runs,
     activeBranch: state.activeBranch,
     branchForks: state.branchForks,
+    /** Saved module slots of the branches not in view; see switchBranch. */
+    branchSteps: state.branchSteps,
     setActiveBranch,
     createBranch,
     conversation: state.conversation,

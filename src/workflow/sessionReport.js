@@ -124,12 +124,93 @@ export const buildSessionReport = ({ txkg, litminex, curatexTarget, curatex, doc
     });
   }
 
+  const bestHit = docking?.hasData
+    ? [...docking.hits].filter((h) => Number.isFinite(h.rawAffinity)).sort((a, b) => a.rawAffinity - b.rawAffinity)[0] ?? null
+    : null;
+
   return {
     disease: txkg?.disease || novelty?.disease || null,
     target: curatexTarget || novelty?.target || null,
     sections,
+    // Structured highlights, for the summary across branches.
+    facts: {
+      targets: txkg?.hasData ? top(txkg.targets, TOP_N).map((t) => t.name).filter(Boolean) : [],
+      candidates: curatex?.hasData ? top(curatex.compounds, TOP_N).map((c) => ({ name: c.name, score: c.score })) : [],
+      bestDocking: bestHit ? { ligand: bestHit.ligand, protein: bestHit.protein, affinity: bestHit.affinity, raw: bestHit.rawAffinity } : null,
+      viability: novelty?.hasData ? estimateViability(novelty.patents)?.label ?? null : null,
+    },
   };
 };
+
+/**
+ * The overall summary when every branch is finished at once: what the
+ * branches explored, what they share and the best of their results, as one
+ * section in the same { key, title, summary, note, items } shape.
+ *
+ * @param {{ label: string, report: object }[]} branches
+ */
+export const buildOverallSummary = (branches) => {
+  const withResults = branches.filter((b) => b.report?.sections?.length);
+  const items = [];
+
+  const targets = [...new Set(withResults.flatMap((b) => b.report.facts?.targets ?? []))];
+  if (targets.length) items.push(`Targets explored: ${targets.slice(0, 8).join(", ")}${targets.length > 8 ? ", …" : ""}`);
+
+  const byCandidate = new Map();
+  withResults.forEach((b) =>
+    (b.report.facts?.candidates ?? []).forEach((c) => {
+      const key = String(c.name).toUpperCase();
+      const entry = byCandidate.get(key) ?? { name: c.name, branches: [] };
+      if (!entry.branches.includes(b.label)) entry.branches.push(b.label);
+      byCandidate.set(key, entry);
+    })
+  );
+  const shared = [...byCandidate.values()].filter((c) => c.branches.length > 1);
+  if (shared.length) {
+    items.push(`Candidates found on more than one branch: ${shared.map((c) => `${c.name} (${c.branches.join(", ")})`).join("; ")}`);
+  } else {
+    const tops = withResults
+      .map((b) => (b.report.facts?.candidates?.[0] ? `${b.label}: ${b.report.facts.candidates[0].name} (score ${b.report.facts.candidates[0].score})` : null))
+      .filter(Boolean);
+    if (tops.length) items.push(`Top candidate per branch: ${tops.join("; ")}`);
+  }
+
+  const best = withResults
+    .map((b) => (b.report.facts?.bestDocking ? { ...b.report.facts.bestDocking, branch: b.label } : null))
+    .filter(Boolean)
+    .sort((a, b) => a.raw - b.raw)[0];
+  if (best) items.push(`Best docking: ${best.ligand} vs ${best.protein}, ${best.affinity} kcal/mol (${best.branch})`);
+
+  const novelty = withResults.map((b) => (b.report.facts?.viability ? `${b.label}: ${b.report.facts.viability}` : null)).filter(Boolean);
+  if (novelty.length) items.push(`Novelty: ${novelty.join("; ")}`);
+
+  return {
+    key: "overall",
+    title: "Overall summary",
+    summary: `${branches.length} branch${branches.length === 1 ? "" : "es"} finished, ${withResults.length} with results`,
+    note: null,
+    items,
+  };
+};
+
+/**
+ * One report for every branch: the overall summary first, then each branch's
+ * own sections under its name.
+ */
+export const buildAllBranchesReport = (branches) => ({
+  disease: branches.map((b) => b.report?.disease).find(Boolean) ?? null,
+  target: null,
+  sections: [
+    buildOverallSummary(branches),
+    ...branches.flatMap((b) =>
+      (b.report?.sections?.length ? b.report.sections : [{ key: "empty", title: "", summary: "No module results on this branch", note: null, items: [] }]).map((section) => ({
+        ...section,
+        key: `${b.label}|${section.key}`,
+        title: section.title ? `${b.label} — ${section.title}` : b.label,
+      }))
+    ),
+  ],
+});
 
 const escapeHtml = (value) =>
   String(value ?? "")
@@ -150,7 +231,7 @@ const plain = (value) =>
  * "Save as PDF" produces the file. Returns false if the browser blocked the
  * window.
  */
-export const printSessionReport = (report, { researcherName } = {}) => {
+export const printSessionReport = (report, { researcherName, heading } = {}) => {
   const win = window.open("", "_blank");
   if (!win) return false;
 
@@ -171,7 +252,7 @@ export const printSessionReport = (report, { researcherName } = {}) => {
 
   win.document.write(`<!DOCTYPE html>
 <html><head><meta charset="utf-8">
-<title>Research Summary${report.disease ? ` - ${escapeHtml(report.disease)}` : ""}</title>
+<title>${escapeHtml(heading || "Research Summary")}${report.disease ? ` - ${escapeHtml(report.disease)}` : ""}</title>
 <style>
   body { font-family: Inter, Arial, sans-serif; color: #0F172A; margin: 32px; font-size: 13px; line-height: 1.5; }
   h1 { font-size: 20px; margin: 0 0 4px; }
@@ -183,7 +264,7 @@ export const printSessionReport = (report, { researcherName } = {}) => {
   li { margin-bottom: 3px; }
 </style></head>
 <body>
-  <h1>Research Summary${report.disease ? ` — ${escapeHtml(report.disease)}` : ""}</h1>
+  <h1>${escapeHtml(heading || "Research Summary")}${report.disease ? ` — ${escapeHtml(report.disease)}` : ""}</h1>
   <div class="meta">Drug Repurposing Platform · ${date}${researcherName ? ` · ${escapeHtml(researcherName)}` : ""}${report.target ? ` · Target: ${escapeHtml(report.target)}` : ""}</div>
   ${sectionsHtml}
 </body></html>`);

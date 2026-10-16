@@ -9,6 +9,10 @@
  *    /agents/curatex/compounds isn't recorded on the session;
  *  - the criteria a candidates job was scored without: its results still
  *    list every criterion;
+ *  - which branches are finished: sessions have one status, not one per
+ *    branch;
+ *  - each branch's picks (targets, articles, compound, profile edits), so a
+ *    reload doesn't fall back to another branch's;
  *  - NovSearch patent Q&A per NovSearch job: /agents/novsearch/ask doesn't
  *    store answers.
  *
@@ -23,6 +27,8 @@ const KEYS = {
   projects: "drp.sessionProjects",
   compounds: "drp.curatexCompoundsJobs",
   excludedCriteria: "drp.curatexExcludedCriteria",
+  finishedBranches: "drp.finishedBranches",
+  branchPicks: "drp.branchPicks",
   patentQa: "drp.patentQa",
 };
 
@@ -103,6 +109,24 @@ export const setCompoundsJob = (stepId, jobId) => update(KEYS.compounds, stepId,
 export const getExcludedCriteria = (jobId) => (jobId ? read(KEYS.excludedCriteria)[jobId] ?? [] : []);
 export const setExcludedCriteria = (jobId, names) =>
   update(KEYS.excludedCriteria, jobId, Array.isArray(names) && names.length ? names : null);
+
+/* Finished branches per session --------------------------------------------- */
+
+/** → { [branchKey]: "YYYY-MM-DD" } ("__main__" for Main). */
+export const getFinishedBranches = (sessionId) => (sessionId ? read(KEYS.finishedBranches)[sessionId] ?? {} : {});
+export const setBranchFinished = (sessionId, branchKey) => {
+  if (!sessionId || !branchKey) return;
+  update(KEYS.finishedBranches, sessionId, {
+    ...getFinishedBranches(sessionId),
+    [branchKey]: new Date().toISOString().slice(0, 10),
+  });
+};
+
+/* Picks per branch, per session ---------------------------------------------- */
+
+/** → { [branchKey]: { selectedTargets, selectedArticles, selectedCompound, profileData, selectedPatentIds, profileSeeded } } */
+export const getBranchPicks = (sessionId) => (sessionId ? read(KEYS.branchPicks)[sessionId] ?? {} : {});
+export const setBranchPicks = (sessionId, picks) => update(KEYS.branchPicks, sessionId, picks && Object.keys(picks).length ? picks : null);
 
 /* NovSearch patent Q&A per NovSearch job ---------------------------------- */
 
