@@ -40,11 +40,14 @@ const RESULT_TYPE_LABELS = {
   targets: "Target Identification",
   literature: "Literature Review",
   articles: "Literature Review",
+  litminex_results: "Literature Review",
   candidates: "Candidate Selection",
   compounds: "Candidate Selection",
   screening: "Interaction Screening",
+  hits: "Interaction Screening",
   patents: "Novelty Assessment",
   novelty: "Novelty Assessment",
+  pipeline: "Full Pipeline",
 };
 
 const labelFor = (resultType) =>
