@@ -1,31 +1,34 @@
 import React, { useEffect, useState } from "react";
 import {
-  Box, Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle,
-  Radio, TextField, Typography,
+  Box, Button, CircularProgress, Collapse, Dialog, DialogActions, DialogContent,
+  DialogTitle, Radio, TextField, Typography,
 } from "@mui/material";
-import { listProjects, readProjectList } from "../../services/api/projects";
+import { listProjects, createProject, readProjectList } from "../../services/api/projects";
 import { fileSessionResults, setSessionProject } from "../../workflow/sessionStore";
 
 const FONT = "'Geist', sans-serif";
 const TEAL = "#00BCD4";
 const BORDER = "#E2E8F0";
 
-/**
- * Add a session to a project (testing 2026-10-13: there was no way to add
- * an existing session). The backend has no session → project link, so the
- * session's results are filed into the project (that is what the Project page
- * lists) and the link is remembered for this session in the browser.
- */
+const NEW_PROJECT_SENTINEL = "__new__";
+
 const AddToProjectDialog = ({ open, sessionId, sessionTitle = "", onClose, onAdded }) => {
   const [search, setSearch] = useState("");
   const [state, setState] = useState({ loading: false, error: null, items: [] });
   const [picked, setPicked] = useState(null);
   const [saving, setSaving] = useState({ busy: false, error: null });
 
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [createError, setCreateError] = useState(null);
+
   useEffect(() => {
     if (!open) return;
     setPicked(null);
     setSaving({ busy: false, error: null });
+    setShowCreate(false);
+    setNewName("");
+    setCreateError(null);
   }, [open]);
 
   useEffect(() => {
@@ -48,17 +51,35 @@ const AddToProjectDialog = ({ open, sessionId, sessionTitle = "", onClose, onAdd
   }, [open, search]);
 
   const confirm = async () => {
-    if (!picked || !sessionId) return;
+    if (!sessionId) return;
     setSaving({ busy: true, error: null });
+    setCreateError(null);
+
     try {
-      setSessionProject(sessionId, { projectId: picked.id, projectName: picked.name });
-      const added = await fileSessionResults(picked.id, sessionId);
+      let project = picked;
+
+      if (picked?.id === NEW_PROJECT_SENTINEL) {
+        const name = newName.trim();
+        if (!name) {
+          setSaving({ busy: false, error: null });
+          setCreateError("Enter a project name.");
+          return;
+        }
+        project = await createProject({ name });
+      }
+
+      if (!project?.id) return;
+
+      setSessionProject(sessionId, { projectId: project.id, projectName: project.name });
+      const added = await fileSessionResults(project.id, sessionId);
       setSaving({ busy: false, error: null });
-      onAdded?.({ projectId: picked.id, projectName: picked.name, added });
+      onAdded?.({ projectId: project.id, projectName: project.name, added });
     } catch (err) {
       setSaving({ busy: false, error: err?.userMessage || err?.message || "The session could not be added to the project." });
     }
   };
+
+  const isNewSelected = picked?.id === NEW_PROJECT_SENTINEL;
 
   return (
     <Dialog open={open} onClose={saving.busy ? undefined : onClose} fullWidth maxWidth="sm">
@@ -91,7 +112,7 @@ const AddToProjectDialog = ({ open, sessionId, sessionTitle = "", onClose, onAdd
           )}
           {!state.loading && !state.error && state.items.length === 0 && (
             <Typography sx={{ fontFamily: FONT, fontSize: "12px", color: "#64748B", p: "12px" }}>
-              No projects found. Create one on the Projects page first.
+              No projects found. Use the option below to create one.
             </Typography>
           )}
           {!state.loading &&
@@ -100,7 +121,7 @@ const AddToProjectDialog = ({ open, sessionId, sessionTitle = "", onClose, onAdd
               return (
                 <Box
                   key={p.id}
-                  onClick={() => setPicked(p)}
+                  onClick={() => { setPicked(p); setShowCreate(false); }}
                   sx={{
                     display: "flex",
                     alignItems: "center",
@@ -119,6 +140,45 @@ const AddToProjectDialog = ({ open, sessionId, sessionTitle = "", onClose, onAdd
               );
             })}
         </Box>
+
+        {/* Create new project inline */}
+        <Box
+          onClick={() => { setPicked({ id: NEW_PROJECT_SENTINEL, name: "" }); setShowCreate(true); }}
+          sx={{
+            display: "flex", alignItems: "center", gap: "8px",
+            mt: "10px", p: "6px 12px 6px 4px", cursor: "pointer",
+            border: `1px solid ${BORDER}`, borderRadius: "8px",
+            bgcolor: isNewSelected ? "rgba(0,188,212,0.08)" : "transparent",
+          }}
+        >
+          <Radio
+            size="small"
+            checked={isNewSelected}
+            value={NEW_PROJECT_SENTINEL}
+            inputProps={{ "aria-label": "Create new project" }}
+            sx={{ "&.Mui-checked": { color: TEAL } }}
+          />
+          <Typography sx={{ fontFamily: FONT, fontSize: "13px", fontWeight: 600, color: "#0F172A" }}>
+            Create new project
+          </Typography>
+        </Box>
+
+        <Collapse in={showCreate}>
+          <Box sx={{ mt: "8px", display: "flex", flexDirection: "column", gap: "6px" }}>
+            <TextField
+              autoFocus
+              fullWidth
+              size="small"
+              placeholder="Project name…"
+              value={newName}
+              onChange={(e) => { setNewName(e.target.value); setCreateError(null); }}
+              error={Boolean(createError)}
+              helperText={createError}
+              inputProps={{ style: { fontFamily: FONT, fontSize: "13px" } }}
+            />
+          </Box>
+        </Collapse>
+
         {saving.error && (
           <Typography role="alert" sx={{ fontFamily: FONT, fontSize: "12px", color: "#B91C1C", mt: "8px" }}>{saving.error}</Typography>
         )}
@@ -130,11 +190,11 @@ const AddToProjectDialog = ({ open, sessionId, sessionTitle = "", onClose, onAdd
         <Button
           variant="contained"
           disableElevation
-          disabled={!picked || saving.busy}
+          disabled={!picked || saving.busy || (isNewSelected && !newName.trim())}
           onClick={confirm}
           sx={{ textTransform: "none", fontFamily: FONT, fontWeight: 600, bgcolor: TEAL, "&:hover": { bgcolor: "#00A9BF" } }}
         >
-          {saving.busy ? "Adding…" : "Add to project"}
+          {saving.busy ? (isNewSelected ? "Creating…" : "Adding…") : (isNewSelected ? "Create & add" : "Add to project")}
         </Button>
       </DialogActions>
     </Dialog>

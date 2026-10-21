@@ -104,6 +104,14 @@ export const patchSession = async (sessionId, payload) =>
 export const deleteSession = async (sessionId) =>
   unwrap(await apiClient.delete(`/sessions/${sessionId}`));
 
+/** Rename a hypothesis branch. @param {object} payload - { name } */
+export const renameBranch = async (sessionId, branchName, payload) =>
+  unwrap(await apiClient.patch(`/sessions/${sessionId}/branches/${encodeURIComponent(branchName)}`, payload));
+
+/** Delete a hypothesis branch and its steps/messages. */
+export const deleteBranch = async (sessionId, branchName) =>
+  unwrap(await apiClient.delete(`/sessions/${sessionId}/branches/${encodeURIComponent(branchName)}`));
+
 const sessionsApi = {
   createSession,
   getSession,
@@ -116,6 +124,8 @@ const sessionsApi = {
   getArtifacts,
   patchSession,
   deleteSession,
+  renameBranch,
+  deleteBranch,
 };
 
 export default sessionsApi;

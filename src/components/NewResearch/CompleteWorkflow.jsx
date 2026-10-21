@@ -5,7 +5,7 @@ import ShareModal from "../ShareModal/ShareModal";
 import ArticleDetailPanel from "./ArticleDetailPanel";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
-  Box, Typography, Button,
+  Box, Typography, Button, TextField,
   IconButton, Dialog, DialogTitle,
   DialogContent, DialogActions
 } from "@mui/material";
@@ -22,7 +22,7 @@ import useJob from "../../hooks/useJob";
 import usePhaseResults, { FETCHERS } from "../../hooks/usePhaseResults";
 import { moduleForPhase, isErrorPhase, isLoadingPhase, MODULE_BY_KEY } from "../../workflow/moduleMap";
 import { normalizeTxkgResult, normalizeMetapath } from "../../workflow/txkgResult";
-import { getArtifacts } from "../../services/api/sessions";
+import { getArtifacts, renameBranch, deleteBranch } from "../../services/api/sessions";
 import {
   getSessionProject, setSessionProject, fileSessionResults,
   getCompoundsJob, setCompoundsJob, setExcludedCriteria, getPatentThread, setPatentThread,
@@ -261,6 +261,10 @@ const CompleteWorkflow = () => {
   const [showArticleDetail, setShowArticleDetail] = useState(false);
   const [selectedArticle, setSelectedArticle] = useState(null);
   const [branchOpen, setBranchOpen] = useState(false);
+  const [branchRenameTarget, setBranchRenameTarget] = useState(null); // { id, currentName }
+  const [branchRenameValue, setBranchRenameValue] = useState("");
+  const [branchRenameError, setBranchRenameError] = useState(null);
+  const [branchDeleteTarget, setBranchDeleteTarget] = useState(null); // branch id pending delete confirm
   const [viewMode, setViewMode] = useState("chat"); // 'chat' | 'artifacts'
   const [showShareDialog, setShowShareDialog] = useState(false);
 
@@ -1709,14 +1713,36 @@ const CompleteWorkflow = () => {
                         <span className="branch-description" title={branch.sub}>{branch.sub}</span>
                       </div>
 
-                      <div className="icon-edit">
-                        <svg className="pen-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
-                          <path d="M11 2L14 5L5 14H2V11L11 2Z" stroke="#8C99A6" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                        </svg>
-                      </div>
+                      {branch.id !== "main" && (
+                        <div
+                          className="icon-edit"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setBranchRenameTarget({ id: branch.id, currentName: branch.branch?.name || branch.id });
+                            setBranchRenameValue(branch.label);
+                            setBranchRenameError(null);
+                            setBranchOpen(false);
+                          }}
+                          style={{ cursor: "pointer" }}
+                          title="Rename branch"
+                        >
+                          <svg className="pen-icon" width="16" height="16" viewBox="0 0 16 16" fill="none">
+                            <path d="M11 2L14 5L5 14H2V11L11 2Z" stroke="#8C99A6" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                        </div>
+                      )}
 
                       {branch.id !== "main" && (
-                        <div className="btn-delete-param">
+                        <div
+                          className="btn-delete-param"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setBranchDeleteTarget(branch.branch?.name || branch.id);
+                            setBranchOpen(false);
+                          }}
+                          style={{ cursor: "pointer" }}
+                          title="Delete branch"
+                        >
                           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                             <path d="M3 4H13M5 4V2.5H11V4M4 4L5 14H11L12 4" stroke="#94A3B8" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
                           </svg>
@@ -2626,12 +2652,38 @@ const CompleteWorkflow = () => {
     const row = txkgResult.targets.find(
       (t) => String(geneNameForTarget(t) ?? "").toUpperCase() === key || String(t.id ?? "").toUpperCase() === key
     );
-    const accession = row && looksLikeAccession(String(row.id)) ? String(row.id) : looksLikeAccession(symbol) ? symbol : null;
+    const accession = row && looksLikeAccession(String(row.uniprotId ?? "")) ? String(row.uniprotId) : looksLikeAccession(symbol) ? symbol : null;
     session.handOff(
       "curatex",
       buildSelections("curatex", { targetIds: [symbol], uniprotIds: accession ? [accession] : [] })
     );
   }, [session, txkgResult.targets]);
+
+  const handleBranchRenameConfirm = useCallback(async () => {
+    const newName = branchRenameValue.trim();
+    if (!newName) { setBranchRenameError("Name cannot be empty."); return; }
+    setBranchRenameError(null);
+    try {
+      await renameBranch(session.sessionId, branchRenameTarget.currentName, { name: newName });
+      await session.refreshSession?.();
+    } catch (err) {
+      setBranchRenameError(err?.userMessage || err?.message || "Rename failed.");
+      return;
+    }
+    setBranchRenameTarget(null);
+  }, [branchRenameValue, branchRenameTarget, session]);
+
+  const handleBranchDeleteConfirm = useCallback(async () => {
+    const branchId = branchDeleteTarget;
+    setBranchDeleteTarget(null);
+    try {
+      await deleteBranch(session.sessionId, branchId);
+      if (session.activeBranch === branchId) session.setActiveBranch(null);
+      await session.refreshSession?.();
+    } catch (err) {
+      // Non-fatal: the branch list will still show it until refresh
+    }
+  }, [branchDeleteTarget, session]);
 
   /** The article the detail panel is showing, enriched from /articles/{id}. */
   const [articleDetail, setArticleDetail] = useState(null);
@@ -3134,7 +3186,7 @@ const CompleteWorkflow = () => {
         )}
         <ScreeningSuitePhase
           workflowPhase={phase}
-          progressMessage={screensuiteJob.progressMessage}
+          progressMessage={liveProgress(screensuiteJob)}
           startedAt={screensuiteJob.startedAt}
           lastChangeAt={screensuiteJob.lastChangeAt}
           onStopWaiting={screensuiteJob.stop}
@@ -3653,6 +3705,51 @@ const CompleteWorkflow = () => {
           setSessionProjectState({ projectId: link.projectId, projectName: link.projectName });
         }}
       />
+
+      {/* Branch rename dialog */}
+      <Dialog open={Boolean(branchRenameTarget)} onClose={() => setBranchRenameTarget(null)} fullWidth maxWidth="xs">
+        <DialogTitle sx={{ fontFamily: "'Geist',sans-serif", fontSize: "16px", fontWeight: 700 }}>Rename branch</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            fullWidth
+            size="small"
+            label="Branch name"
+            value={branchRenameValue}
+            onChange={(e) => { setBranchRenameValue(e.target.value); setBranchRenameError(null); }}
+            error={Boolean(branchRenameError)}
+            helperText={branchRenameError}
+            onKeyDown={(e) => { if (e.key === "Enter") handleBranchRenameConfirm(); }}
+            sx={{ mt: 1 }}
+            inputProps={{ style: { fontFamily: "'Geist',sans-serif" } }}
+          />
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setBranchRenameTarget(null)} sx={{ textTransform: "none" }}>Cancel</Button>
+          <Button variant="contained" disableElevation onClick={handleBranchRenameConfirm}
+            disabled={!branchRenameValue.trim()}
+            sx={{ textTransform: "none", bgcolor: "#00BCD4", "&:hover": { bgcolor: "#00A9BF" } }}>
+            Rename
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Branch delete confirm dialog */}
+      <Dialog open={Boolean(branchDeleteTarget)} onClose={() => setBranchDeleteTarget(null)} fullWidth maxWidth="xs">
+        <DialogTitle sx={{ fontFamily: "'Geist',sans-serif", fontSize: "16px", fontWeight: 700 }}>Delete branch?</DialogTitle>
+        <DialogContent>
+          <Typography sx={{ fontFamily: "'Geist',sans-serif", fontSize: "13px", color: "#64748B" }}>
+            This will permanently delete the branch and all its steps and messages. This cannot be undone.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setBranchDeleteTarget(null)} sx={{ textTransform: "none" }}>Cancel</Button>
+          <Button variant="contained" disableElevation onClick={handleBranchDeleteConfirm}
+            sx={{ textTransform: "none", bgcolor: "#DC2626", "&:hover": { bgcolor: "#B91C1C" } }}>
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 };
