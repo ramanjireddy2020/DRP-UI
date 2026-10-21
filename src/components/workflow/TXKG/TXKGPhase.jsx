@@ -662,7 +662,6 @@ const TXKGPhase = ({
               how targets are marked and what "well explored", "moderate" and
               "high" mean. */}
           <DefinitionList title="What the labels mean" definitions={withScoreDefinition(txkg.labelDefinitions)} />
-          <DefinitionList title="What the scores mean" definitions={withScoreDefinition(txkg.scoreDefinitions, { addIfMissing: true })} />
         </Box>
       );
     }

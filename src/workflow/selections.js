@@ -66,6 +66,8 @@ export const toGeneNames = (selectedIds, targets) => {
   const byId = new Map();
   rows.forEach((t) => {
     if (t?.id) byId.set(String(t.id), t);
+    // TxKG targets use uniprotId (not id) as their primary key
+    if (t?.uniprotId) byId.set(String(t.uniprotId), t);
   });
 
   const targetIds = [];

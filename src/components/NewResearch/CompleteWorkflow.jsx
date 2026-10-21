@@ -1737,6 +1737,7 @@ const CompleteWorkflow = () => {
                           className="btn-delete-param"
                           onClick={(e) => {
                             e.stopPropagation();
+                            e.nativeEvent.stopImmediatePropagation();
                             setBranchDeleteTarget(branch.branch?.name || branch.id);
                             setBranchOpen(false);
                           }}
