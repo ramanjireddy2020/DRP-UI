@@ -2662,19 +2662,31 @@ const CompleteWorkflow = () => {
     );
   }, [session, txkgResult.targets]);
 
+  // The branch is identified by its name, so the new name replaces the old
+  // one in `branches` and across the session; the menu used to keep the old
+  // name until a reload, and later calls still sent it.
   const handleBranchRenameConfirm = useCallback(async () => {
     const newName = branchRenameValue.trim();
+    const oldName = branchRenameTarget.currentName;
     if (!newName) { setBranchRenameError("Name cannot be empty."); return; }
+    if (newName === oldName) { setBranchRenameTarget(null); return; }
+    const taken =
+      branches.some((b) => b.id === newName) ||
+      Object.keys(session.branchForks ?? {}).includes(newName) ||
+      session.runs.some((r) => r.branch === newName);
+    if (taken) { setBranchRenameError("A branch with this name already exists."); return; }
     setBranchRenameError(null);
     try {
-      await renameBranch(session.sessionId, branchRenameTarget.currentName, { name: newName });
-      await session.refreshSession?.();
+      await renameBranch(session.sessionId, oldName, { name: newName });
     } catch (err) {
       setBranchRenameError(err?.userMessage || err?.message || "Rename failed.");
       return;
     }
     setBranchRenameTarget(null);
-  }, [branchRenameValue, branchRenameTarget, session]);
+    setBranches((prev) => prev.map((b) => (b.id === oldName ? { ...b, id: newName, name: newName } : b)));
+    session.renameBranch(oldName, newName);
+    await session.refreshSession?.();
+  }, [branchRenameValue, branchRenameTarget, branches, session]);
 
   // The branch is also dropped from the session (fork point, runs,
   // messages); clearing only `branches` left it in the menu until a reload.

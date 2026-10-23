@@ -647,6 +647,35 @@ function reduceInView(state, action) {
       return next;
     }
 
+    /**
+     * A branch is identified by its name, so a rename re-keys it everywhere:
+     * its fork point (and the forks of branches made from it), saved module
+     * state, runs, messages and the branch in view. Renaming only told the
+     * server, so the BRANCH menu kept the old name until a reload, and the
+     * next call on the branch still sent the old name.
+     */
+    case "RENAME_BRANCH": {
+      const { from, to } = action;
+      if (!from || !to || from === to) return state;
+      const rename = (name) => (name === from ? to : name);
+      const branchForks = {};
+      Object.entries(state.branchForks).forEach(([name, fork]) => {
+        branchForks[rename(name)] = fork.parent === from ? { ...fork, parent: to } : fork;
+      });
+      const branchSteps = {};
+      Object.entries(state.branchSteps).forEach(([key, saved]) => {
+        branchSteps[key === branchKeyOf(from) ? branchKeyOf(to) : key] = saved;
+      });
+      return {
+        ...state,
+        branchForks,
+        branchSteps,
+        runs: state.runs.map((r) => (r.branch === from ? { ...r, branch: to } : r)),
+        conversation: state.conversation.map((m) => (m.branch === from ? { ...m, branch: to } : m)),
+        activeBranch: state.activeBranch === from ? to : state.activeBranch,
+      };
+    }
+
     case "RESET":
       return { ...initialState, steps: buildInitialSteps() };
 
@@ -979,6 +1008,16 @@ const useWorkflowSession = () => {
     const sessionId = sessionIdRef.current;
     if (sessionId) {
       patchSessionRequest(sessionId, { activeBranch: branch ?? "" }).catch(() => {});
+    }
+  }, []);
+
+  /** Re-key a branch the server has renamed; see RENAME_BRANCH. */
+  const renameBranch = useCallback((from, to) => {
+    const wasActive = activeBranchRef.current === from;
+    dispatch({ type: "RENAME_BRANCH", from, to });
+    const sessionId = sessionIdRef.current;
+    if (wasActive && sessionId) {
+      patchSessionRequest(sessionId, { activeBranch: to }).catch(() => {});
     }
   }, []);
 
@@ -1381,6 +1420,7 @@ const useWorkflowSession = () => {
     branchSteps: state.branchSteps,
     setActiveBranch,
     createBranch,
+    renameBranch,
     removeBranch,
     conversation: state.conversation,
     pending: state.pending,
