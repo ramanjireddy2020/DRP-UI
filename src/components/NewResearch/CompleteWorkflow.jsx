@@ -26,7 +26,7 @@ import { getArtifacts, renameBranch, deleteBranch } from "../../services/api/ses
 import {
   getSessionProject, setSessionProject, fileSessionResults,
   getCompoundsJob, setCompoundsJob, setExcludedCriteria, getPatentThread, setPatentThread,
-  getBranchPicks, setBranchPicks, getFinishedBranches, setBranchFinished,
+  getBranchPicks, setBranchPicks, getFinishedBranches, setBranchFinished, renameFinishedBranch,
 } from "../../workflow/sessionStore";
 import AddToProjectDialog from "../Projects/AddToProjectDialog";
 import { toGeneNames, buildSelections, geneNameForTarget, looksLikeAccession, compoundLabel } from "../../workflow/selections";
@@ -2685,6 +2685,10 @@ const CompleteWorkflow = () => {
     setBranchRenameTarget(null);
     setBranches((prev) => prev.map((b) => (b.id === oldName ? { ...b, id: newName, name: newName } : b)));
     session.renameBranch(oldName, newName);
+    // The Finished tag and the branch's finish stage are keyed by name too.
+    renameFinishedBranch(session.sessionId, oldName, newName);
+    setFinishedBranches(getFinishedBranches(session.sessionId));
+    setFinishByBranch(({ [oldName]: stage, ...rest }) => (stage ? { ...rest, [newName]: stage } : rest));
     await session.refreshSession?.();
   }, [branchRenameValue, branchRenameTarget, branches, session]);
 
