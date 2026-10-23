@@ -716,6 +716,7 @@ const CompleteWorkflow = () => {
   const [branchCreated, setBranchCreated] = useState(null);
   const [branchState, setBranchState] = useState({ pending: false, error: null });
   const [branches, setBranches] = useState([]);
+  const [deletedBranchIds, setDeletedBranchIds] = useState(() => new Set());
   const requestBranch = useCallback((source) => {
     setBranchCreated(null);
     setBranchState({ pending: false, error: null });
@@ -1464,7 +1465,7 @@ const CompleteWorkflow = () => {
     const knownBranches = [
       ...branches,
       ...[...new Set([...Object.keys(session.branchForks ?? {}), ...session.runs.map((r) => r.branch)].filter(Boolean))]
-        .filter((id) => !branches.some((b) => b.id === id))
+        .filter((id) => !branches.some((b) => b.id === id) && !deletedBranchIds.has(id))
         .map((id) => ({
           id,
           name: id,
@@ -2677,14 +2678,16 @@ const CompleteWorkflow = () => {
   const handleBranchDeleteConfirm = useCallback(async () => {
     const branchId = branchDeleteTarget;
     setBranchDeleteTarget(null);
+    // Optimistically remove from every local tracking structure so the branch
+    // disappears from the dropdown immediately, even before the server replies.
+    setBranches((prev) => prev.filter((b) => b.id !== branchId && b.name !== branchId));
+    setDeletedBranchIds((prev) => new Set([...prev, branchId]));
+    if (session.activeBranch === branchId) session.setActiveBranch(null);
     try {
       await deleteBranch(session.sessionId, branchId);
-      setBranches((prev) => prev.filter((b) => b.id !== branchId && b.name !== branchId));
-      if (session.activeBranch === branchId) session.setActiveBranch(null);
       await session.refreshSession?.();
     } catch (err) {
       console.error("Branch delete failed:", err?.userMessage || err?.message || err);
-      await session.refreshSession?.();
     }
   }, [branchDeleteTarget, session]);
 
