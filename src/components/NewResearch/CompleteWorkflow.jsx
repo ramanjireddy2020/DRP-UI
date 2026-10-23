@@ -2679,10 +2679,12 @@ const CompleteWorkflow = () => {
     setBranchDeleteTarget(null);
     try {
       await deleteBranch(session.sessionId, branchId);
+      setBranches((prev) => prev.filter((b) => b.id !== branchId && b.name !== branchId));
       if (session.activeBranch === branchId) session.setActiveBranch(null);
       await session.refreshSession?.();
     } catch (err) {
-      // Non-fatal: the branch list will still show it until refresh
+      console.error("Branch delete failed:", err?.userMessage || err?.message || err);
+      await session.refreshSession?.();
     }
   }, [branchDeleteTarget, session]);
 
