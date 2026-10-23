@@ -265,6 +265,7 @@ const CompleteWorkflow = () => {
   const [branchRenameValue, setBranchRenameValue] = useState("");
   const [branchRenameError, setBranchRenameError] = useState(null);
   const [branchDeleteTarget, setBranchDeleteTarget] = useState(null); // branch id pending delete confirm
+  const [branchDeleteError, setBranchDeleteError] = useState(null);
   const [viewMode, setViewMode] = useState("chat"); // 'chat' | 'artifacts'
   const [showShareDialog, setShowShareDialog] = useState(false);
 
@@ -1739,6 +1740,7 @@ const CompleteWorkflow = () => {
                             e.stopPropagation();
                             e.nativeEvent.stopImmediatePropagation();
                             setBranchDeleteTarget(branch.branch?.name || branch.id);
+                            setBranchDeleteError(null);
                             setBranchOpen(false);
                           }}
                           style={{ cursor: "pointer" }}
@@ -2674,18 +2676,22 @@ const CompleteWorkflow = () => {
     setBranchRenameTarget(null);
   }, [branchRenameValue, branchRenameTarget, session]);
 
+  // The branch is also dropped from the session (fork point, runs,
+  // messages); clearing only `branches` left it in the menu until a reload.
+  // A failure keeps the dialog open with the reason, as rename does.
   const handleBranchDeleteConfirm = useCallback(async () => {
     const branchId = branchDeleteTarget;
-    setBranchDeleteTarget(null);
+    setBranchDeleteError(null);
     try {
       await deleteBranch(session.sessionId, branchId);
-      setBranches((prev) => prev.filter((b) => b.id !== branchId && b.name !== branchId));
-      if (session.activeBranch === branchId) session.setActiveBranch(null);
-      await session.refreshSession?.();
     } catch (err) {
-      console.error("Branch delete failed:", err?.userMessage || err?.message || err);
-      await session.refreshSession?.();
+      setBranchDeleteError(err?.userMessage || err?.message || "Delete failed.");
+      return;
     }
+    setBranchDeleteTarget(null);
+    setBranches((prev) => prev.filter((b) => b.id !== branchId && b.name !== branchId));
+    session.removeBranch(branchId);
+    await session.refreshSession?.();
   }, [branchDeleteTarget, session]);
 
   /** The article the detail panel is showing, enriched from /articles/{id}. */
@@ -3744,6 +3750,11 @@ const CompleteWorkflow = () => {
           <Typography sx={{ fontFamily: "'Geist',sans-serif", fontSize: "13px", color: "#64748B" }}>
             This will permanently delete the branch and all its steps and messages. This cannot be undone.
           </Typography>
+          {branchDeleteError && (
+            <Typography sx={{ fontFamily: "'Geist',sans-serif", fontSize: "13px", color: "#DC2626", mt: 1 }}>
+              {branchDeleteError}
+            </Typography>
+          )}
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={() => setBranchDeleteTarget(null)} sx={{ textTransform: "none" }}>Cancel</Button>
