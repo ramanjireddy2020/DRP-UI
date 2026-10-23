@@ -121,6 +121,13 @@ export const setBranchFinished = (sessionId, branchKey) => {
     [branchKey]: new Date().toISOString().slice(0, 10),
   });
 };
+/** A renamed branch keeps its finished date under the new name. */
+export const renameFinishedBranch = (sessionId, fromKey, toKey) => {
+  const finished = getFinishedBranches(sessionId);
+  if (!sessionId || !fromKey || !toKey || !finished[fromKey]) return;
+  const { [fromKey]: date, ...rest } = finished;
+  update(KEYS.finishedBranches, sessionId, { ...rest, [toKey]: date });
+};
 
 /* Picks per branch, per session ---------------------------------------------- */
 

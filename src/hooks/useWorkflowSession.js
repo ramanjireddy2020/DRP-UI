@@ -608,6 +608,74 @@ function reduceInView(state, action) {
       return changed ? { ...state, branchForks, branchSteps } : state;
     }
 
+    /**
+     * Forget a deleted branch: its fork point, saved module state, runs and
+     * messages. Deleting only cleared the page's own branch list, so the
+     * branch came straight back in the BRANCH menu from its fork point and
+     * runs until the page was reloaded. Deleting the branch in view moves to
+     * Main without saving the deleted branch's state.
+     */
+    case "REMOVE_BRANCH": {
+      const { branch } = action;
+      if (!branch) return state;
+      const runs = state.runs.filter((r) => r.branch !== branch);
+      // runIndex points into `runs`, so the other forks are re-pointed at
+      // the same run in the shorter list.
+      const branchForks = {};
+      Object.entries(state.branchForks).forEach(([name, fork]) => {
+        if (name === branch) return;
+        const forkRun = fork.runIndex != null && fork.runIndex >= 0 ? state.runs[fork.runIndex] : null;
+        branchForks[name] = forkRun ? { ...fork, runIndex: runs.indexOf(forkRun) } : fork;
+      });
+      const { [branchKeyOf(branch)]: _removed, ...branchSteps } = state.branchSteps;
+      let next = {
+        ...state,
+        runs,
+        branchForks,
+        branchSteps,
+        conversation: state.conversation.filter((m) => m.branch !== branch),
+      };
+      if ((state.activeBranch ?? null) === branch) {
+        const main = branchSteps[branchKeyOf(null)];
+        next = {
+          ...next,
+          activeBranch: null,
+          steps: main ? main.steps : state.steps,
+          activeKey: main ? main.activeKey : state.activeKey,
+        };
+      }
+      return next;
+    }
+
+    /**
+     * A branch is identified by its name, so a rename re-keys it everywhere:
+     * its fork point (and the forks of branches made from it), saved module
+     * state, runs, messages and the branch in view. Renaming only told the
+     * server, so the BRANCH menu kept the old name until a reload, and the
+     * next call on the branch still sent the old name.
+     */
+    case "RENAME_BRANCH": {
+      const { from, to } = action;
+      if (!from || !to || from === to) return state;
+      const rename = (name) => (name === from ? to : name);
+      const branchForks = {};
+      Object.entries(state.branchForks).forEach(([name, fork]) => {
+        branchForks[rename(name)] = fork.parent === from ? { ...fork, parent: to } : fork;
+      });
+      const branchSteps = {};
+      Object.entries(state.branchSteps).forEach(([key, saved]) => {
+        branchSteps[key === branchKeyOf(from) ? branchKeyOf(to) : key] = saved;
+      });
+      return {
+        ...state,
+        branchForks,
+        branchSteps,
+        runs: state.runs.map((r) => (r.branch === from ? { ...r, branch: to } : r)),
+        conversation: state.conversation.map((m) => (m.branch === from ? { ...m, branch: to } : m)),
+        activeBranch: state.activeBranch === from ? to : state.activeBranch,
+      };
+    }
+
     case "RESET":
       return { ...initialState, steps: buildInitialSteps() };
 
@@ -940,6 +1008,26 @@ const useWorkflowSession = () => {
     const sessionId = sessionIdRef.current;
     if (sessionId) {
       patchSessionRequest(sessionId, { activeBranch: branch ?? "" }).catch(() => {});
+    }
+  }, []);
+
+  /** Re-key a branch the server has renamed; see RENAME_BRANCH. */
+  const renameBranch = useCallback((from, to) => {
+    const wasActive = activeBranchRef.current === from;
+    dispatch({ type: "RENAME_BRANCH", from, to });
+    const sessionId = sessionIdRef.current;
+    if (wasActive && sessionId) {
+      patchSessionRequest(sessionId, { activeBranch: to }).catch(() => {});
+    }
+  }, []);
+
+  /** Drop a branch the server has deleted; see REMOVE_BRANCH. */
+  const removeBranch = useCallback((branch) => {
+    const wasActive = activeBranchRef.current === branch;
+    dispatch({ type: "REMOVE_BRANCH", branch });
+    const sessionId = sessionIdRef.current;
+    if (wasActive && sessionId) {
+      patchSessionRequest(sessionId, { activeBranch: "" }).catch(() => {});
     }
   }, []);
 
@@ -1332,6 +1420,8 @@ const useWorkflowSession = () => {
     branchSteps: state.branchSteps,
     setActiveBranch,
     createBranch,
+    renameBranch,
+    removeBranch,
     conversation: state.conversation,
     pending: state.pending,
     title: state.title,

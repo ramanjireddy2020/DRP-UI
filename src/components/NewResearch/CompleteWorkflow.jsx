@@ -26,7 +26,7 @@ import { getArtifacts, renameBranch, deleteBranch } from "../../services/api/ses
 import {
   getSessionProject, setSessionProject, fileSessionResults,
   getCompoundsJob, setCompoundsJob, setExcludedCriteria, getPatentThread, setPatentThread,
-  getBranchPicks, setBranchPicks, getFinishedBranches, setBranchFinished,
+  getBranchPicks, setBranchPicks, getFinishedBranches, setBranchFinished, renameFinishedBranch,
 } from "../../workflow/sessionStore";
 import AddToProjectDialog from "../Projects/AddToProjectDialog";
 import { toGeneNames, buildSelections, geneNameForTarget, looksLikeAccession, compoundLabel } from "../../workflow/selections";
@@ -265,6 +265,7 @@ const CompleteWorkflow = () => {
   const [branchRenameValue, setBranchRenameValue] = useState("");
   const [branchRenameError, setBranchRenameError] = useState(null);
   const [branchDeleteTarget, setBranchDeleteTarget] = useState(null); // branch id pending delete confirm
+  const [branchDeleteError, setBranchDeleteError] = useState(null);
   const [viewMode, setViewMode] = useState("chat"); // 'chat' | 'artifacts'
   const [showShareDialog, setShowShareDialog] = useState(false);
 
@@ -1740,6 +1741,7 @@ const CompleteWorkflow = () => {
                             e.stopPropagation();
                             e.nativeEvent.stopImmediatePropagation();
                             setBranchDeleteTarget(branch.branch?.name || branch.id);
+                            setBranchDeleteError(null);
                             setBranchOpen(false);
                           }}
                           style={{ cursor: "pointer" }}
@@ -2661,34 +2663,54 @@ const CompleteWorkflow = () => {
     );
   }, [session, txkgResult.targets]);
 
+  // The branch is identified by its name, so the new name replaces the old
+  // one in `branches` and across the session; the menu used to keep the old
+  // name until a reload, and later calls still sent it.
   const handleBranchRenameConfirm = useCallback(async () => {
     const newName = branchRenameValue.trim();
+    const oldName = branchRenameTarget.currentName;
     if (!newName) { setBranchRenameError("Name cannot be empty."); return; }
+    if (newName === oldName) { setBranchRenameTarget(null); return; }
+    const taken =
+      branches.some((b) => b.id === newName) ||
+      Object.keys(session.branchForks ?? {}).includes(newName) ||
+      session.runs.some((r) => r.branch === newName);
+    if (taken) { setBranchRenameError("A branch with this name already exists."); return; }
     setBranchRenameError(null);
     try {
-      await renameBranch(session.sessionId, branchRenameTarget.currentName, { name: newName });
-      await session.refreshSession?.();
+      await renameBranch(session.sessionId, oldName, { name: newName });
     } catch (err) {
       setBranchRenameError(err?.userMessage || err?.message || "Rename failed.");
       return;
     }
     setBranchRenameTarget(null);
-  }, [branchRenameValue, branchRenameTarget, session]);
+    setBranches((prev) => prev.map((b) => (b.id === oldName ? { ...b, id: newName, name: newName } : b)));
+    session.renameBranch(oldName, newName);
+    // The Finished tag and the branch's finish stage are keyed by name too.
+    renameFinishedBranch(session.sessionId, oldName, newName);
+    setFinishedBranches(getFinishedBranches(session.sessionId));
+    setFinishByBranch(({ [oldName]: stage, ...rest }) => (stage ? { ...rest, [newName]: stage } : rest));
+    await session.refreshSession?.();
+  }, [branchRenameValue, branchRenameTarget, branches, session]);
 
+  // The branch is also dropped from the session (fork point, runs,
+  // messages); clearing only `branches` left it in the menu until a reload.
+  // A failure keeps the dialog open with the reason, as rename does.
   const handleBranchDeleteConfirm = useCallback(async () => {
     const branchId = branchDeleteTarget;
+    setBranchDeleteError(null);
+    try {
+      await deleteBranch(session.sessionId, branchId);
+    } catch (err) {
+      setBranchDeleteError(err?.userMessage || err?.message || "Delete failed.");
+      return;
+    }
     setBranchDeleteTarget(null);
-    // Optimistically remove from every local tracking structure so the branch
-    // disappears from the dropdown immediately, even before the server replies.
     setBranches((prev) => prev.filter((b) => b.id !== branchId && b.name !== branchId));
     setDeletedBranchIds((prev) => new Set([...prev, branchId]));
     if (session.activeBranch === branchId) session.setActiveBranch(null);
-    try {
-      await deleteBranch(session.sessionId, branchId);
-      await session.refreshSession?.();
-    } catch (err) {
-      console.error("Branch delete failed:", err?.userMessage || err?.message || err);
-    }
+    session.removeBranch(branchId);
+    await session.refreshSession?.();
   }, [branchDeleteTarget, session]);
 
   /** The article the detail panel is showing, enriched from /articles/{id}. */
@@ -3747,6 +3769,11 @@ const CompleteWorkflow = () => {
           <Typography sx={{ fontFamily: "'Geist',sans-serif", fontSize: "13px", color: "#64748B" }}>
             This will permanently delete the branch and all its steps and messages. This cannot be undone.
           </Typography>
+          {branchDeleteError && (
+            <Typography sx={{ fontFamily: "'Geist',sans-serif", fontSize: "13px", color: "#DC2626", mt: 1 }}>
+              {branchDeleteError}
+            </Typography>
+          )}
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={() => setBranchDeleteTarget(null)} sx={{ textTransform: "none" }}>Cancel</Button>
