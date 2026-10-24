@@ -497,16 +497,18 @@ const CompleteWorkflow = () => {
    */
   const compoundsJobId = session.steps.curatex?.data?.compoundsJobId ?? null;
   const curatexStepId = session.steps.curatex?.stepId ?? null;
+  const curatexProfileJobId = session.steps.curatex?.jobId ?? null;
+  const curatexPhase = session.steps.curatex?.phase ?? "";
 
   // Reopened sessions lost CurateX's candidates on every branch (testing
   // 2026-10-13): the candidates job isn't recorded on the session, so it is
   // remembered per CurateX step and restored here.
   useEffect(() => {
     if (!curatexStepId || compoundsJobId) return;
-    const saved = getCompoundsJob(curatexStepId);
+    const saved = getCompoundsJob(curatexStepId, curatexProfileJobId);
     if (saved) session.setStepData({ compoundsJobId: saved }, "curatex");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [curatexStepId, compoundsJobId]);
+  }, [curatexStepId, curatexProfileJobId, compoundsJobId]);
   const compoundsJob = useJob(compoundsJobId, {
     enabled: Boolean(compoundsJobId),
     // The compounds come from /agents/curatex/{jobId}/results, which is
@@ -515,19 +517,33 @@ const CompleteWorkflow = () => {
     fetchResult: false,
   });
 
-  /** The compounds job drives the second half of CurateX. */
+  /**
+   * The compounds job drives the second half of CurateX.
+   *
+   * Keyed on CurateX's phase as well as the job: a reopened session restores
+   * every branch at its profile, and the results were set only when the job
+   * changed. A branch switched to with the same candidates job (Main and a
+   * branch forked after CurateX) never saw a change, so it kept showing the
+   * profile instead of its results (testing 2026-10-24).
+   */
+  const shownCompoundsJobRef = useRef(null);
   useEffect(() => {
     if (!compoundsJob.jobId || compoundsJob.jobId !== compoundsJobId) return;
     if (compoundsJob.isDone) {
       // Set on CurateX itself, so a background completion does not pull the
-      // view away from whatever module is on screen.
-      setPhase("curatex-results", "curatex");
+      // view away from whatever module is on screen. A job already shown is
+      // not shown again on a resubmit ("curatex-submitted"), only on a
+      // profile that has finished candidates.
+      if (curatexPhase === "curatex-profile" || shownCompoundsJobRef.current !== compoundsJob.jobId) {
+        shownCompoundsJobRef.current = compoundsJob.jobId;
+        setPhase("curatex-results", "curatex");
+      }
       return;
     }
     if (compoundsJob.isFailed) {
       setStepError(compoundsJob.error, "curatex");
     }
-  }, [compoundsJob.jobId, compoundsJobId, compoundsJob.isDone, compoundsJob.isFailed, compoundsJob.error, setPhase, setStepError]);
+  }, [compoundsJob.jobId, compoundsJobId, compoundsJob.isDone, compoundsJob.isFailed, compoundsJob.error, curatexPhase, setPhase, setStepError]);
 
   /**
    * TxKG results, normalised from whatever the job stored.
@@ -852,7 +868,8 @@ const CompleteWorkflow = () => {
       return Boolean(step?.jobId) && !step.error && !isLoadingPhase(step.phase ?? "") && !isErrorPhase(step.phase ?? "");
     };
     const fetchKind = (kind, jobId) => (jobId ? FETCHERS[kind](jobId, {}).catch(() => null) : Promise.resolve(null));
-    const compoundsJob = steps?.curatex?.data?.compoundsJobId ?? getCompoundsJob(steps?.curatex?.stepId);
+    const compoundsJob =
+      steps?.curatex?.data?.compoundsJobId ?? getCompoundsJob(steps?.curatex?.stepId, steps?.curatex?.jobId);
     const txkgRaw =
       steps?.txkg?.data?.jobResult ??
       (settled("txkg") ? await getJobResult(steps.txkg.jobId).catch(() => null) : null);
@@ -2467,7 +2484,7 @@ const CompleteWorkflow = () => {
       // the criteria this job was scored without.
       setExcludedCriteria(jobId, zeroWeightCriteria(weights));
       session.setStepData({ compoundsJobId: jobId }, "curatex", branch);
-      setCompoundsJob(session.steps.curatex?.stepId, jobId);
+      setCompoundsJob(session.steps.curatex?.stepId, jobId, session.steps.curatex?.jobId);
     } catch (err) {
       session.setStepError(
         err?.userMessage || err?.message || "Compound scoring could not be started.",

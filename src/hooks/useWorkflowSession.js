@@ -386,9 +386,21 @@ function reduceInView(state, action) {
       // (e.g. ScreenSuite's "JAK2 matches 5 structures" shortlist) must not
       // carry over and resurface on the new step's card.
       const newStep = stepId && existing.stepId && stepId !== existing.stepId;
+      // CurateX's candidates job is scored from its profile job; a new
+      // profile (Rerun, or a new step) leaves the old candidates behind.
+      // They used to carry over, so the new profile could never show its own.
+      const newProfile = key === "curatex" && jobId && existing.jobId && jobId !== existing.jobId;
 
       const next = withStep(state, key, {
-        ...(newStep ? { data: { ...(existing.data ?? {}), summary: null } } : {}),
+        ...(newStep || newProfile
+          ? {
+              data: {
+                ...(existing.data ?? {}),
+                ...(newStep ? { summary: null } : {}),
+                ...(newProfile ? { compoundsJobId: null } : {}),
+              },
+            }
+          : {}),
         visited: true,
         phase: phase ?? existing.phase ?? module.loadingPhase,
         // Only overwrite ids when new ones are supplied, so re-activating a

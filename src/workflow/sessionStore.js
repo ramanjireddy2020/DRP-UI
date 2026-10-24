@@ -102,8 +102,19 @@ export const fileSessionResults = async (projectId, sessionId) => {
 
 /* CurateX candidates job per CurateX step ---------------------------------- */
 
-export const getCompoundsJob = (stepId) => (stepId ? read(KEYS.compounds)[stepId] ?? null : null);
-export const setCompoundsJob = (stepId, jobId) => update(KEYS.compounds, stepId, jobId || null);
+/**
+ * Stored with the profile job it was scored from: a Rerun keeps the step id
+ * but builds a new profile, and the old candidates must not come back for
+ * it. Entries saved before this are a bare job id and match any profile.
+ */
+export const getCompoundsJob = (stepId, profileJobId) => {
+  const saved = stepId ? read(KEYS.compounds)[stepId] ?? null : null;
+  if (!saved || typeof saved === "string") return saved;
+  if (profileJobId && saved.profileJobId && saved.profileJobId !== profileJobId) return null;
+  return saved.jobId ?? null;
+};
+export const setCompoundsJob = (stepId, jobId, profileJobId) =>
+  update(KEYS.compounds, stepId, jobId ? { jobId, profileJobId: profileJobId || null } : null);
 
 /** API criterion names a candidates job was scored without (removed or weight 0). */
 export const getExcludedCriteria = (jobId) => (jobId ? read(KEYS.excludedCriteria)[jobId] ?? [] : []);

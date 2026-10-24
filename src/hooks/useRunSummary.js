@@ -28,7 +28,7 @@ const loadSection = async (moduleKey, { jobId, stepId }) => {
     case "curatex": {
       // The step's job is the profile; the candidates are a second job,
       // remembered per CurateX step.
-      const compoundsJobId = getCompoundsJob(stepId);
+      const compoundsJobId = getCompoundsJob(stepId, jobId);
       if (compoundsJobId) {
         const curatex = await FETCHERS["curatex-results"](compoundsJobId, { page: 1 });
         return buildSessionReport({ curatex, curatexTarget: curatex?.target ?? null });
